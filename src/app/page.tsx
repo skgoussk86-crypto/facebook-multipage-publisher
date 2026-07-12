@@ -140,7 +140,11 @@ export default function Home() {
   const [systemTimeStr, setSystemTimeStr] = useState("2026-07-12 19:42:24");
 
   // Core Persistent States
-  const [pages, setPages] = useState<FacebookPage[]>(INITIAL_PAGES);
+  const [pages, setPages] = useState<FacebookPage[]>([]);
+  const [connectionState, setConnectionState] = useState<'Not Connected' | 'Connected' | 'Token Expiring' | 'Reconnection Required' | 'Permission Missing'>('Not Connected');
+  const [fbAccountName, setFbAccountName] = useState<string | null>(null);
+  const [fbUserId, setFbUserId] = useState<string | null>(null);
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
   const [jobs, setJobs] = useState<VideoJob[]>(INITIAL_JOBS);
   const [securityLogs, setSecurityLogs] = useState<SecurityLog[]>([
     { timestampUTC: "2026-07-12T11:30:00Z", level: "INFO", message: "System initialized in Mock Meta Mode." },
@@ -630,6 +634,47 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
+  const fetchConnectionAndPages = async () => {
+    try {
+      const res = await fetch("/api/facebook/pages");
+      if (res.ok) {
+        const data = await res.json();
+        setPages(data.pages || []);
+        setConnectionState(data.connectionState || "Not Connected");
+        setFbAccountName(data.name || null);
+        setFbUserId(data.facebookUserId || null);
+        
+        // Match checkbox status to token expiry status
+        const hasExpired = data.pages?.some((p: FacebookPage) => p.tokenStatus === "Expired");
+        setSimulateTokenExpiry(hasExpired || data.connectionState === "Reconnection Required");
+      }
+    } catch (error) {
+      console.error("Failed to fetch connection and pages:", error);
+    }
+  };
+
+  useEffect(() => {
+    // Run asynchronously to satisfy the eslint react-hooks/set-state-in-effect rule
+    setTimeout(() => {
+      fetchConnectionAndPages();
+
+      // Check query params for status messages
+      const params = new URLSearchParams(window.location.search);
+      if (params.has("success")) {
+        const type = params.get("success");
+        if (type === "oauth_simulated") {
+          addSecurityLog("INFO", "Successfully connected Facebook account via simulation OAuth.");
+        }
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } else if (params.has("error")) {
+        const err = params.get("error");
+        const msg = params.get("message") || "";
+        addSecurityLog("ERROR", `Facebook OAuth connection failed: ${err}. ${msg}`);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }, 0);
+  }, []);
+
   const handleCaptureFrameAction = () => {
     const video = videoCaptureRef.current;
     if (video && activeFrameCaptureJobId) {
@@ -897,14 +942,14 @@ export default function Home() {
   // Reset Demo Helper (Extended)
   const handleResetDemo = () => {
     setJobs(INITIAL_JOBS);
-    setPages(INITIAL_PAGES);
+    handleDisconnect();
     setTempJobsQueue([]);
     setCsvErrors([]);
     setCsvSuccessCount(0);
     setSimulateTokenExpiry(false);
     setSimulationLog([]);
     setCountdownJobs({});
-    addSecurityLog("INFO", "Reset simulator demo state (Phase 3).");
+    addSecurityLog("INFO", "Reset simulator demo state (Phase 3/4).");
   };
 
   const startRetryCountdown = (jobId: string, seconds: number, scenario: string) => {
@@ -1245,65 +1290,126 @@ export default function Home() {
     runWorkerForJob(targetJob.id, simulationScenario);
   };
 
-  const handleSyncPages = () => {
+  const handleSyncPages = async () => {
     setIsSyncingPages(true);
     addSecurityLog("INFO", "Initiated managed Facebook Pages synchronization request.");
-    
-    setTimeout(() => {
-      setIsSyncingPages(false);
-      setPages(
-        INITIAL_PAGES.map((page) => ({
-          ...page,
-          tokenStatus: simulateTokenExpiry ? "Expired" : "Valid",
-        }))
-      );
-      addSecurityLog("INFO", `Fetched ${INITIAL_PAGES.length} pages from Meta Graph API. Tokens encrypted and saved.`);
-    }, 1500);
-  };
-
-  const handleToggleTokenExpiry = () => {
-    const nextState = !simulateTokenExpiry;
-    setSimulateTokenExpiry(nextState);
-    setPages((prev) =>
-      prev.map((page) => ({
-        ...page,
-        tokenStatus: nextState ? "Expired" : "Valid",
-      }))
-    );
-    addSecurityLog(
-      nextState ? "WARN" : "INFO",
-      nextState
-        ? "Simulated Facebook access token expiration: Triggered Code 190."
-        : "Simulated Facebook access token validation restored."
-    );
-  };
-
-  const handleReconnectAccount = (pageId: string) => {
-    setPages((prev) =>
-      prev.map((page) => (page.id === pageId ? { ...page, tokenStatus: "Valid" } : page))
-    );
-    setJobs((prev) =>
-      prev.map((j) => {
-        if (j.pageId === pageId && j.status === "FACEBOOK_RECONNECT_REQUIRED") {
-          addSecurityLog("INFO", `Token reconnected. Job "${j.fileName}" (${j.id}) reset from FACEBOOK_RECONNECT_REQUIRED to SCHEDULED.`, j.id);
-          return { ...j, status: "SCHEDULED" as JobStatus };
+    try {
+      const res = await fetch("/api/facebook/sync", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setPages(data.pages || []);
+        setConnectionState(data.connectionState || "Connected");
+        setLastSyncedTime(new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }));
+        addSecurityLog("INFO", `Synced ${data.pages?.length || 0} pages from Meta API. Tokens encrypted and saved.`);
+      } else {
+        const data = await res.json();
+        addSecurityLog("ERROR", `Synchronization failed: ${data.error || "Unknown Error"}`);
+        if (data.connectionState) {
+          setConnectionState(data.connectionState);
         }
-        return j;
-      })
-    );
-    addSecurityLog("INFO", `Reconnected Page Access Token for Page ID: ${pageId} via Mock OAuth.`);
+      }
+    } catch (error) {
+      console.error("Error during sync:", error);
+      addSecurityLog("ERROR", "Network error during Facebook Pages synchronization.");
+    } finally {
+      setIsSyncingPages(false);
+    }
   };
 
-  const handleReconnectAll = () => {
-    setPages(prev => prev.map(p => ({ ...p, tokenStatus: "Valid" as const })));
-    setJobs(prev => prev.map(j => {
-      if (j.status === "FACEBOOK_RECONNECT_REQUIRED") {
-        addSecurityLog("INFO", `Token reconnected. Job "${j.fileName}" (${j.id}) reset from FACEBOOK_RECONNECT_REQUIRED to SCHEDULED.`, j.id);
-        return { ...j, status: "SCHEDULED" as JobStatus };
+  const handleSimulateTokenExpiry = async (shouldExpire: boolean) => {
+    try {
+      const res = await fetch("/api/facebook/simulate-expiry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expire: shouldExpire })
+      });
+      if (res.ok) {
+        addSecurityLog(
+          shouldExpire ? "WARN" : "INFO",
+          shouldExpire
+            ? "Simulated Facebook access token expiration: Triggered Code 190."
+            : "Simulated Facebook access token validation restored."
+        );
+        setSimulateTokenExpiry(shouldExpire);
+        await fetchConnectionAndPages();
+      } else {
+        addSecurityLog("ERROR", "Failed to update simulated token expiry status.");
       }
-      return j;
-    }));
-    addSecurityLog("INFO", "Reconnected all expired Facebook Pages via mock OAuth.");
+    } catch (error) {
+      console.error("Error simulating token expiry:", error);
+      addSecurityLog("ERROR", "Network error while simulating token expiry.");
+    }
+  };
+
+  const handleToggleTokenExpiry = async () => {
+    const nextState = !simulateTokenExpiry;
+    await handleSimulateTokenExpiry(nextState);
+  };
+
+  const handleReconnectAccount = async (pageId: string) => {
+    try {
+      const res = await fetch("/api/facebook/simulate-expiry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expire: false })
+      });
+      if (res.ok) {
+        await fetchConnectionAndPages();
+        setJobs((prev) =>
+          prev.map((j) => {
+            if (j.pageId === pageId && j.status === "FACEBOOK_RECONNECT_REQUIRED") {
+              addSecurityLog("INFO", `Token reconnected. Job "${j.fileName}" (${j.id}) reset from FACEBOOK_RECONNECT_REQUIRED to SCHEDULED.`, j.id);
+              return { ...j, status: "SCHEDULED" as JobStatus };
+            }
+            return j;
+          })
+        );
+        addSecurityLog("INFO", `Reconnected Page Access Token for Page ID: ${pageId} via Mock OAuth.`);
+      }
+    } catch (error) {
+      console.error("Error reconnecting account:", error);
+    }
+  };
+
+  const handleReconnectAll = async () => {
+    try {
+      const res = await fetch("/api/facebook/simulate-expiry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expire: false })
+      });
+      if (res.ok) {
+        await fetchConnectionAndPages();
+        setJobs(prev => prev.map(j => {
+          if (j.status === "FACEBOOK_RECONNECT_REQUIRED") {
+            addSecurityLog("INFO", `Token reconnected. Job "${j.fileName}" (${j.id}) reset from FACEBOOK_RECONNECT_REQUIRED to SCHEDULED.`, j.id);
+            return { ...j, status: "SCHEDULED" as JobStatus };
+          }
+          return j;
+        }));
+        addSecurityLog("INFO", "Reconnected all expired Facebook Pages via mock OAuth.");
+      }
+    } catch (error) {
+      console.error("Error reconnecting all:", error);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    try {
+      const res = await fetch("/api/facebook/disconnect", { method: "POST" });
+      if (res.ok) {
+        addSecurityLog("INFO", "Disconnected Facebook account integration.");
+        setPages([]);
+        setConnectionState("Not Connected");
+        setFbAccountName(null);
+        setFbUserId(null);
+      } else {
+        addSecurityLog("ERROR", "Failed to disconnect Facebook account.");
+      }
+    } catch (error) {
+      console.error("Error during disconnect:", error);
+      addSecurityLog("ERROR", "Network error during Facebook disconnect.");
+    }
   };
 
   const handleCancelJob = (jobId: string) => {
@@ -2443,7 +2549,7 @@ export default function Home() {
                   <div className="flex gap-2">
                     <button
                       onClick={handleSyncPages}
-                      disabled={isSyncingPages}
+                      disabled={isSyncingPages || connectionState === "Not Connected" || connectionState === "Reconnection Required"}
                       className="bg-indigo-650 hover:bg-indigo-700 disabled:bg-zinc-850 disabled:text-zinc-500 font-semibold text-xs text-white py-2.5 px-4 rounded-lg transition flex items-center justify-center gap-1.5"
                     >
                       {isSyncingPages ? (
@@ -2458,56 +2564,244 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {pages.map((page) => (
-                    <div
-                      key={page.id}
-                      className={`bg-zinc-950 border rounded-xl p-5 hover:border-zinc-750 transition flex flex-col justify-between min-h-[160px] ${
-                        page.tokenStatus === "Expired" ? "border-rose-900/60" : "border-zinc-800"
-                      }`}
-                    >
-                      <div className="flex items-start gap-4">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={page.pictureUrl}
-                          alt={page.name}
-                          className="h-11 w-11 rounded-lg bg-zinc-800 object-cover flex-shrink-0"
-                        />
-                        <div className="min-w-0">
-                          <h4 className="font-semibold text-sm text-white truncate">{page.name}</h4>
-                          <span className="block text-[10px] text-zinc-500 mt-0.5">{page.category}</span>
-                          <span className="block text-[10px] font-mono text-zinc-500 mt-0.5">ID: {page.id}</span>
+                {/* Facebook Connection Panel */}
+                {connectionState === "Not Connected" && (
+                  <div className="bg-zinc-950 border border-zinc-850 rounded-xl p-5 mb-6">
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-400">
+                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                          </svg>
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-sm text-zinc-300">Facebook Not Connected</h4>
+                          <p className="text-xs text-zinc-500">Connect your administrator Facebook account to synchronize and publish to managed Pages.</p>
                         </div>
                       </div>
+                      <button
+                        onClick={() => window.location.href = "/api/auth/facebook/initiate"}
+                        className="bg-blue-600 hover:bg-blue-500 font-semibold text-xs text-white py-2.5 px-5 rounded-lg transition shadow-md shadow-blue-600/10 flex-shrink-0"
+                      >
+                        Connect Facebook
+                      </button>
+                    </div>
+                  </div>
+                )}
 
-                      <div className="mt-5 pt-4 border-t border-zinc-900 flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-1.5">
-                          <span className={`h-2 w-2 rounded-full ${
-                            page.tokenStatus === "Expired" ? "bg-rose-500" : "bg-emerald-400"
-                          }`}></span>
-                          <span className={`font-mono text-[11px] ${
-                            page.tokenStatus === "Expired" ? "text-rose-400 font-semibold" : "text-emerald-400"
-                          }`}>
-                            Token: {page.tokenStatus}
-                          </span>
+                {connectionState === "Connected" && (
+                  <div className="bg-zinc-950 border border-zinc-850 rounded-xl p-5 mb-6">
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-full bg-blue-950/50 flex items-center justify-center text-blue-400 border border-blue-900/30">
+                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                          </svg>
                         </div>
-
-                        {page.tokenStatus === "Expired" ? (
-                          <button
-                            onClick={() => handleReconnectAccount(page.id)}
-                            className="bg-rose-650 hover:bg-rose-600 text-white font-bold text-[10px] px-3 py-1 rounded transition"
-                          >
-                            Reconnect
-                          </button>
-                        ) : (
-                          <span className="text-[10px] text-zinc-600 font-mono">
-                            Permanent Access Token
-                          </span>
-                        )}
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-sm text-emerald-400">Facebook Connected</h4>
+                            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-mono font-semibold">ACTIVE</span>
+                          </div>
+                          <p className="text-xs text-zinc-300 mt-1">
+                            Connected as: <span className="font-semibold text-white">{fbAccountName || "Simulated Meta Administrator"}</span> 
+                            <span className="text-zinc-500 font-mono text-[11px] ml-2">(ID: {fbUserId || "mock_fb_user_88888"})</span>
+                          </p>
+                          {lastSyncedTime && (
+                            <p className="text-[10px] text-zinc-500 mt-1 font-mono">Last Synced: {lastSyncedTime}</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={handleSyncPages}
+                          disabled={isSyncingPages}
+                          className="bg-indigo-650 hover:bg-indigo-700 disabled:bg-zinc-850 disabled:text-zinc-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition flex items-center gap-1.5"
+                        >
+                          {isSyncingPages ? "Syncing..." : "Refresh Pages"}
+                        </button>
+                        <button
+                          onClick={() => handleSimulateTokenExpiry(true)}
+                          className="bg-amber-600/10 hover:bg-amber-600/25 border border-amber-500/20 hover:border-amber-500/40 text-amber-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
+                        >
+                          Simulate Token Expiry
+                        </button>
+                        <button
+                          onClick={handleDisconnect}
+                          className="bg-rose-950/80 hover:bg-rose-900 border border-rose-900/30 text-rose-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
+                        >
+                          Disconnect
+                        </button>
                       </div>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                )}
+
+                {connectionState === "Token Expiring" && (
+                  <div className="bg-zinc-950 border border-amber-900/45 rounded-xl p-5 mb-6">
+                    <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-lg p-3.5 mb-4 flex items-start gap-2.5 text-xs">
+                      <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      <div>
+                        <span className="font-bold block">Token Expiring Soon</span>
+                        <span>The Facebook API access token will expire in less than 7 days. Reconnection is recommended to prevent scheduled video publishing failures. Publishing will be blocked if expired.</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <div>
+                        <p className="text-xs text-zinc-300">
+                          Connected as: <span className="font-semibold text-white">{fbAccountName || "Simulated Meta Administrator"}</span> 
+                          <span className="text-zinc-500 font-mono text-[11px] ml-2">(ID: {fbUserId || "mock_fb_user_88888"})</span>
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => window.location.href = "/api/auth/facebook/initiate"}
+                          className="bg-amber-600 hover:bg-amber-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition"
+                        >
+                          Reconnect Facebook
+                        </button>
+                        <button
+                          onClick={handleDisconnect}
+                          className="bg-rose-950/80 hover:bg-rose-900 border border-rose-900/30 text-rose-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {connectionState === "Reconnection Required" && (
+                  <div className="bg-zinc-950 border border-rose-950 rounded-xl p-5 mb-6">
+                    <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-lg p-3.5 mb-4 flex items-start gap-2.5 text-xs">
+                      <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                      </svg>
+                      <div>
+                        <span className="font-bold block">Authorization Expired (Error 190)</span>
+                        <span>Your Facebook connection has been invalidated or expired. Page synchronization is disabled, and scheduled publishes are blocked until you reconnect.</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <div>
+                        <p className="text-xs text-zinc-400">
+                          Account: <span className="font-semibold text-zinc-300">{fbAccountName || "Simulated Meta Administrator"}</span>
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => window.location.href = "/api/auth/facebook/initiate"}
+                          className="bg-rose-600 hover:bg-rose-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition"
+                        >
+                          Reconnect Facebook
+                        </button>
+                        <button
+                          onClick={handleDisconnect}
+                          className="bg-rose-950/80 hover:bg-rose-900 border border-rose-900/30 text-rose-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {connectionState === "Permission Missing" && (
+                  <div className="bg-zinc-950 border border-rose-950 rounded-xl p-5 mb-6">
+                    <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-lg p-3.5 mb-4 flex items-start gap-2.5 text-xs">
+                      <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      <div>
+                        <span className="font-bold block">Missing Required Permissions</span>
+                        <span>The application is missing required publish permissions (<code className="bg-rose-950/50 px-1 py-0.5 rounded font-mono text-[10px]">pages_manage_posts</code> or <code className="bg-rose-950/50 px-1 py-0.5 rounded font-mono text-[10px]">publish_video</code>). Video publishing and scheduled uploads will be blocked.</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                      <div>
+                        <p className="text-xs text-zinc-400">
+                          Account: <span className="font-semibold text-zinc-300">{fbAccountName || "Simulated Meta Administrator"}</span>
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => window.location.href = "/api/auth/facebook/initiate"}
+                          className="bg-blue-600 hover:bg-blue-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition"
+                        >
+                          Reconnect and Grant Permissions
+                        </button>
+                        <button
+                          onClick={handleDisconnect}
+                          className="bg-rose-950/80 hover:bg-rose-900 border border-rose-900/30 text-rose-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {connectionState === "Not Connected" ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-center bg-zinc-950/20 rounded-xl border border-dashed border-zinc-800">
+                    <p className="text-sm text-zinc-400 font-semibold">No Managed Pages Available</p>
+                    <p className="text-xs text-zinc-600 mt-1 max-w-sm">
+                      Please connect your Facebook account using the connection panel above to synchronize your managed pages.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {pages.map((page) => (
+                      <div
+                        key={page.id}
+                        className={`bg-zinc-950 border rounded-xl p-5 hover:border-zinc-750 transition flex flex-col justify-between min-h-[160px] ${
+                          page.tokenStatus === "Expired" ? "border-rose-900/60" : "border-zinc-800"
+                        }`}
+                      >
+                        <div className="flex items-start gap-4">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={page.pictureUrl}
+                            alt={page.name}
+                            className="h-11 w-11 rounded-lg bg-zinc-800 object-cover flex-shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <h4 className="font-semibold text-sm text-white truncate">{page.name}</h4>
+                            <span className="block text-[10px] text-zinc-500 mt-0.5">{page.category}</span>
+                            <span className="block text-[10px] font-mono text-zinc-500 mt-0.5">ID: {page.id}</span>
+                          </div>
+                        </div>
+
+                        <div className="mt-5 pt-4 border-t border-zinc-900 flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`h-2 w-2 rounded-full ${
+                              page.tokenStatus === "Expired" ? "bg-rose-500" : "bg-emerald-400"
+                            }`}></span>
+                            <span className={`font-mono text-[11px] ${
+                              page.tokenStatus === "Expired" ? "text-rose-400 font-semibold" : "text-emerald-400"
+                            }`}>
+                              Token: {page.tokenStatus}
+                            </span>
+                          </div>
+
+                          {page.tokenStatus === "Expired" ? (
+                            <button
+                              onClick={() => handleReconnectAccount(page.id)}
+                              className="bg-rose-650 hover:bg-rose-600 text-white font-bold text-[10px] px-3 py-1 rounded transition"
+                            >
+                              Reconnect
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-zinc-600 font-mono">
+                              Permanent Access Token
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
