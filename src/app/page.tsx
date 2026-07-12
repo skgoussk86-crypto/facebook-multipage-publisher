@@ -112,6 +112,7 @@ const INITIAL_JOBS: VideoJob[] = [
 export default function Home() {
   // Navigation State
   const [activeTab, setActiveTab] = useState<"dashboard" | "publisher" | "pages" | "logs">("dashboard");
+  const [systemTimeStr, setSystemTimeStr] = useState("2026-07-12 19:42:24");
 
   // Core Persistent States
   const [pages, setPages] = useState<FacebookPage[]>(INITIAL_PAGES);
@@ -164,15 +165,27 @@ export default function Home() {
   const videoCaptureRef = useRef<HTMLVideoElement>(null);
 
   // System Time Reference (display only)
-  const SYSTEM_TIME_STR = "2026-07-12 17:34:14";
+  const SYSTEM_TIME_STR = systemTimeStr;
 
   // Timezone display helpers
   const kolkataOffsetStr = "UTC+05:30 (Asia/Kolkata)";
 
+  // Helper to format a Date object as a local Kolkata datetime-local string (YYYY-MM-DDTHH:MM)
+  const formatKolkataDatetimeLocal = (date: Date): string => {
+    const tzOffsetMs = 5.5 * 60 * 60 * 1000;
+    const kolkataDate = new Date(date.getTime() + tzOffsetMs);
+    return kolkataDate.getUTCFullYear() + '-' +
+      String(kolkataDate.getUTCMonth() + 1).padStart(2, '0') + '-' +
+      String(kolkataDate.getUTCDate()).padStart(2, '0') + 'T' +
+      String(kolkataDate.getUTCHours()).padStart(2, '0') + ':' +
+      String(kolkataDate.getUTCMinutes()).padStart(2, '0');
+  };
+
   // Format local Kolkata string into UTC ISO timestamp
   const convertKolkataToUTC = (kolkataTimeStr: string): string => {
     if (!kolkataTimeStr) return "";
-    const date = new Date(kolkataTimeStr + "+05:30");
+    const hasTimezoneIndicator = kolkataTimeStr.includes("+") || kolkataTimeStr.endsWith("Z") || (kolkataTimeStr.includes("T") && kolkataTimeStr.split("T")[1]?.includes("-"));
+    const date = new Date(kolkataTimeStr + (hasTimezoneIndicator ? "" : "+05:30"));
     return date.toISOString();
   };
 
@@ -236,7 +249,7 @@ export default function Home() {
       errors.push("Scheduled publishing date/time is required.");
     } else {
       const scheduledMs = new Date(job.scheduledTimeKolkata + "+05:30").getTime();
-      const currentMs = new Date("2026-07-12T17:34:14+05:30").getTime(); // fixed system reference time
+      const currentMs = Date.now();
       if (scheduledMs <= currentMs) {
         errors.push("Publishing time must be in the future.");
       }
@@ -421,16 +434,16 @@ export default function Home() {
     }
 
     if (schedulingMode === "interval") {
-      const currentTime = new Date(intervalStartKolkata);
+      const currentTime = new Date(intervalStartKolkata + "+05:30");
       setTempJobsQueue((prev) => {
         return prev.map((job, idx) => {
           const scheduled = new Date(currentTime.getTime());
           scheduled.setHours(scheduled.getHours() + idx * intervalHours);
-          const localStr = scheduled.toISOString().substring(0, 16);
+          const localStr = formatKolkataDatetimeLocal(scheduled);
           return {
             ...job,
             scheduledTimeKolkata: localStr,
-            scheduledTimeUTC: convertKolkataToUTC(localStr),
+            scheduledTimeUTC: scheduled.toISOString(),
           };
         });
       });
@@ -455,17 +468,17 @@ export default function Home() {
           const targetSlotTime = dailyTimeSlots[slotIndex];
           const [hours, minutes] = targetSlotTime.split(":").map(Number);
           
-          const scheduled = new Date(dailySlotsStartDate + "T00:00:00");
+          const scheduled = new Date(dailySlotsStartDate + "T00:00:00+05:30");
           scheduled.setDate(scheduled.getDate() + currentDayOffset);
           scheduled.setHours(hours, minutes, 0, 0);
 
-          const localStr = scheduled.toISOString().substring(0, 16);
+          const localStr = formatKolkataDatetimeLocal(scheduled);
           slotIndex++;
 
           return {
             ...job,
             scheduledTimeKolkata: localStr,
-            scheduledTimeUTC: convertKolkataToUTC(localStr),
+            scheduledTimeUTC: scheduled.toISOString(),
           };
         });
       });
@@ -493,6 +506,19 @@ export default function Home() {
       videoCaptureRef.current.currentTime = frameCaptureTime;
     }
   }, [frameCaptureTime, activeFrameCaptureJobId]);
+
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      const kolkataTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+      const pad = (n: number) => n.toString().padStart(2, "0");
+      const formatted = `${kolkataTime.getFullYear()}-${pad(kolkataTime.getMonth() + 1)}-${pad(kolkataTime.getDate())} ${pad(kolkataTime.getHours())}:${pad(kolkataTime.getMinutes())}:${pad(kolkataTime.getSeconds())}`;
+      setSystemTimeStr(formatted);
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleCaptureFrameAction = () => {
     const video = videoCaptureRef.current;
@@ -597,6 +623,7 @@ export default function Home() {
       const pageIdx = headers.indexOf("page_id");
       const ctIdx = headers.indexOf("content_type");
       const ptIdx = headers.indexOf("publish_time");
+      const tzIdx = headers.indexOf("timezone");
 
       const errorsAccumulator: string[] = [];
       let matchCount = 0;
@@ -606,17 +633,29 @@ export default function Home() {
 
       for (let r = 1; r < rows.length; r++) {
         const row = rows[r];
-        if (row.length < expected.length || (row.length === 1 && row[0] === "")) continue;
+        // Check if row is completely empty/blank line
+        const isRowEmpty = row.length === 0 || (row.length === 1 && row[0].trim() === "");
+        if (isRowEmpty) continue;
 
-        const filename = row[fnIdx]?.trim();
+        const filename = row[fnIdx]?.trim() || "";
+
+        if (row.length < expected.length) {
+          errorsAccumulator.push(`Row ${r + 1} ${filename ? `(${filename}) ` : ""}- Column count mismatch. Expected ${expected.length} columns, found ${row.length}.`);
+          continue;
+        }
+
         const title = row[titleIdx]?.trim();
         const caption = row[capIdx]?.trim();
         const hashtags = row[hashIdx]?.trim();
         const pageId = row[pageIdx]?.trim();
         const contentTypeRaw = row[ctIdx]?.trim().toUpperCase();
         const publishTimeRaw = row[ptIdx]?.trim();
+        const timezoneRaw = row[tzIdx]?.trim();
 
-        if (!filename) continue;
+        if (!filename) {
+          errorsAccumulator.push(`Row ${r + 1}: Filename cannot be empty.`);
+          continue;
+        }
 
         const jobQueueIndex = updatedQueue.findIndex(j => j.fileName === filename);
 
@@ -639,6 +678,13 @@ export default function Home() {
           errorsThisRow.push("Caption must be in English characters.");
         }
 
+        // Validation - Timezone
+        if (!timezoneRaw) {
+          errorsThisRow.push("Timezone is required.");
+        } else if (timezoneRaw.toLowerCase() !== "asia/kolkata") {
+          errorsThisRow.push(`Unsupported timezone '${timezoneRaw}'. Only 'Asia/Kolkata' is supported.`);
+        }
+
         // Validation - Page ID
         const pageExists = pages.some(p => p.id === pageId);
         if (!pageExists) {
@@ -654,8 +700,13 @@ export default function Home() {
 
         // Validation - Date parsing
         const dateKolkata = publishTimeRaw ? publishTimeRaw.replace(" ", "T") : "";
-        const scheduledMs = new Date(dateKolkata + "+05:30").getTime();
-        const currentMs = new Date("2026-07-12T17:34:14+05:30").getTime();
+        let scheduledMs = NaN;
+        if (dateKolkata) {
+          const hasTimezoneIndicator = dateKolkata.includes("+") || dateKolkata.endsWith("Z") || (dateKolkata.includes("T") && dateKolkata.split("T")[1]?.includes("-"));
+          scheduledMs = new Date(dateKolkata + (hasTimezoneIndicator ? "" : "+05:30")).getTime();
+        }
+
+        const currentMs = Date.now();
         if (!publishTimeRaw || isNaN(scheduledMs)) {
           errorsThisRow.push("Invalid scheduled publish time date format.");
         } else if (scheduledMs <= currentMs) {
