@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import crypto from 'crypto';
 import { getAppConfiguration } from '@/lib/db';
+import { getSessionUser } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,7 +19,11 @@ export async function GET(request: NextRequest) {
       maxAge: 60 * 10, // 10 minutes validation window
     });
 
-    const config = await getAppConfiguration();
+    const user = await getSessionUser();
+    if (!user) {
+      return NextResponse.redirect(`${request.nextUrl.origin}/login`);
+    }
+    const config = await getAppConfiguration(user.id);
     
     // When no secure configuration exists, redirect to first-run setup page instead of failing
     if (!config) {

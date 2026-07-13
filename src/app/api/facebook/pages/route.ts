@@ -1,15 +1,21 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getFacebookConnections, getFacebookConnection, getAppConfiguration } from '@/lib/db';
+import { verifyAdminSession } from '@/lib/auth';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const config = await getAppConfiguration();
+    const user = await verifyAdminSession(request);
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const config = await getAppConfiguration(user.id);
     if (!config) {
       return NextResponse.json({ isConfigured: false });
     }
 
-    const accounts = await getFacebookConnections() || [];
-    const { account, connectionState } = await getFacebookConnection();
+    const accounts = await getFacebookConnections(user.id) || [];
+    const { account, connectionState } = await getFacebookConnection(user.id);
     
     return NextResponse.json({
       isConfigured: true,

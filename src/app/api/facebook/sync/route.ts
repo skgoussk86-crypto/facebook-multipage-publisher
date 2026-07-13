@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFacebookConnections, saveFacebookAccount, MockFacebookPage, MockFacebookAccount, updatePagesStatus } from '@/lib/db';
+import { verifyAdminSession } from '@/lib/auth';
 import { encryptToken, decryptToken } from '@/lib/crypto';
 import { prisma } from '@/lib/prisma-client';
 
 export async function POST(request: NextRequest) {
   try {
+    const user = await verifyAdminSession(request);
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const searchParams = request.nextUrl.searchParams;
     const accountId = searchParams.get('accountId');
 
-    const accounts = await getFacebookConnections() || [];
+    const accounts = await getFacebookConnections(user.id) || [];
     
     if (accounts.length === 0) {
       return NextResponse.json({ error: 'No Facebook accounts connected.' }, { status: 400 });
@@ -37,6 +43,10 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Facebook account not found in database.' }, { status: 400 });
       }
 
+      if (dbAccount.userId !== user.id) {
+        return NextResponse.json({ error: 'Forbidden: You do not own this Facebook account.' }, { status: 403 });
+      }
+
       const longUserToken = decryptToken(dbAccount.encryptedAccessToken);
 
       // Fetch fresh accounts list from Facebook Graph API
@@ -49,7 +59,7 @@ export async function POST(request: NextRequest) {
             id: p.id,
             tokenStatus: 'Expired' as const
           }));
-          await updatePagesStatus(expiredPages);
+          await updatePagesStatus(user.id, expiredPages);
         }
         return NextResponse.json({ error: `Meta API Error: ${errData.error?.message || 'Sync failed'}` }, { status: 400 });
       }
@@ -95,7 +105,7 @@ export async function POST(request: NextRequest) {
         pages: updatedPages
       };
 
-      await saveFacebookAccount(simulatedAccount, connectionState);
+      await saveFacebookAccount(user.id, simulatedAccount, connectionState);
       
       return NextResponse.json({
         pages: updatedPages.map(p => ({

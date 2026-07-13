@@ -87,7 +87,7 @@ export async function getSessionUser() {
       where: { id: payload.userId }
     });
 
-    if (!user) {
+    if (!user || user.status !== 'ACTIVE') {
       return null;
     }
 
@@ -141,3 +141,11 @@ export async function verifyAdminSession(request: NextRequest) {
     return null;
   }
 }
+
+/**
+ * Helper to verify that the authenticated user has the ADMIN role.
+ */
+export function verifyAdminRole(user: { role: string }): boolean {
+  return user.role === 'ADMIN';
+}
+

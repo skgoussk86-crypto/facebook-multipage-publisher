@@ -1,41 +1,42 @@
 {
   "accounts": [
     {
-      "id": "5ff16727-3ca2-4438-b82e-b912138c9ade",
+      "id": "e1b527de-4e8c-4c22-83c1-0084ec7b88cd",
       "facebookUserId": "mock_fb_user_88888",
       "name": "Simulated Meta Administrator",
-      "encryptedAccessToken": "e3927988217ed6a81ca273bf:b8e39528bd8874a0bb1373e1a7e0482d:e0cc801ecdc00f8f0e47a44badef9c946fabd4bcff80b96924032697719174bf9b",
-      "tokenExpiresAt": "2026-09-10T16:07:12.986Z",
+      "encryptedAccessToken": "d8ef6b6f6757842898494825:36cc0924d0a840ddf94a9e457244a59f:783af73b5287770316a41ec5516370e8288bbeb3cae34679311c964c2ec1e8a8e9",
+      "tokenExpiresAt": "2026-09-11T12:48:42.160Z",
       "pages": [
         {
           "id": "1029384756",
           "name": "Tech Reviews Daily",
           "category": "Media/News Company",
           "pictureUrl": "https://api.dicebear.com/7.x/identicon/svg?seed=tech",
-          "tokenStatus": "Expired",
-          "connectedAt": "2026-07-12T16:07:12.984Z",
-          "encryptedPageToken": "15593af414040dee592ca25f:639702f0bea691bb4d78d5f6bdbc40c4:206ccf6fdabfafc30e7a50663cc1c82384bcc6302d663aab6f"
+          "tokenStatus": "Valid",
+          "connectedAt": "2026-07-13T12:48:42.146Z",
+          "encryptedPageToken": "84c3cef0c81d530acd13f43e:210076c112408329fd67da6eab63932e:cfa409e015cbe728e98e7172589b099a82dc10e4757e199eea"
         },
         {
           "id": "5647382910",
           "name": "Gaming Zone Live",
           "category": "Gaming Creator",
           "pictureUrl": "https://api.dicebear.com/7.x/identicon/svg?seed=gaming",
-          "tokenStatus": "Expired",
-          "connectedAt": "2026-07-12T16:07:12.985Z",
-          "encryptedPageToken": "ca42685ddd30a5ce106e3bac:ac27954b75f08aa1a02c18090de8733a:121da0e611ff98aa6553a0ccfae2c21ebc6ee672cda29574a69afd"
+          "tokenStatus": "Valid",
+          "connectedAt": "2026-07-13T12:48:42.159Z",
+          "encryptedPageToken": "c52c477629bb1b8d8aff3bc4:d8c510389f55b35cf17129d7126f0426:8c35bc45b7ce89d9a398630a2fbc6cd6febe683133e4b38ac09b99"
         },
         {
           "id": "9876543210",
           "name": "Travel & Culinary Guides",
           "category": "Travel & Leisure",
           "pictureUrl": "https://api.dicebear.com/7.x/identicon/svg?seed=travel",
-          "tokenStatus": "Expired",
-          "connectedAt": "2026-07-12T16:07:12.985Z",
-          "encryptedPageToken": "24d2575c41f907ce492d2b69:1d0d363710ab9a2c6491e16dcf45baf0:03516a5dfdcb96ff14073284338c1676abada5c19548664070e731"
+          "tokenStatus": "Valid",
+          "connectedAt": "2026-07-13T12:48:42.159Z",
+          "encryptedPageToken": "e4a835b1e27ad8f2cd7dafe5:f18ad6b14743e751d945224ad19b99cf:034ac90d901a0401913f61524d5e769fb9c4e104e2f4ca769a4e27"
         }
-      ]
+      ],
+      "userId": "c3bd5497-208b-42f0-925c-9fa6c3d43295"
     }
   ],
-  "connectionState": "Reconnection Required"
+  "connectionState": "Connected"
 }

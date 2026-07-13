@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { updatePagesStatus, getFacebookConnections } from '@/lib/db';
+import { verifyAdminSession } from '@/lib/auth';
 
 export async function POST(request: NextRequest) {
   try {
+    const user = await verifyAdminSession(request);
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await request.json();
     const shouldExpire = body.expire === true;
     const accountId = body.accountId;
 
-    const accounts = await getFacebookConnections() || [];
+    const accounts = await getFacebookConnections(user.id) || [];
     if (accounts.length === 0) {
       return NextResponse.json({ error: 'No connected accounts to simulate expiry on.' }, { status: 400 });
     }
@@ -31,7 +37,7 @@ export async function POST(request: NextRequest) {
       allPagesStatus = [...allPagesStatus, ...pagesStatus];
     }
 
-    await updatePagesStatus(allPagesStatus);
+    await updatePagesStatus(user.id, allPagesStatus);
 
     return NextResponse.json({ success: true, expired: shouldExpire });
   } catch (error: unknown) {

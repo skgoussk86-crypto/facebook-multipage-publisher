@@ -9,7 +9,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const logs = await getAuditLogs();
+    if (user.role !== 'ADMIN') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    const logs = await getAuditLogs(user.id, true);
     
     // Format response to match expected frontend structure: { timestampUTC, level, message }
     const formattedLogs = logs.map(log => ({

@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const config = await getAppConfiguration();
+    const config = await getAppConfiguration(user.id);
     if (!config) {
       return NextResponse.json({
         publicAppUrl: '',
@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Retrieve current configuration
-    const currentConfig = await getAppConfiguration();
+    const currentConfig = await getAppConfiguration(user.id);
 
     // Determine target encrypted app secret
     let encryptedSecret = '';
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Save configuration
-    await saveAppConfiguration({
+    await saveAppConfiguration(user.id, {
       publicAppUrl: sanitizedUrl,
       facebookAppId: facebookAppId.trim(),
       encryptedAppSecret: encryptedSecret,

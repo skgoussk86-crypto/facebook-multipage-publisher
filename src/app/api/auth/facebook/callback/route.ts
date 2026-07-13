@@ -2,9 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { encryptToken, decryptToken } from '@/lib/crypto';
 import { saveFacebookAccount, MockFacebookAccount, MockFacebookPage, getAppConfiguration } from '@/lib/db';
+import { getSessionUser } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
-  const config = await getAppConfiguration();
+  const user = await getSessionUser();
+  if (!user) {
+    const fallbackBaseUrl = request.nextUrl.origin;
+    return NextResponse.redirect(`${fallbackBaseUrl}/login`);
+  }
+  const config = await getAppConfiguration(user.id);
   
   if (!config) {
     const fallbackBaseUrl = request.nextUrl.origin;
@@ -137,7 +143,7 @@ export async function GET(request: NextRequest) {
         pages: mappedPages
       };
 
-      await saveFacebookAccount(accountData, connectionState);
+      await saveFacebookAccount(user.id, accountData, connectionState);
       return NextResponse.redirect(`${baseUrl}/?success=oauth_connected`);
 
     } else {
@@ -189,7 +195,7 @@ export async function GET(request: NextRequest) {
         pages: mockPages
       };
 
-      await saveFacebookAccount(simulatedAccount, connectionState);
+      await saveFacebookAccount(user.id, simulatedAccount, connectionState);
       return NextResponse.redirect(`${baseUrl}/?success=oauth_simulated`);
     }
   } catch (error: unknown) {

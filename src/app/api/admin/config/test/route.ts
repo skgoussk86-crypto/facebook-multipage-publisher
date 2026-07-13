@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     const isSecretMaskedOrEmpty = facebookAppSecret === '••••••••••••' || !facebookAppSecret || facebookAppSecret.trim() === '';
 
     if (isSecretMaskedOrEmpty) {
-      const config = await getAppConfiguration();
+      const config = await getAppConfiguration(user.id);
       if (!config) {
         return NextResponse.json({ 
           success: false, 
