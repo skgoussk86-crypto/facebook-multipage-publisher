@@ -1,10 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { encryptToken } from '@/lib/crypto';
-import { saveFacebookAccount, MockFacebookAccount, MockFacebookPage } from '@/lib/db';
+import { encryptToken, decryptToken } from '@/lib/crypto';
+import { saveFacebookAccount, MockFacebookAccount, MockFacebookPage, getAppConfiguration } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
-  const origin = request.nextUrl.origin;
+  const config = await getAppConfiguration();
+  
+  if (!config) {
+    const fallbackBaseUrl = request.nextUrl.origin;
+    return NextResponse.redirect(`${fallbackBaseUrl}/settings/meta-configuration?error=not_configured`);
+  }
+
+  const appId = config.facebookAppId;
+  const isLive = config.liveMetaMode;
+  const publicAppUrl = config.publicAppUrl;
+  const baseUrl = publicAppUrl; // Use stored public App URL as the base URL
+
+  let appSecret = '';
+  if (isLive) {
+    try {
+      appSecret = decryptToken(config.encryptedAppSecret);
+    } catch (err: unknown) {
+      console.error('Decryption of Facebook App Secret failed during OAuth callback:', err);
+      return NextResponse.redirect(`${baseUrl}/settings/meta-configuration?error=decryption_failed`);
+    }
+  }
+
   const cookieStore = await cookies();
   const savedState = cookieStore.get('fb_oauth_state')?.value;
   
@@ -19,22 +40,19 @@ export async function GET(request: NextRequest) {
 
   // 1. CSRF Verification
   if (!state || state !== savedState) {
-    return NextResponse.redirect(`${origin}/?error=CSRF_validation_failed`);
+    return NextResponse.redirect(`${baseUrl}/?error=CSRF_validation_failed`);
   }
 
   // 2. Handle cancellation/errors from Facebook
   if (error) {
-    return NextResponse.redirect(`${origin}/?error=${error}`);
+    return NextResponse.redirect(`${baseUrl}/?error=${error}`);
   }
 
   if (!code) {
-    return NextResponse.redirect(`${origin}/?error=no_authorization_code`);
+    return NextResponse.redirect(`${baseUrl}/?error=no_authorization_code`);
   }
 
-  const isLive = process.env.LIVE_META_MODE === 'true';
-  const appId = process.env.FACEBOOK_APP_ID || '123456789012345';
-  const appSecret = process.env.FACEBOOK_APP_SECRET || 'mock_facebook_app_secret_abc123';
-  const redirectUri = `${origin}/api/auth/facebook/callback`;
+  const redirectUri = `${baseUrl}/api/auth/facebook/callback`;
 
   try {
     if (isLive) {
@@ -45,7 +63,7 @@ export async function GET(request: NextRequest) {
       const tokenRes = await fetch(tokenExchangeUrl);
       if (!tokenRes.ok) {
         const errData = await tokenRes.json();
-        return NextResponse.redirect(`${origin}/?error=token_exchange_failed&details=${encodeURIComponent(errData.error?.message || '')}`);
+        return NextResponse.redirect(`${baseUrl}/?error=token_exchange_failed&details=${encodeURIComponent(errData.error?.message || '')}`);
       }
       const tokenData = await tokenRes.json();
       const shortUserToken = tokenData.access_token;
@@ -54,7 +72,7 @@ export async function GET(request: NextRequest) {
       const longLivedUrl = `https://graph.facebook.com/v20.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${shortUserToken}`;
       const longLivedRes = await fetch(longLivedUrl);
       if (!longLivedRes.ok) {
-        return NextResponse.redirect(`${origin}/?error=long_lived_token_failed`);
+        return NextResponse.redirect(`${baseUrl}/?error=long_lived_token_failed`);
       }
       const longLivedData = await longLivedRes.json();
       const longUserToken = longLivedData.access_token;
@@ -64,7 +82,7 @@ export async function GET(request: NextRequest) {
       // Step C: Fetch User Profile ID and Name
       const meRes = await fetch(`https://graph.facebook.com/v20.0/me?access_token=${longUserToken}`);
       if (!meRes.ok) {
-        return NextResponse.redirect(`${origin}/?error=user_profile_fetch_failed`);
+        return NextResponse.redirect(`${baseUrl}/?error=user_profile_fetch_failed`);
       }
       const meData = await meRes.json();
       const fbUserId = meData.id;
@@ -73,7 +91,7 @@ export async function GET(request: NextRequest) {
       // Step D: Fetch Pages managed by the User
       const pagesRes = await fetch(`https://graph.facebook.com/v20.0/me/accounts?access_token=${longUserToken}`);
       if (!pagesRes.ok) {
-        return NextResponse.redirect(`${origin}/?error=pages_fetch_failed`);
+        return NextResponse.redirect(`${baseUrl}/?error=pages_fetch_failed`);
       }
       const pagesData = await pagesRes.json();
       const rawPages = pagesData.data || [];
@@ -85,7 +103,7 @@ export async function GET(request: NextRequest) {
         try {
           const picRes = await fetch(`https://graph.facebook.com/v20.0/${page.id}/picture?redirect=0&type=normal&access_token=${page.access_token}`);
           if (picRes.ok) {
-            const picData = await picRes.ok ? await picRes.json() : null;
+            const picData = await picRes.json();
             if (picData?.data?.url) {
               pictureUrl = picData.data.url;
             }
@@ -120,7 +138,7 @@ export async function GET(request: NextRequest) {
       };
 
       await saveFacebookAccount(accountData, connectionState);
-      return NextResponse.redirect(`${origin}/?success=oauth_connected`);
+      return NextResponse.redirect(`${baseUrl}/?success=oauth_connected`);
 
     } else {
       // --- LOCAL DEVELOPMENT SIMULATION FLOW ---
@@ -172,11 +190,11 @@ export async function GET(request: NextRequest) {
       };
 
       await saveFacebookAccount(simulatedAccount, connectionState);
-      return NextResponse.redirect(`${origin}/?success=oauth_simulated`);
+      return NextResponse.redirect(`${baseUrl}/?success=oauth_simulated`);
     }
   } catch (error: unknown) {
     console.error('OAuth Callback Error:', error);
     const errorMessage = error instanceof Error ? error.message : String(error);
-    return NextResponse.redirect(`${origin}/?error=internal_oauth_error&message=${encodeURIComponent(errorMessage)}`);
+    return NextResponse.redirect(`${baseUrl}/?error=internal_oauth_error&message=${encodeURIComponent(errorMessage)}`);
   }
 }

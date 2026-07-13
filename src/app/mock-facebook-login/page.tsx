@@ -103,8 +103,8 @@ function MockFacebookLoginContent() {
               {/* Publish posts */}
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <span className="font-semibold text-zinc-200 block">pages_manage_posts & publish_video</span>
-                  <span className="text-[10px] text-zinc-500">Publish reels and standard videos to your Pages.</span>
+                  <span className="font-semibold text-zinc-200 block">pages_manage_posts</span>
+                  <span className="text-[10px] text-zinc-500">Publish reels, videos, and feed posts to your Pages.</span>
                 </div>
                 <input
                   type="checkbox"
@@ -118,7 +118,7 @@ function MockFacebookLoginContent() {
 
           <div className="text-[11px] text-zinc-500 leading-relaxed bg-zinc-950/40 p-3 rounded-lg border border-zinc-850">
             <span className="text-amber-500 font-bold block mb-0.5 font-mono uppercase tracking-wider text-[9px]">Simulation Tip:</span>
-            Uncheck the <code className="text-zinc-300 font-semibold font-mono">pages_manage_posts & publish_video</code> box to simulate a <strong className="text-zinc-300 font-medium">Permission Missing</strong> state on the dashboard overview.
+            Uncheck the <code className="text-zinc-300 font-semibold font-mono">pages_manage_posts</code> box to simulate a <strong className="text-zinc-300 font-medium">Permission Missing</strong> state on the dashboard overview.
           </div>
         </div>
 

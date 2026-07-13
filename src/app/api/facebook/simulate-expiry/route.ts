@@ -1,22 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { updatePagesStatus, getFacebookConnection } from '@/lib/db';
+import { updatePagesStatus, getFacebookConnections } from '@/lib/db';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const shouldExpire = body.expire === true;
+    const accountId = body.accountId;
 
-    const { account } = await getFacebookConnection();
-    if (!account) {
-      return NextResponse.json({ error: 'No connected account to simulate expiry on.' }, { status: 400 });
+    const accounts = await getFacebookConnections() || [];
+    if (accounts.length === 0) {
+      return NextResponse.json({ error: 'No connected accounts to simulate expiry on.' }, { status: 400 });
     }
 
-    const pagesStatus = account.pages.map(p => ({
-      id: p.id,
-      tokenStatus: shouldExpire ? ('Expired' as const) : ('Valid' as const)
-    }));
+    let targetAccounts = accounts;
+    if (accountId) {
+      const match = accounts.find(acc => acc.id === accountId);
+      if (match) {
+        targetAccounts = [match];
+      } else {
+        return NextResponse.json({ error: `Facebook account with ID ${accountId} not found.` }, { status: 400 });
+      }
+    }
 
-    await updatePagesStatus(pagesStatus);
+    let allPagesStatus: { id: string, tokenStatus: 'Valid' | 'Expired' }[] = [];
+    for (const acc of targetAccounts) {
+      const pagesStatus = acc.pages.map(p => ({
+        id: p.id,
+        tokenStatus: shouldExpire ? ('Expired' as const) : ('Valid' as const)
+      }));
+      allPagesStatus = [...allPagesStatus, ...pagesStatus];
+    }
+
+    await updatePagesStatus(allPagesStatus);
 
     return NextResponse.json({ success: true, expired: shouldExpire });
   } catch (error: unknown) {

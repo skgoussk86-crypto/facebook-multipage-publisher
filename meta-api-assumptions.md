@@ -21,7 +21,7 @@ The following application capabilities are officially supported by Meta's public
 
 Due to Meta's strict application review sandboxes, some behaviors cannot be fully validated until a Live Meta App is registered and approved:
 
-- **App Review and Permissions Approvals**: To request permissions such as `pages_manage_posts`, `publish_video`, and `pages_read_engagement` for public users (not just App Administrators/Developers/Testers), the App must go through the Meta App Review process.
+- **App Review and Permissions Approvals**: To request permissions such as `pages_manage_posts` and `pages_read_engagement` for public users (not just App Administrators/Developers/Testers), the App must go through the Meta App Review process.
 - **Business Verification**: Apps requesting posting permissions typically must complete Business Verification under the Meta Business Suite before transitioning to "Live" mode.
 - **Rate Limit Thresholds**: Graph API rate limits are applied dynamically based on app usage levels. Real-world testing is required to verify retry triggers when publishing batches of high-resolution video files.
 - **Reconection UX**: The real-world invalidation flow when an admin updates their Facebook password requires live testing to verify that API calls consistently return HTTP 400 with subcode `463` or `467`.

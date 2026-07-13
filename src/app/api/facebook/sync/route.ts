@@ -1,25 +1,36 @@
-import { NextResponse } from 'next/server';
-import { getFacebookConnection, saveFacebookAccount, MockFacebookPage, MockFacebookAccount, updateConnectionState } from '@/lib/db';
+import { NextRequest, NextResponse } from 'next/server';
+import { getFacebookConnections, saveFacebookAccount, MockFacebookPage, MockFacebookAccount, updatePagesStatus } from '@/lib/db';
 import { encryptToken, decryptToken } from '@/lib/crypto';
 import { prisma } from '@/lib/prisma-client';
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
-    const { account, connectionState } = await getFacebookConnection();
+    const searchParams = request.nextUrl.searchParams;
+    const accountId = searchParams.get('accountId');
+
+    const accounts = await getFacebookConnections() || [];
     
-    if (!account) {
-      return NextResponse.json({ error: 'No Facebook account connected.' }, { status: 400 });
+    if (accounts.length === 0) {
+      return NextResponse.json({ error: 'No Facebook accounts connected.' }, { status: 400 });
+    }
+
+    // Find the target account to sync.
+    let targetAccount = accounts[0];
+    if (accountId) {
+      const match = accounts.find(acc => acc.id === accountId);
+      if (match) {
+        targetAccount = match;
+      } else {
+        return NextResponse.json({ error: `Facebook account with ID ${accountId} not found.` }, { status: 400 });
+      }
     }
 
     const isLive = process.env.LIVE_META_MODE === 'true';
 
     if (isLive) {
-      // Fetch User Access Token from DB
-      // We retrieve it via database connection (decrypt user access token)
-      // Since getFacebookConnection didn't return the raw DB account to keep it safe from leaking,
-      // let's fetch the account directly from prisma here
-      const dbAccount = await prisma.facebookAccount.findFirst({
-        where: { facebookUserId: account.facebookUserId }
+      // Fetch User Access Token from DB specifically for the target account
+      const dbAccount = await prisma.facebookAccount.findUnique({
+        where: { id: targetAccount.id }
       });
 
       if (!dbAccount) {
@@ -34,7 +45,11 @@ export async function POST() {
         const errData = await pagesRes.json();
         // If OAuth fails (e.g. revoked token), we update page status to Expired
         if (errData.error?.code === 190) {
-          await updateConnectionState('Reconnection Required');
+          const expiredPages = targetAccount.pages.map(p => ({
+            id: p.id,
+            tokenStatus: 'Expired' as const
+          }));
+          await updatePagesStatus(expiredPages);
         }
         return NextResponse.json({ error: `Meta API Error: ${errData.error?.message || 'Sync failed'}` }, { status: 400 });
       }
@@ -69,7 +84,8 @@ export async function POST() {
         });
       }
 
-      // Preserve long lived user token expires details
+      const connectionState = targetAccount.connectionState;
+
       const simulatedAccount: MockFacebookAccount = {
         id: dbAccount.id,
         facebookUserId: dbAccount.facebookUserId,
@@ -98,14 +114,9 @@ export async function POST() {
       // Simulate slow sync response
       await new Promise(resolve => setTimeout(resolve, 800));
 
-      const { account: updatedAccount, connectionState: nextState } = await getFacebookConnection();
-      if (!updatedAccount) {
-        return NextResponse.json({ error: 'No account linked' }, { status: 400 });
-      }
-
       return NextResponse.json({
-        pages: updatedAccount.pages || [],
-        connectionState: nextState
+        pages: targetAccount.pages || [],
+        connectionState: targetAccount.connectionState
       });
     }
   } catch (error: unknown) {
