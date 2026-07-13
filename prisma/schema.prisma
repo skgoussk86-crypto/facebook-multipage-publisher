@@ -25,20 +25,37 @@ enum UserStatus {
   SUSPENDED
 }
 
+enum UserApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 model User {
-  id               String            @id @default(uuid()) @db.Uuid
-  email            String            @unique @db.VarChar(255)
+  id               String             @id @default(uuid()) @db.Uuid
+  email            String             @unique @db.VarChar(255)
   passwordHash     String
-  name             String?           @db.VarChar(255)
-  role             UserRole          @default(USER)
-  status           UserStatus        @default(ACTIVE)
+  name             String?            @db.VarChar(255)
+  role             UserRole           @default(USER)
+  status           UserStatus         @default(ACTIVE)
+  approvalStatus   UserApprovalStatus @default(PENDING)
+  approvedAt       DateTime?          @db.Timestamptz
+  approvedById     String?            @db.Uuid
+  approvedBy       User?              @relation("UserApprovals", fields: [approvedById], references: [id])
+  approvedUsers    User[]             @relation("UserApprovals")
+  rejectedAt       DateTime?          @db.Timestamptz
+  rejectionReason  String?            @db.Text
+  registrationIp   String?            @db.VarChar(45)
+  lastLoginAt      DateTime?          @db.Timestamptz
   facebookAccounts FacebookAccount[]
   appConfiguration AppConfiguration?
   facebookPages    FacebookPage[]
   videoJobs        VideoJob[]
   auditLogs        AuditLog[]
-  createdAt        DateTime          @default(now()) @db.Timestamptz
-  updatedAt        DateTime          @updatedAt @db.Timestamptz
+  createdAt        DateTime           @default(now()) @db.Timestamptz
+  updatedAt        DateTime           @updatedAt @db.Timestamptz
+
+  @@index([approvedById])
 }
 
 model FacebookAccount {
