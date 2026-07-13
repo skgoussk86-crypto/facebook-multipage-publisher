@@ -3,36 +3,67 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma-client";
 import UserManagementClient from "./UserManagementClient";
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 export default async function Page() {
-  const user = await getSessionUser();
+  const currentUser = await getSessionUser();
 
-  if (!user) {
+  if (!currentUser) {
     redirect("/login?callbackUrl=/admin/users");
   }
 
-  if (user.role !== "ADMIN") {
+  if (currentUser.role !== "ADMIN") {
     redirect("/unauthorized");
   }
 
   const users = await prisma.user.findMany({
-    orderBy: { createdAt: "desc" }
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      status: true,
+      approvalStatus: true,
+      approvedAt: true,
+      approvedById: true,
+      rejectedAt: true,
+      rejectionReason: true,
+      registrationIp: true,
+      lastLoginAt: true,
+      createdAt: true,
+      updatedAt: true
+    },
+    orderBy: {
+      createdAt: "desc"
+    }
   });
 
-  const sanitizedUsers = users.map(u => ({
-    id: u.id,
-    email: u.email,
-    name: u.name || "Meta Administrator",
-    role: u.role,
-    status: u.status,
-    createdAt: u.createdAt.toISOString()
+  const sanitizedUsers = users.map((user) => ({
+    id: user.id,
+    email: user.email,
+    name: user.name || "Unnamed User",
+    role: user.role,
+    status: user.status,
+    approvalStatus: user.approvalStatus,
+    approvedAt: user.approvedAt?.toISOString() ?? null,
+    approvedById: user.approvedById,
+    rejectedAt: user.rejectedAt?.toISOString() ?? null,
+    rejectionReason: user.rejectionReason,
+    registrationIp: user.registrationIp,
+    lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
+    createdAt: user.createdAt.toISOString(),
+    updatedAt: user.updatedAt.toISOString()
   }));
 
   return (
-    <UserManagementClient 
-      initialUsers={sanitizedUsers} 
-      currentUser={{ id: user.id, email: user.email, name: user.name || "Meta Administrator", role: user.role }} 
+    <UserManagementClient
+      initialUsers={sanitizedUsers}
+      currentUser={{
+        id: currentUser.id,
+        email: currentUser.email,
+        name: currentUser.name || "Meta Administrator",
+        role: currentUser.role
+      }}
     />
   );
 }
