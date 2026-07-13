@@ -15,11 +15,28 @@ enum JobStatus {
   FAILED
 }
 
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
 model User {
   id               String            @id @default(uuid()) @db.Uuid
   email            String            @unique @db.VarChar(255)
   passwordHash     String
+  name             String?           @db.VarChar(255)
+  role             UserRole          @default(USER)
+  status           UserStatus        @default(ACTIVE)
   facebookAccounts FacebookAccount[]
+  appConfiguration AppConfiguration?
+  facebookPages    FacebookPage[]
+  videoJobs        VideoJob[]
+  auditLogs        AuditLog[]
   createdAt        DateTime          @default(now()) @db.Timestamptz
   updatedAt        DateTime          @updatedAt @db.Timestamptz
 }
@@ -51,11 +68,14 @@ model FacebookPage {
   encryptedPageToken String          @db.Text
   isSynced           Boolean         @default(true)
   videoJobs          VideoJob[]
+  userId             String?         @db.Uuid
+  user               User?           @relation(fields: [userId], references: [id])
   createdAt          DateTime        @default(now()) @db.Timestamptz
   updatedAt          DateTime        @updatedAt @db.Timestamptz
 
   @@index([facebookPageId])
   @@index([accountId])
+  @@index([userId])
 }
 
 model VideoJob {
@@ -73,12 +93,15 @@ model VideoJob {
   cloudTaskName    String?      @db.Text
   retryCount       Int          @default(0) @db.Integer
   errorLog         String?      @db.Text
+  userId           String?      @db.Uuid
+  user             User?        @relation(fields: [userId], references: [id])
   createdAt        DateTime     @default(now()) @db.Timestamptz
   updatedAt        DateTime     @updatedAt @db.Timestamptz
 
   @@index([status])
   @@index([scheduledTimeUTC])
   @@index([pageId])
+  @@index([userId])
 }
 
 model AppConfiguration {
@@ -87,6 +110,8 @@ model AppConfiguration {
   facebookAppId      String   @db.VarChar(255)
   encryptedAppSecret String   @db.Text
   liveMetaMode       Boolean  @default(false)
+  userId             String?  @unique @db.Uuid
+  user               User?    @relation(fields: [userId], references: [id])
   createdAt          DateTime @default(now()) @db.Timestamptz
   updatedAt          DateTime @updatedAt @db.Timestamptz
 }
@@ -97,6 +122,9 @@ model AuditLog {
   details   String   @db.Text
   ipAddress String?  @db.VarChar(45)
   userId    String?  @db.Uuid
+  user      User?    @relation(fields: [userId], references: [id])
   createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([userId])
 }
 
