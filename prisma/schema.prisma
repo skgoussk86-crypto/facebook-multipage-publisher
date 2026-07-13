@@ -62,7 +62,7 @@ model FacebookAccount {
   id                   String         @id @default(uuid()) @db.Uuid
   userId               String         @db.Uuid
   user                 User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  facebookUserId       String         @unique @db.VarChar(255)
+  facebookUserId       String         @db.VarChar(255)
   encryptedAccessToken String         @db.Text
   tokenExpiresAt       DateTime       @db.Timestamptz
   name                 String         @db.VarChar(255)
@@ -70,6 +70,7 @@ model FacebookAccount {
   createdAt            DateTime       @default(now()) @db.Timestamptz
   updatedAt            DateTime       @updatedAt @db.Timestamptz
 
+  @@unique([userId, facebookUserId])
   @@index([facebookUserId])
   @@index([userId])
 }
@@ -78,18 +79,19 @@ model FacebookPage {
   id                 String          @id @default(uuid()) @db.Uuid
   accountId          String          @db.Uuid
   facebookAccount    FacebookAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  facebookPageId     String          @unique @db.VarChar(255)
+  facebookPageId     String          @db.VarChar(255)
   pageName           String          @db.VarChar(255)
   pageCategory       String          @db.VarChar(255)
   pagePictureUrl     String          @db.Text
   encryptedPageToken String          @db.Text
   isSynced           Boolean         @default(true)
   videoJobs          VideoJob[]
-  userId             String?         @db.Uuid
-  user               User?           @relation(fields: [userId], references: [id])
+  userId             String          @db.Uuid
+  user               User            @relation(fields: [userId], references: [id])
   createdAt          DateTime        @default(now()) @db.Timestamptz
   updatedAt          DateTime        @updatedAt @db.Timestamptz
 
+  @@unique([userId, facebookPageId])
   @@index([facebookPageId])
   @@index([accountId])
   @@index([userId])
@@ -144,4 +146,3 @@ model AuditLog {
 
   @@index([userId])
 }
-

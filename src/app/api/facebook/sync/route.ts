@@ -1,137 +1,526 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getFacebookConnections, saveFacebookAccount, MockFacebookPage, MockFacebookAccount, updatePagesStatus } from '@/lib/db';
+import {
+  NextRequest,
+  NextResponse
+} from 'next/server';
+import {
+  createAuditLog,
+  getFacebookConnections,
+  isLiveMetaMode,
+  logWarn,
+  MockFacebookAccount,
+  MockFacebookPage,
+  saveFacebookAccount,
+  updatePagesStatus
+} from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
-import { encryptToken, decryptToken } from '@/lib/crypto';
+import {
+  decryptToken,
+  encryptToken
+} from '@/lib/crypto';
 import { prisma } from '@/lib/prisma-client';
 
-export async function POST(request: NextRequest) {
+interface MetaApiError {
+  message?: string;
+  code?: number;
+}
+
+interface MetaApiErrorPayload {
+  error?: MetaApiError;
+}
+
+interface MetaPageRecord {
+  id?: string;
+  name?: string;
+  category?: string;
+  access_token?: string;
+}
+
+interface MetaAccountsResponse
+  extends MetaApiErrorPayload {
+  data?: MetaPageRecord[];
+  paging?: {
+    cursors?: {
+      after?: string;
+    };
+    next?: string;
+  };
+}
+
+interface MetaPictureResponse
+  extends MetaApiErrorPayload {
+  data?: {
+    url?: string;
+  };
+}
+
+class MetaApiRequestError extends Error {
+  readonly code?: number;
+
+  constructor(message: string, code?: number) {
+    super(message);
+    this.name = 'MetaApiRequestError';
+    this.code = code;
+  }
+}
+
+function getGraphApiVersion(): string {
+  const configuredVersion =
+    process.env.FACEBOOK_GRAPH_API_VERSION?.trim();
+
+  if (!configuredVersion) {
+    return 'v20.0';
+  }
+
+  return configuredVersion.startsWith('v')
+    ? configuredVersion
+    : `v${configuredVersion}`;
+}
+
+const GRAPH_API_BASE_URL =
+  `https://graph.facebook.com/${getGraphApiVersion()}`;
+
+function getRequestIp(
+  request: NextRequest
+): string | null {
+  return (
+    request.headers.get('cf-connecting-ip') ||
+    request.headers
+      .get('x-forwarded-for')
+      ?.split(',')[0]
+      ?.trim() ||
+    request.headers.get('x-real-ip') ||
+    null
+  );
+}
+
+async function readJson<T>(
+  response: Response
+): Promise<T> {
   try {
-    const user = await verifyAdminSession(request);
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return (await response.json()) as T;
+  } catch {
+    return {} as T;
+  }
+}
+
+function getMetaErrorMessage(
+  payload: MetaApiErrorPayload,
+  fallback: string
+): string {
+  return payload.error?.message || fallback;
+}
+
+async function fetchAllFacebookPages(
+  userAccessToken: string
+): Promise<MetaPageRecord[]> {
+  const pages: MetaPageRecord[] = [];
+  const seenCursors = new Set<string>();
+
+  let afterCursor: string | undefined;
+
+  for (
+    let requestNumber = 0;
+    requestNumber < 20;
+    requestNumber += 1
+  ) {
+    const url = new URL(
+      `${GRAPH_API_BASE_URL}/me/accounts`
+    );
+
+    url.searchParams.set(
+      'fields',
+      'id,name,category,access_token'
+    );
+    url.searchParams.set('limit', '100');
+
+    if (afterCursor) {
+      url.searchParams.set(
+        'after',
+        afterCursor
+      );
     }
 
-    const searchParams = request.nextUrl.searchParams;
-    const accountId = searchParams.get('accountId');
+    const response = await fetch(url, {
+      headers: {
+        Authorization:
+          `Bearer ${userAccessToken}`
+      },
+      cache: 'no-store'
+    });
 
-    const accounts = await getFacebookConnections(user.id) || [];
-    
-    if (accounts.length === 0) {
-      return NextResponse.json({ error: 'No Facebook accounts connected.' }, { status: 400 });
+    const payload =
+      await readJson<MetaAccountsResponse>(
+        response
+      );
+
+    if (!response.ok || payload.error) {
+      throw new MetaApiRequestError(
+        getMetaErrorMessage(
+          payload,
+          'Unable to retrieve Facebook Pages.'
+        ),
+        payload.error?.code
+      );
     }
 
-    // Find the target account to sync.
-    let targetAccount = accounts[0];
-    if (accountId) {
-      const match = accounts.find(acc => acc.id === accountId);
-      if (match) {
-        targetAccount = match;
-      } else {
-        return NextResponse.json({ error: `Facebook account with ID ${accountId} not found.` }, { status: 400 });
-      }
+    if (Array.isArray(payload.data)) {
+      pages.push(...payload.data);
     }
 
-    const isLive = process.env.LIVE_META_MODE === 'true';
+    const nextCursor =
+      payload.paging?.next
+        ? payload.paging.cursors?.after
+        : undefined;
 
-    if (isLive) {
-      // Fetch User Access Token from DB specifically for the target account
-      const dbAccount = await prisma.facebookAccount.findUnique({
-        where: { id: targetAccount.id }
-      });
+    if (
+      !nextCursor ||
+      seenCursors.has(nextCursor)
+    ) {
+      break;
+    }
 
-      if (!dbAccount) {
-        return NextResponse.json({ error: 'Facebook account not found in database.' }, { status: 400 });
-      }
+    seenCursors.add(nextCursor);
+    afterCursor = nextCursor;
+  }
 
-      if (dbAccount.userId !== user.id) {
-        return NextResponse.json({ error: 'Forbidden: You do not own this Facebook account.' }, { status: 403 });
-      }
+  return pages;
+}
 
-      const longUserToken = decryptToken(dbAccount.encryptedAccessToken);
+async function fetchPagePictureUrl(
+  pageId: string,
+  pageName: string,
+  pageAccessToken: string
+): Promise<string> {
+  const fallbackUrl =
+    `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(
+      pageName || pageId
+    )}`;
 
-      // Fetch fresh accounts list from Facebook Graph API
-      const pagesRes = await fetch(`https://graph.facebook.com/v20.0/me/accounts?access_token=${longUserToken}`);
-      if (!pagesRes.ok) {
-        const errData = await pagesRes.json();
-        // If OAuth fails (e.g. revoked token), we update page status to Expired
-        if (errData.error?.code === 190) {
-          const expiredPages = targetAccount.pages.map(p => ({
-            id: p.id,
-            tokenStatus: 'Expired' as const
-          }));
-          await updatePagesStatus(user.id, expiredPages);
-        }
-        return NextResponse.json({ error: `Meta API Error: ${errData.error?.message || 'Sync failed'}` }, { status: 400 });
-      }
+  try {
+    const url = new URL(
+      `${GRAPH_API_BASE_URL}/${encodeURIComponent(
+        pageId
+      )}/picture`
+    );
 
-      const pagesData = await pagesRes.json();
-      const rawPages = pagesData.data || [];
+    url.searchParams.set('redirect', '0');
+    url.searchParams.set('type', 'normal');
 
-      // Remap and update page pictures and encrypted tokens
-      const updatedPages: MockFacebookPage[] = [];
-      for (const page of rawPages) {
-        let pictureUrl = `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(page.name)}`;
-        try {
-          const picRes = await fetch(`https://graph.facebook.com/v20.0/${page.id}/picture?redirect=0&type=normal&access_token=${page.access_token}`);
-          if (picRes.ok) {
-            const picData = await picRes.json();
-            if (picData?.data?.url) {
-              pictureUrl = picData.data.url;
-            }
-          }
-        } catch (e) {
-          console.warn(`Pic load fail during sync for ${page.name}:`, e);
-        }
+    const response = await fetch(url, {
+      headers: {
+        Authorization:
+          `Bearer ${pageAccessToken}`
+      },
+      cache: 'no-store'
+    });
 
-        updatedPages.push({
-          id: page.id,
-          name: page.name,
-          category: page.category || 'Business Page',
-          pictureUrl,
-          tokenStatus: 'Valid',
-          connectedAt: new Date().toISOString(),
-          encryptedPageToken: encryptToken(page.access_token)
-        });
-      }
+    const payload =
+      await readJson<MetaPictureResponse>(
+        response
+      );
 
-      const connectionState = targetAccount.connectionState;
-
-      const simulatedAccount: MockFacebookAccount = {
-        id: dbAccount.id,
-        facebookUserId: dbAccount.facebookUserId,
-        name: dbAccount.name,
-        encryptedAccessToken: dbAccount.encryptedAccessToken,
-        tokenExpiresAt: dbAccount.tokenExpiresAt.toISOString(),
-        pages: updatedPages
-      };
-
-      await saveFacebookAccount(user.id, simulatedAccount, connectionState);
-      
-      return NextResponse.json({
-        pages: updatedPages.map(p => ({
-          id: p.id,
-          name: p.name,
-          category: p.category,
-          pictureUrl: p.pictureUrl,
-          tokenStatus: p.tokenStatus,
-          connectedAt: p.connectedAt
-        })),
-        connectionState: 'Connected'
-      });
-
-    } else {
-      // SIMULATION SYNC FLOW
-      // Simulate slow sync response
-      await new Promise(resolve => setTimeout(resolve, 800));
-
-      return NextResponse.json({
-        pages: targetAccount.pages || [],
-        connectionState: targetAccount.connectionState
-      });
+    if (
+      response.ok &&
+      typeof payload.data?.url === 'string' &&
+      payload.data.url.trim()
+    ) {
+      return payload.data.url;
     }
   } catch (error: unknown) {
-    console.error('Pages Sync Error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
-    return NextResponse.json({ error: errorMessage }, { status: 500 });
+    const message =
+      error instanceof Error
+        ? error.message
+        : String(error);
+
+    logWarn(
+      `Facebook Page picture retrieval failed for page ${pageId}: ${message}`
+    );
+  }
+
+  return fallbackUrl;
+}
+
+export async function POST(
+  request: NextRequest
+) {
+  try {
+    const user =
+      await verifyAdminSession(request);
+
+    if (!user) {
+      return NextResponse.json(
+        {
+          error: 'Unauthorized'
+        },
+        {
+          status: 401
+        }
+      );
+    }
+
+    const accountId =
+      request.nextUrl.searchParams.get(
+        'accountId'
+      );
+
+    const accounts =
+      await getFacebookConnections(user.id);
+
+    if (accounts.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            'No Facebook accounts are connected to your user account.'
+        },
+        {
+          status: 400
+        }
+      );
+    }
+
+    const targetAccount = accountId
+      ? accounts.find(
+          (account) =>
+            account.id === accountId
+        )
+      : accounts[0];
+
+    if (!targetAccount) {
+      return NextResponse.json(
+        {
+          error:
+            'The requested Facebook account was not found in your account.'
+        },
+        {
+          status: 404
+        }
+      );
+    }
+
+    const liveMetaMode =
+      await isLiveMetaMode(user.id);
+
+    if (!liveMetaMode) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 800);
+      });
+
+      return NextResponse.json({
+        pages: targetAccount.pages ?? [],
+        connectionState:
+          targetAccount.connectionState
+      });
+    }
+
+    const databaseAccount =
+      await prisma.facebookAccount.findFirst({
+        where: {
+          id: targetAccount.id,
+          userId: user.id
+        }
+      });
+
+    if (!databaseAccount) {
+      return NextResponse.json(
+        {
+          error:
+            'The Facebook account does not exist or is not owned by your user account.'
+        },
+        {
+          status: 404
+        }
+      );
+    }
+
+    const longUserToken = decryptToken(
+      databaseAccount.encryptedAccessToken
+    );
+
+    let rawPages: MetaPageRecord[];
+
+    try {
+      rawPages =
+        await fetchAllFacebookPages(
+          longUserToken
+        );
+    } catch (error: unknown) {
+      const isMetaError =
+        error instanceof MetaApiRequestError;
+
+      if (
+        isMetaError &&
+        error.code === 190
+      ) {
+        const expiredPages =
+          targetAccount.pages.map((page) => ({
+            id: page.id,
+            tokenStatus: 'Expired' as const
+          }));
+
+        await updatePagesStatus(
+          user.id,
+          expiredPages
+        );
+      }
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Facebook Page synchronization failed.';
+
+      await createAuditLog(
+        'FACEBOOK_PAGE_SYNC_FAILED',
+        `Facebook Page synchronization failed for account ${databaseAccount.facebookUserId}: ${message}`,
+        getRequestIp(request),
+        user.id
+      );
+
+      return NextResponse.json(
+        {
+          error: `Meta API Error: ${message}`
+        },
+        {
+          status: 400
+        }
+      );
+    }
+
+    const updatedPages: MockFacebookPage[] =
+      [];
+
+    for (const page of rawPages) {
+      const pageId = page.id?.trim();
+      const pageName = page.name?.trim();
+      const pageAccessToken =
+        page.access_token?.trim();
+
+      if (
+        !pageId ||
+        !pageName ||
+        !pageAccessToken
+      ) {
+        logWarn(
+          'Skipped a Facebook Page during sync because its ID, name or access token was missing.'
+        );
+
+        continue;
+      }
+
+      const pictureUrl =
+        await fetchPagePictureUrl(
+          pageId,
+          pageName,
+          pageAccessToken
+        );
+
+      updatedPages.push({
+        id: pageId,
+        name: pageName,
+        category:
+          page.category?.trim() ||
+          'Business Page',
+        pictureUrl,
+        tokenStatus: 'Valid',
+        connectedAt:
+          new Date().toISOString(),
+        encryptedPageToken:
+          encryptToken(pageAccessToken)
+      });
+    }
+
+    const accountToSave: MockFacebookAccount =
+      {
+        id: databaseAccount.id,
+        facebookUserId:
+          databaseAccount.facebookUserId,
+        name: databaseAccount.name,
+        encryptedAccessToken:
+          databaseAccount.encryptedAccessToken,
+        tokenExpiresAt:
+          databaseAccount.tokenExpiresAt.toISOString(),
+        pages: updatedPages,
+        userId: user.id
+      };
+
+    await saveFacebookAccount(
+      user.id,
+      accountToSave,
+      updatedPages.length > 0
+        ? 'Connected'
+        : 'Permission Missing'
+    );
+
+    const synchronizedPageIds =
+      updatedPages.map((page) => page.id);
+
+    if (synchronizedPageIds.length > 0) {
+      await prisma.facebookPage.updateMany({
+        where: {
+          userId: user.id,
+          accountId:
+            databaseAccount.id,
+          facebookPageId: {
+            notIn: synchronizedPageIds
+          }
+        },
+        data: {
+          isSynced: false
+        }
+      });
+    } else {
+      await prisma.facebookPage.updateMany({
+        where: {
+          userId: user.id,
+          accountId:
+            databaseAccount.id
+        },
+        data: {
+          isSynced: false
+        }
+      });
+    }
+
+    const connectionState =
+      updatedPages.length > 0
+        ? 'Connected'
+        : 'Permission Missing';
+
+    await createAuditLog(
+      'FACEBOOK_PAGE_SYNC',
+      `Synchronized ${updatedPages.length} Facebook Pages for Facebook account ${databaseAccount.facebookUserId}.`,
+      getRequestIp(request),
+      user.id
+    );
+
+    return NextResponse.json({
+      pages: updatedPages.map((page) => ({
+        id: page.id,
+        name: page.name,
+        category: page.category,
+        pictureUrl: page.pictureUrl,
+        tokenStatus: page.tokenStatus,
+        connectedAt: page.connectedAt
+      })),
+      connectionState
+    });
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : 'Internal Server Error';
+
+    console.error(
+      'Facebook Pages Sync Error:',
+      error
+    );
+
+    return NextResponse.json(
+      {
+        error: message
+      },
+      {
+        status: 500
+      }
+    );
   }
 }

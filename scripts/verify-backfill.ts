@@ -2,70 +2,348 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+interface DuplicateFacebookAccount {
+  userId: string;
+  facebookUserId: string;
+  duplicateCount: bigint;
+}
+
+interface DuplicateFacebookPage {
+  userId: string;
+  facebookPageId: string;
+  duplicateCount: bigint;
+}
+
+interface NullOwnershipCounts {
+  facebookAccountNullUserIds: bigint;
+  facebookPageNullUserIds: bigint;
+}
+
 async function main() {
-  console.log('--- Phase 1 Verification Audit ---');
+  console.log('--- Multi-User Ownership Verification Audit ---');
 
-  try {
-    const tables = [
-      { name: 'AppConfiguration', countAll: () => prisma.appConfiguration.count(), countWithUser: () => prisma.appConfiguration.count({ where: { userId: { not: null } } }), countWithoutUser: () => prisma.appConfiguration.count({ where: { userId: null } }) },
-      { name: 'FacebookPage', countAll: () => prisma.facebookPage.count(), countWithUser: () => prisma.facebookPage.count({ where: { userId: { not: null } } }), countWithoutUser: () => prisma.facebookPage.count({ where: { userId: null } }) },
-      { name: 'VideoJob', countAll: () => prisma.videoJob.count(), countWithUser: () => prisma.videoJob.count({ where: { userId: { not: null } } }), countWithoutUser: () => prisma.videoJob.count({ where: { userId: null } }) },
-      { name: 'AuditLog', countAll: () => prisma.auditLog.count(), countWithUser: () => prisma.auditLog.count({ where: { userId: { not: null } } }), countWithoutUser: () => prisma.auditLog.count({ where: { userId: null } }) },
-      { name: 'FacebookAccount', countAll: () => prisma.facebookAccount.count(), countWithUser: () => prisma.facebookAccount.count(), countWithoutUser: () => Promise.resolve(0) }
-    ];
+  let criticalChecksPassed = true;
 
-    let allValid = true;
+  const [
+    totalUsers,
+    totalFacebookAccounts,
+    totalFacebookPages,
+    totalVideoJobs,
+    totalAppConfigurations,
+    totalAuditLogs
+  ] = await Promise.all([
+    prisma.user.count(),
+    prisma.facebookAccount.count(),
+    prisma.facebookPage.count(),
+    prisma.videoJob.count(),
+    prisma.appConfiguration.count(),
+    prisma.auditLog.count()
+  ]);
 
-    for (const table of tables) {
-      const total = await table.countAll();
-      const withUser = await table.countWithUser();
-      const withoutUser = await table.countWithoutUser();
+  console.log('\nDatabase Row Counts:');
+  console.log(`  - Users: ${totalUsers}`);
+  console.log(`  - Facebook Accounts: ${totalFacebookAccounts}`);
+  console.log(`  - Facebook Pages: ${totalFacebookPages}`);
+  console.log(`  - Video Jobs: ${totalVideoJobs}`);
+  console.log(`  - App Configurations: ${totalAppConfigurations}`);
+  console.log(`  - Audit Logs: ${totalAuditLogs}`);
 
-      console.log(`Table: ${table.name}`);
-      console.log(`  - Total Rows: ${total}`);
-      console.log(`  - With userId: ${withUser}`);
-      console.log(`  - Without userId: ${withoutUser}`);
+  const nullOwnershipCounts =
+    await prisma.$queryRaw<NullOwnershipCounts[]>`
+      SELECT
+        (
+          SELECT COUNT(*)::bigint
+          FROM "FacebookAccount"
+          WHERE "userId" IS NULL
+        ) AS "facebookAccountNullUserIds",
+        (
+          SELECT COUNT(*)::bigint
+          FROM "FacebookPage"
+          WHERE "userId" IS NULL
+        ) AS "facebookPageNullUserIds"
+    `;
 
-      if (withoutUser > 0) {
-        console.warn(`  [WARNING] Table ${table.name} has ${withoutUser} records without a userId!`);
-        allValid = false;
-      } else {
-        console.log(`  [OK] All records in ${table.name} successfully have a userId.`);
-      }
-    }
+  const facebookAccountNullUserIds = Number(
+    nullOwnershipCounts[0]?.facebookAccountNullUserIds ?? 0
+  );
 
-    // Double-check referential integrity
-    const accountUserIds = (await prisma.facebookAccount.findMany({ select: { userId: true } })).map(a => a.userId);
-    const pageUserIds = (await prisma.facebookPage.findMany({ select: { userId: true } })).map(p => p.userId);
-    const jobUserIds = (await prisma.videoJob.findMany({ select: { userId: true } })).map(j => j.userId);
-    const configUserIds = (await prisma.appConfiguration.findMany({ select: { userId: true } })).map(c => c.userId);
+  const facebookPageNullUserIds = Number(
+    nullOwnershipCounts[0]?.facebookPageNullUserIds ?? 0
+  );
 
-    const uniqueUserIds = Array.from(new Set([...accountUserIds, ...pageUserIds, ...jobUserIds, ...configUserIds]));
-    
-    console.log('\nReferential Integrity Check:');
-    for (const uid of uniqueUserIds) {
-      if (uid) {
-        const userExists = await prisma.user.findUnique({ where: { id: uid } });
-        if (!userExists) {
-          console.error(`  [ERROR] Record references userId ${uid} but no such user exists in the User table!`);
-          allValid = false;
+  console.log('\nRequired Ownership Checks:');
+  console.log(
+    `  - FacebookAccount rows without userId: ${facebookAccountNullUserIds}`
+  );
+  console.log(
+    `  - FacebookPage rows without userId: ${facebookPageNullUserIds}`
+  );
+
+  if (
+    facebookAccountNullUserIds > 0 ||
+    facebookPageNullUserIds > 0
+  ) {
+    console.error(
+      '  [ERROR] Required Facebook ownership records are missing userId.'
+    );
+
+    criticalChecksPassed = false;
+  } else {
+    console.log(
+      '  [OK] All Facebook accounts and pages have required user ownership.'
+    );
+  }
+
+  const pages = await prisma.facebookPage.findMany({
+    select: {
+      id: true,
+      facebookPageId: true,
+      userId: true,
+      facebookAccount: {
+        select: {
+          id: true,
+          userId: true
         }
       }
     }
+  });
 
-    if (allValid) {
-      console.log('  [SUCCESS] All checks passed. Referential integrity is valid and no legacy records are orphaned.');
-      process.exit(0);
-    } else {
-      console.log('  [FAILED] Some validation checks failed. Review details above.');
-      process.exit(1);
+  const ownershipMismatches = pages.filter(
+    (page) =>
+      page.userId !== page.facebookAccount.userId
+  );
+
+  console.log('\nFacebook Page and Account Ownership Consistency:');
+
+  if (ownershipMismatches.length > 0) {
+    console.error(
+      `  [ERROR] Found ${ownershipMismatches.length} Facebook page records whose userId does not match their parent Facebook account.`
+    );
+
+    for (const page of ownershipMismatches) {
+      console.error(
+        `    Page ${page.facebookPageId}: page userId=${page.userId}, account userId=${page.facebookAccount.userId}`
+      );
     }
-  } catch (error) {
-    console.error('Audit script failed:', error);
-    process.exit(1);
-  } finally {
-    await prisma.$disconnect();
+
+    criticalChecksPassed = false;
+  } else {
+    console.log(
+      '  [OK] Every Facebook page belongs to an account owned by the same application user.'
+    );
+  }
+
+  const duplicateFacebookAccounts =
+    await prisma.$queryRaw<DuplicateFacebookAccount[]>`
+      SELECT
+        "userId",
+        "facebookUserId",
+        COUNT(*)::bigint AS "duplicateCount"
+      FROM "FacebookAccount"
+      GROUP BY "userId", "facebookUserId"
+      HAVING COUNT(*) > 1
+    `;
+
+  const duplicateFacebookPages =
+    await prisma.$queryRaw<DuplicateFacebookPage[]>`
+      SELECT
+        "userId",
+        "facebookPageId",
+        COUNT(*)::bigint AS "duplicateCount"
+      FROM "FacebookPage"
+      GROUP BY "userId", "facebookPageId"
+      HAVING COUNT(*) > 1
+    `;
+
+  console.log('\nCompound Uniqueness Checks:');
+
+  if (duplicateFacebookAccounts.length > 0) {
+    console.error(
+      `  [ERROR] Found ${duplicateFacebookAccounts.length} duplicate per-user Facebook account identifiers.`
+    );
+
+    criticalChecksPassed = false;
+  } else {
+    console.log(
+      '  [OK] No duplicate userId + facebookUserId combinations found.'
+    );
+  }
+
+  if (duplicateFacebookPages.length > 0) {
+    console.error(
+      `  [ERROR] Found ${duplicateFacebookPages.length} duplicate per-user Facebook page identifiers.`
+    );
+
+    criticalChecksPassed = false;
+  } else {
+    console.log(
+      '  [OK] No duplicate userId + facebookPageId combinations found.'
+    );
+  }
+
+  const [
+    appConfigurationsWithoutUser,
+    videoJobsWithoutUser,
+    auditLogsWithoutUser
+  ] = await Promise.all([
+    prisma.appConfiguration.count({
+      where: {
+        userId: null
+      }
+    }),
+    prisma.videoJob.count({
+      where: {
+        userId: null
+      }
+    }),
+    prisma.auditLog.count({
+      where: {
+        userId: null
+      }
+    })
+  ]);
+
+  console.log('\nLegacy Optional Ownership Records:');
+  console.log(
+    `  - AppConfiguration rows without userId: ${appConfigurationsWithoutUser}`
+  );
+  console.log(
+    `  - VideoJob rows without userId: ${videoJobsWithoutUser}`
+  );
+  console.log(
+    `  - AuditLog rows without userId: ${auditLogsWithoutUser}`
+  );
+
+  if (
+    appConfigurationsWithoutUser > 0 ||
+    videoJobsWithoutUser > 0 ||
+    auditLogsWithoutUser > 0
+  ) {
+    console.warn(
+      '  [WARNING] Optional legacy records without userId still exist. They were not deleted because they may contain historical data.'
+    );
+  } else {
+    console.log(
+      '  [OK] No optional ownership records are missing userId.'
+    );
+  }
+
+  const referencedUserIds = new Set<string>();
+
+  const [
+    accountOwners,
+    pageOwners,
+    jobOwners,
+    configurationOwners,
+    auditLogOwners
+  ] = await Promise.all([
+    prisma.facebookAccount.findMany({
+      select: {
+        userId: true
+      }
+    }),
+    prisma.facebookPage.findMany({
+      select: {
+        userId: true
+      }
+    }),
+    prisma.videoJob.findMany({
+      where: {
+        userId: {
+          not: null
+        }
+      },
+      select: {
+        userId: true
+      }
+    }),
+    prisma.appConfiguration.findMany({
+      where: {
+        userId: {
+          not: null
+        }
+      },
+      select: {
+        userId: true
+      }
+    }),
+    prisma.auditLog.findMany({
+      where: {
+        userId: {
+          not: null
+        }
+      },
+      select: {
+        userId: true
+      }
+    })
+  ]);
+
+  for (const record of accountOwners) {
+    referencedUserIds.add(record.userId);
+  }
+
+  for (const record of pageOwners) {
+    referencedUserIds.add(record.userId);
+  }
+
+  for (const record of jobOwners) {
+    if (record.userId) {
+      referencedUserIds.add(record.userId);
+    }
+  }
+
+  for (const record of configurationOwners) {
+    if (record.userId) {
+      referencedUserIds.add(record.userId);
+    }
+  }
+
+  for (const record of auditLogOwners) {
+    if (record.userId) {
+      referencedUserIds.add(record.userId);
+    }
+  }
+
+  console.log('\nReferenced User Integrity Check:');
+
+  for (const userId of referencedUserIds) {
+    const userExists = await prisma.user.findUnique({
+      where: {
+        id: userId
+      },
+      select: {
+        id: true
+      }
+    });
+
+    if (!userExists) {
+      console.error(
+        `  [ERROR] A record references missing userId ${userId}.`
+      );
+
+      criticalChecksPassed = false;
+    }
+  }
+
+  if (criticalChecksPassed) {
+    console.log(
+      '  [SUCCESS] All critical multi-user ownership and isolation checks passed.'
+    );
+  } else {
+    console.error(
+      '  [FAILED] One or more critical ownership checks failed.'
+    );
+
+    process.exitCode = 1;
   }
 }
 
-main();
+main()
+  .catch((error: unknown) => {
+    console.error('Ownership verification failed:', error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

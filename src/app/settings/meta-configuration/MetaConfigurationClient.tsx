@@ -1,8 +1,19 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+
+type ConnectionState =
+  | "Connected"
+  | "Token Expiring"
+  | "Reconnection Required"
+  | "Permission Missing";
 
 interface FacebookPage {
   id: string;
@@ -18,7 +29,7 @@ interface FacebookAccountUI {
   facebookUserId: string;
   name: string;
   tokenExpiresAt: string;
-  connectionState: 'Connected' | 'Token Expiring' | 'Reconnection Required' | 'Permission Missing';
+  connectionState: ConnectionState;
   pages: FacebookPage[];
 }
 
@@ -26,179 +37,416 @@ interface MetaConfigurationClientProps {
   adminEmail: string;
 }
 
-export default function MetaConfigurationClient({ adminEmail }: MetaConfigurationClientProps) {
+interface TestResult {
+  success: boolean;
+  message: string;
+  details?: unknown;
+}
+
+interface SaveResult {
+  success: boolean;
+  message: string;
+}
+
+interface ConfigurationResponse {
+  publicAppUrl?: string;
+  facebookAppId?: string;
+  facebookAppSecret?: string;
+  liveMetaMode?: boolean;
+  success?: boolean;
+  error?: string;
+  config?: {
+    publicAppUrl: string;
+    facebookAppId: string;
+    facebookAppSecret: string;
+    liveMetaMode: boolean;
+  };
+}
+
+const FACEBOOK_SECRET_MASK = "************";
+
+function formatExpiryDate(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+
+  return date.toLocaleDateString();
+}
+
+function getConnectionStateClasses(
+  state: ConnectionState
+): string {
+  if (state === "Connected") {
+    return "border-emerald-900/50 bg-emerald-950 text-emerald-400";
+  }
+
+  if (state === "Token Expiring") {
+    return "border-amber-900/50 bg-amber-950 text-amber-400";
+  }
+
+  return "border-rose-900/50 bg-rose-950 text-rose-400";
+}
+
+export default function MetaConfigurationClient({
+  adminEmail
+}: MetaConfigurationClientProps) {
   const router = useRouter();
 
-  // Configuration form states
+  const userEmail = adminEmail;
+
   const [publicAppUrl, setPublicAppUrl] = useState("");
-  const [facebookAppId, setFacebookAppId] = useState("");
-  const [facebookAppSecret, setFacebookAppSecret] = useState("");
-  const [liveMetaMode, setLiveMetaMode] = useState(false);
+  const [facebookAppId, setFacebookAppId] =
+    useState("");
+  const [facebookAppSecret, setFacebookAppSecret] =
+    useState("");
+  const [liveMetaMode, setLiveMetaMode] =
+    useState(false);
 
-  // Connected accounts list
-  const [accounts, setAccounts] = useState<FacebookAccountUI[]>([]);
-  const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
+  const [accounts, setAccounts] = useState<
+    FacebookAccountUI[]
+  >([]);
+  const [isLoadingConfig, setIsLoadingConfig] =
+    useState(true);
+  const [isLoadingAccounts, setIsLoadingAccounts] =
+    useState(false);
+  const [accountLoadError, setAccountLoadError] =
+    useState("");
 
-  // Test and Save operation states
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string; details?: unknown } | null>(null);
-  const [saveResult, setSaveResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] =
+    useState<TestResult | null>(null);
+  const [saveResult, setSaveResult] =
+    useState<SaveResult | null>(null);
+
   const [isTesting, setIsTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isCopied, setIsCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<
+    "idle" | "copied" | "failed"
+  >("idle");
 
-  // Load accounts function wrapped in useCallback
-  const loadConnectedAccounts = useCallback(async () => {
-    setIsLoadingAccounts(true);
-    try {
-      const res = await fetch("/api/facebook/pages");
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.accounts) {
-          setAccounts(data.accounts);
+  const handleUnauthorized = useCallback(() => {
+    router.replace("/login");
+    router.refresh();
+  }, [router]);
+
+  const loadConnectedAccounts =
+    useCallback(async () => {
+      setIsLoadingAccounts(true);
+      setAccountLoadError("");
+
+      try {
+        const response = await fetch(
+          "/api/facebook/pages",
+          {
+            cache: "no-store"
+          }
+        );
+
+        if (response.status === 401) {
+          handleUnauthorized();
+          return;
         }
-      }
-    } catch (e) {
-      console.error("Failed to load connected accounts:", e);
-    } finally {
-      setIsLoadingAccounts(false);
-    }
-  }, []);
 
-  // Load configuration function wrapped in useCallback
-  const loadConfig = useCallback(async () => {
+        if (!response.ok) {
+          throw new Error(
+            `Account request failed with status ${response.status}`
+          );
+        }
+
+        const data = (await response.json()) as {
+          accounts?: FacebookAccountUI[];
+        };
+
+        setAccounts(
+          Array.isArray(data.accounts)
+            ? data.accounts
+            : []
+        );
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : String(error);
+
+        console.error(
+          "Failed to load connected accounts:",
+          error
+        );
+
+        setAccountLoadError(
+          `Unable to load connected accounts: ${message}`
+        );
+      } finally {
+        setIsLoadingAccounts(false);
+      }
+    }, [handleUnauthorized]);
+
+  const loadConfiguration = useCallback(async () => {
+    setIsLoadingConfig(true);
+
     try {
-      const res = await fetch("/api/admin/config");
-      if (res.status === 401) {
-        router.refresh();
+      const response = await fetch(
+        "/api/admin/config",
+        {
+          cache: "no-store"
+        }
+      );
+
+      if (response.status === 401) {
+        handleUnauthorized();
         return;
       }
 
-      if (res.ok) {
-        const data = await res.json();
-        setPublicAppUrl(data.publicAppUrl || "");
-        setFacebookAppId(data.facebookAppId || "");
-        setFacebookAppSecret(data.facebookAppSecret || "");
-        setLiveMetaMode(data.liveMetaMode || false);
-        loadConnectedAccounts();
+      if (!response.ok) {
+        throw new Error(
+          `Configuration request failed with status ${response.status}`
+        );
       }
-    } catch (err) {
-      console.error("Config load failed:", err);
-    }
-  }, [loadConnectedAccounts, router]);
 
-  // Check Authentication on Mount
+      const data =
+        (await response.json()) as ConfigurationResponse;
+
+      setPublicAppUrl(data.publicAppUrl ?? "");
+      setFacebookAppId(data.facebookAppId ?? "");
+      setFacebookAppSecret(
+        data.facebookAppSecret ?? ""
+      );
+      setLiveMetaMode(data.liveMetaMode === true);
+
+      await loadConnectedAccounts();
+    } catch (error) {
+      console.error(
+        "Meta configuration load failed:",
+        error
+      );
+
+      setSaveResult({
+        success: false,
+        message:
+          "Unable to load your Meta configuration."
+      });
+    } finally {
+      setIsLoadingConfig(false);
+    }
+  }, [
+    handleUnauthorized,
+    loadConnectedAccounts
+  ]);
+
   useEffect(() => {
-    const timer = setTimeout(() => {
-      loadConfig();
+    const timer = window.setTimeout(() => {
+      void loadConfiguration();
     }, 0);
-    return () => clearTimeout(timer);
-  }, [loadConfig]);
 
-  // Compute URL matching warning on render
-  let hostnameWarning: string | null = null;
-  if (publicAppUrl) {
-    try {
-      const configUrl = new URL(publicAppUrl);
-      if (typeof window !== "undefined") {
-        const currentHost = window.location.host;
-        const configHost = configUrl.host;
-        if (configHost !== currentHost) {
-          hostnameWarning = `Warning: Configured Public App URL (${configHost}) does not match current browser location (${currentHost}). OAuth redirects may fail unless accessed via the configured URL.`;
-        }
-      }
-    } catch {
-      hostnameWarning = "Warning: Configured Public App URL has an invalid URL format.";
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [loadConfiguration]);
+
+  const sanitizedPublicAppUrl = useMemo(
+    () => publicAppUrl.trim().replace(/\/+$/, ""),
+    [publicAppUrl]
+  );
+
+  const computedCallbackUrl =
+    sanitizedPublicAppUrl.length > 0
+      ? `${sanitizedPublicAppUrl}/api/auth/facebook/callback`
+      : "";
+
+  const hostnameWarning = useMemo(() => {
+    if (
+      !publicAppUrl ||
+      typeof window === "undefined"
+    ) {
+      return null;
     }
-  }
 
-  // Form submission: Log Out
+    try {
+      const configuredUrl = new URL(publicAppUrl);
+      const currentHost = window.location.host;
+
+      if (configuredUrl.host !== currentHost) {
+        return `The configured host (${configuredUrl.host}) does not match the current browser host (${currentHost}). Open the application through the configured Public App URL before starting Facebook OAuth.`;
+      }
+
+      return null;
+    } catch {
+      return "The configured Public App URL is not a valid URL.";
+    }
+  }, [publicAppUrl]);
+
+  const isConfigurationIncomplete =
+    !publicAppUrl.trim() ||
+    !facebookAppId.trim() ||
+    !facebookAppSecret.trim();
+
   const handleLogout = async () => {
     try {
-      await fetch("/api/admin/login", { method: "DELETE" });
+      await fetch("/api/admin/login", {
+        method: "DELETE"
+      });
+    } catch (error) {
+      console.error("Logout request failed:", error);
+    } finally {
+      router.replace("/login");
       router.refresh();
-    } catch (e) {
-      console.error("Logout failed:", e);
     }
   };
 
-  // Callback URL calculator
-  const computedCallbackUrl = publicAppUrl
-    ? `${publicAppUrl.trim().replace(/\/+$/, "")}/api/auth/facebook/callback`
-    : "";
+  const handleCopyCallback = async () => {
+    if (!computedCallbackUrl) {
+      return;
+    }
 
-  const handleCopyCallback = () => {
-    if (!computedCallbackUrl) return;
-    navigator.clipboard.writeText(computedCallbackUrl);
-    setIsCopied(true);
-    setTimeout(() => setIsCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(
+        computedCallbackUrl
+      );
+
+      setCopyStatus("copied");
+    } catch (error) {
+      console.error(
+        "Callback URL copy failed:",
+        error
+      );
+
+      setCopyStatus("failed");
+    }
+
+    window.setTimeout(() => {
+      setCopyStatus("idle");
+    }, 2000);
   };
 
-  // Test configuration
-  const handleTestConfig = async () => {
+  const handleTestConfiguration = async () => {
     setTestResult(null);
     setSaveResult(null);
     setIsTesting(true);
 
     try {
-      const res = await fetch("/api/admin/config/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          publicAppUrl,
-          facebookAppId,
-          facebookAppSecret,
-          liveMetaMode
-        })
-      });
+      const response = await fetch(
+        "/api/admin/config/test",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            publicAppUrl,
+            facebookAppId,
+            facebookAppSecret,
+            liveMetaMode
+          })
+        }
+      );
 
-      const data = await res.json();
-      setTestResult(data);
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      const data =
+        (await response.json()) as TestResult;
+
+      setTestResult({
+        success:
+          response.ok && data.success === true,
+        message:
+          data.message ||
+          "No validation response was returned.",
+        details: data.details
+      });
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
       setTestResult({
         success: false,
-        message: `Network error during test execution: ${errMsg}`
+        message:
+          `Network error during local validation: ${message}`
       });
     } finally {
       setIsTesting(false);
     }
   };
 
-  // Save configuration
-  const handleSaveConfig = async () => {
+  const handleSaveConfiguration = async () => {
     setSaveResult(null);
     setTestResult(null);
     setIsSaving(true);
 
     try {
-      const res = await fetch("/api/admin/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          publicAppUrl,
-          facebookAppId,
-          facebookAppSecret,
-          liveMetaMode
-        })
-      });
-
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setSaveResult({ success: true, message: "Settings saved and encrypted successfully!" });
-        if (data.config) {
-          setPublicAppUrl(data.config.publicAppUrl);
-          setFacebookAppId(data.config.facebookAppId);
-          setFacebookAppSecret(data.config.facebookAppSecret);
-          setLiveMetaMode(data.config.liveMetaMode);
+      const response = await fetch(
+        "/api/admin/config",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            publicAppUrl,
+            facebookAppId,
+            facebookAppSecret,
+            liveMetaMode
+          })
         }
-      } else {
-        setSaveResult({ success: false, message: data.error || "Failed to save configuration settings." });
+      );
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
       }
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+
+      const data =
+        (await response.json()) as ConfigurationResponse;
+
+      if (
+        response.ok &&
+        data.success &&
+        data.config
+      ) {
+        setPublicAppUrl(
+          data.config.publicAppUrl
+        );
+        setFacebookAppId(
+          data.config.facebookAppId
+        );
+        setFacebookAppSecret(
+          data.config.facebookAppSecret ||
+            FACEBOOK_SECRET_MASK
+        );
+        setLiveMetaMode(
+          data.config.liveMetaMode
+        );
+
+        setSaveResult({
+          success: true,
+          message:
+            "Your personal Meta configuration was saved securely."
+        });
+
+        return;
+      }
+
       setSaveResult({
         success: false,
-        message: `Network error during configuration save: ${errMsg}`
+        message:
+          data.error ||
+          "Unable to save the configuration."
+      });
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      setSaveResult({
+        success: false,
+        message:
+          `Network error while saving configuration: ${message}`
       });
     } finally {
       setIsSaving(false);
@@ -206,375 +454,544 @@ export default function MetaConfigurationClient({ adminEmail }: MetaConfiguratio
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 flex flex-col font-sans text-zinc-300">
-      
-      {/* Top Meta mode pulsating banner */}
-      <div className={`w-full text-zinc-950 text-center py-2 px-4 font-bold flex items-center justify-center gap-2 text-xs md:text-sm tracking-wide shadow-md transition-colors ${
-        liveMetaMode ? "bg-emerald-500" : "bg-amber-500"
-      }`}>
-        <span className="relative flex h-3 w-3">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-zinc-900 opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-3 w-3 bg-zinc-950"></span>
+    <div className="flex min-h-screen flex-col bg-zinc-950 font-sans text-zinc-300">
+      <div
+        className={`flex w-full flex-col items-center justify-center gap-1 px-4 py-2 text-center text-xs font-bold tracking-wide text-zinc-950 shadow-md transition-colors sm:flex-row sm:gap-2 sm:text-sm ${
+          liveMetaMode
+            ? "bg-emerald-500"
+            : "bg-amber-500"
+        }`}
+      >
+        <span className="relative flex h-3 w-3 shrink-0">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-zinc-900 opacity-75" />
+          <span className="relative inline-flex h-3 w-3 rounded-full bg-zinc-950" />
         </span>
-        <span>{liveMetaMode ? "LIVE META API INTEGRATION MODE ACTIVE" : "MOCK META MODE ACTIVE"}</span>
-        <span className="font-normal border-l border-zinc-900 pl-2">
-          {liveMetaMode 
-            ? "Publishing requests will interact with the real Meta Graph APIs using encrypted credentials." 
-            : "Local Sandbox Simulator. No real Google Cloud uploads or Meta publishing calls are made."}
+
+        <span>
+          {liveMetaMode
+            ? "LIVE META API MODE ACTIVE"
+            : "MOCK META MODE ACTIVE"}
+        </span>
+
+        <span className="font-normal sm:border-l sm:border-zinc-900 sm:pl-2">
+          {liveMetaMode
+            ? "Real Meta API requests are enabled for your account."
+            : "Facebook login and publishing are currently simulated."}
         </span>
       </div>
 
-      <div className="flex flex-1 flex-col md:flex-row">
-        
-        {/* Sidebar */}
-        <aside className="w-full md:w-64 bg-zinc-900 border-r border-zinc-800 p-6 flex flex-col gap-6">
+      <div className="flex flex-1 flex-col lg:flex-row">
+        <aside className="flex w-full shrink-0 flex-col gap-5 border-b border-zinc-800 bg-zinc-900 p-4 sm:p-6 lg:w-64 lg:border-b-0 lg:border-r">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-lg bg-indigo-650 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-600/30">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-600/20">
               F
             </div>
-            <div>
-              <h1 className="font-semibold text-sm leading-tight text-white">FB Multi-Page</h1>
-              <p className="text-[10px] text-zinc-500 font-mono">v1.0.0-phase2</p>
+
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-semibold leading-tight text-white">
+                FB Multi-Page
+              </h1>
+
+              <p className="font-mono text-[10px] text-zinc-500">
+                v1.0.0-phase2
+              </p>
             </div>
           </div>
 
-          <nav className="flex flex-col gap-1.5">
+          <nav className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:flex lg:flex-col">
             <Link
               href="/"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 lg:text-left lg:text-sm"
             >
-              Overview Dashboard
+              Overview
             </Link>
+
             <Link
               href="/#publisher"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 lg:text-left lg:text-sm"
             >
-              Bulk Video Publisher
+              Publisher
             </Link>
+
             <Link
               href="/#pages"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 lg:text-left lg:text-sm"
             >
               Synced Pages
             </Link>
+
             <Link
               href="/#logs"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 lg:text-left lg:text-sm"
             >
-              Security Audit Logs
+              Audit Logs
             </Link>
-            <div className="h-[1px] bg-zinc-800 my-2"></div>
+
             <Link
               href="/settings/meta-configuration"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium bg-zinc-850 text-white shadow-inner border border-zinc-700/50"
+              className="col-span-2 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-center text-xs font-medium text-white shadow-inner sm:col-span-4 lg:col-span-1 lg:text-left lg:text-sm"
             >
               Meta Configuration
             </Link>
           </nav>
 
-          <div className="mt-auto pt-6 border-t border-zinc-800">
-            <div className="text-xs text-zinc-500 flex flex-col gap-1">
-              <span className="truncate">Admin: {adminEmail}</span>
-              <button 
-                onClick={handleLogout}
-                className="mt-2 text-left text-xs font-semibold text-rose-400 hover:text-rose-300 transition"
-              >
-                Log Out Session
-              </button>
-            </div>
+          <div className="border-t border-zinc-800 pt-4 lg:mt-auto lg:pt-6">
+            <p className="text-[10px] uppercase tracking-wide text-zinc-600">
+              Signed in as
+            </p>
+
+            <p className="mt-1 truncate text-xs text-zinc-400">
+              {userEmail}
+            </p>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="mt-3 text-left text-xs font-semibold text-rose-400 transition hover:text-rose-300"
+            >
+              Log Out
+            </button>
           </div>
         </aside>
 
-        {/* Main Content Area */}
-        <main className="flex-1 bg-zinc-950 p-6 md:p-10 overflow-y-auto space-y-8">
-          
-          <div>
-            <span className="text-[10px] font-mono uppercase tracking-wider text-indigo-400 font-semibold">Settings Panel</span>
-            <h2 className="text-2xl font-bold text-white mt-1">Meta Configuration</h2>
-            <p className="text-xs text-zinc-500 mt-1 max-w-2xl">
-              Configure your secure credentials, URLs, and permissions for OAuth authentication and Graph API publishing. All parameters are encrypted.
-            </p>
-          </div>
+        <main className="min-w-0 flex-1 space-y-7 overflow-y-auto bg-zinc-950 p-4 sm:p-6 lg:p-10">
+          <header>
+            <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-indigo-400">
+              Personal Settings
+            </span>
 
-          {/* Alert Warnings */}
-          <div className="space-y-3 max-w-3xl">
-            {(!publicAppUrl || !facebookAppId || !facebookAppSecret || facebookAppSecret.trim() === '') && (
-              <div className="bg-rose-950/40 border border-rose-900/50 rounded-xl p-4 text-xs text-rose-400 font-medium leading-relaxed flex items-start gap-3 shadow-md">
-                <svg className="h-5 w-5 text-rose-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                <div>
-                  <span className="font-bold">Meta Configuration Incomplete:</span> Please enter the Public Application URL, Facebook App ID, and Facebook App Secret to configure the Meta Integration.
-                </div>
+            <h2 className="mt-1 text-2xl font-bold text-white">
+              Meta Configuration
+            </h2>
+
+            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-500">
+              Configure the Meta credentials and
+              callback URL used only by your account.
+              Secrets are encrypted before they are
+              stored.
+            </p>
+          </header>
+
+          <section className="max-w-4xl space-y-3">
+            {isConfigurationIncomplete && (
+              <div className="rounded-xl border border-rose-900/50 bg-rose-950/40 p-4 text-xs font-medium leading-relaxed text-rose-400">
+                <strong>
+                  Configuration incomplete:
+                </strong>{" "}
+                Enter the Public Application URL,
+                Facebook App ID and Facebook App Secret.
               </div>
             )}
 
-            {publicAppUrl && publicAppUrl.includes('trycloudflare.com') && (
-              <div className="bg-amber-950/40 border border-amber-900/50 rounded-xl p-4 text-xs text-amber-400 font-medium leading-relaxed flex items-start gap-3 shadow-md">
-                <svg className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                <div>
-                  <span className="font-bold">Temporary Quick-Tunnel Warning:</span> Your Public Application URL is configured with a temporary <code className="bg-zinc-950 px-1 py-0.5 rounded text-[10px]">trycloudflare.com</code> domain. For production, please set up a permanent custom domain.
-                </div>
+            {publicAppUrl.includes(
+              "trycloudflare.com"
+            ) && (
+              <div className="rounded-xl border border-amber-900/50 bg-amber-950/40 p-4 text-xs font-medium leading-relaxed text-amber-400">
+                <strong>
+                  Temporary tunnel detected:
+                </strong>{" "}
+                A trycloudflare.com URL may change. Use
+                your permanent custom domain for
+                production.
               </div>
             )}
 
             {hostnameWarning && (
-              <div className="bg-amber-950/40 border border-amber-900/50 rounded-xl p-4 text-xs text-amber-400 font-medium leading-relaxed flex items-start gap-3 shadow-md">
-                <svg className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                <div>
-                  <span className="font-bold">Hostname Mismatch:</span> {hostnameWarning}
-                </div>
+              <div className="rounded-xl border border-amber-900/50 bg-amber-950/40 p-4 text-xs font-medium leading-relaxed text-amber-400">
+                <strong>
+                  Hostname warning:
+                </strong>{" "}
+                {hostnameWarning}
               </div>
             )}
-          </div>
+          </section>
 
-          {/* Config Setup form card */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            
-            <div className="lg:col-span-2 bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-6 shadow-md">
-              <h3 className="text-sm font-semibold text-white border-b border-zinc-850 pb-3">App Configuration Settings</h3>
+          <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-3">
+            <section className="min-w-0 space-y-6 rounded-xl border border-zinc-800 bg-zinc-900 p-4 shadow-md sm:p-6 xl:col-span-2">
+              <h3 className="border-b border-zinc-800 pb-3 text-sm font-semibold text-white">
+                Application Settings
+              </h3>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                
-                <div className="md:col-span-2">
-                  <label className="block text-xs font-mono text-zinc-400 mb-1.5 uppercase font-medium">Public Application URL</label>
-                  <input
-                    type="text"
-                    required
-                    value={publicAppUrl}
-                    onChange={(e) => setPublicAppUrl(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-650 transition"
-                    placeholder="https://respected-blowing-challenges-theater.trycloudflare.com"
-                  />
-                  <p className="text-[10px] text-zinc-500 mt-1 font-mono">
-                    The external address of your host. Must start with https:// in Live Mode. Used to register callback URLs.
-                  </p>
+              {isLoadingConfig ? (
+                <div className="py-12 text-center font-mono text-xs text-zinc-500">
+                  Loading your configuration...
                 </div>
-
-                <div>
-                  <label className="block text-xs font-mono text-zinc-400 mb-1.5 uppercase font-medium">Facebook App ID</label>
-                  <input
-                    type="text"
-                    required
-                    value={facebookAppId}
-                    onChange={(e) => setFacebookAppId(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-650 transition font-mono"
-                    placeholder="1046912927711694"
-                  />
-                  <p className="text-[10px] text-zinc-500 mt-1">
-                    App identifier generated on developers.facebook.com
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-mono text-zinc-400 mb-1.5 uppercase font-medium">Facebook App Secret</label>
-                  <input
-                    type="password"
-                    required
-                    value={facebookAppSecret}
-                    onChange={(e) => setFacebookAppSecret(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-650 transition"
-                    placeholder="••••••••••••"
-                  />
-                  <p className="text-[10px] text-zinc-500 mt-1">
-                    Leave unchanged to preserve current encrypted credentials.
-                  </p>
-                </div>
-
-                <div className="md:col-span-2 flex items-center justify-between bg-zinc-950 p-4 border border-zinc-850 rounded-lg">
-                  <div className="space-y-0.5">
-                    <span className="block text-xs font-bold text-white">Live Meta Mode Integration</span>
-                    <span className="block text-[10px] text-zinc-500 max-w-md">
-                      When enabled, real Facebook API calls are executed. When disabled, simulated logins and responses occur.
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => setLiveMetaMode(!liveMetaMode)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-                      liveMetaMode ? "bg-indigo-650" : "bg-zinc-700"
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        liveMetaMode ? "translate-x-6" : "translate-x-1"
-                      }`}
-                    />
-                  </button>
-                </div>
-
-                <div className="md:col-span-2 space-y-2">
-                  <label className="block text-xs font-mono text-zinc-400 uppercase font-medium">Generated OAuth Callback URL</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      readOnly
-                      value={computedCallbackUrl || "Awaiting Public App URL..."}
-                      className="flex-1 bg-zinc-950 border border-zinc-800 text-zinc-400 font-mono text-xs rounded-lg px-3.5 py-2.5 select-all focus:outline-none"
-                    />
-                    <button
-                      onClick={handleCopyCallback}
-                      disabled={!computedCallbackUrl}
-                      className="bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-white font-semibold text-xs px-4 rounded-lg transition flex items-center gap-1.5 border border-zinc-750"
+              ) : (
+                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                  <div className="md:col-span-2">
+                    <label
+                      htmlFor="public-app-url"
+                      className="mb-1.5 block font-mono text-xs font-medium uppercase text-zinc-400"
                     >
-                      {isCopied ? "Copied!" : "Copy URL"}
+                      Public Application URL
+                    </label>
+
+                    <input
+                      id="public-app-url"
+                      type="url"
+                      value={publicAppUrl}
+                      onChange={(event) =>
+                        setPublicAppUrl(
+                          event.target.value
+                        )
+                      }
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-indigo-600"
+                      placeholder="https://your-domain.com"
+                      autoComplete="url"
+                    />
+
+                    <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
+                      Use the externally accessible base
+                      URL. HTTPS is required in Live Meta
+                      Mode.
+                    </p>
+                  </div>
+
+                  <div className="min-w-0">
+                    <label
+                      htmlFor="facebook-app-id"
+                      className="mb-1.5 block font-mono text-xs font-medium uppercase text-zinc-400"
+                    >
+                      Facebook App ID
+                    </label>
+
+                    <input
+                      id="facebook-app-id"
+                      type="text"
+                      value={facebookAppId}
+                      onChange={(event) =>
+                        setFacebookAppId(
+                          event.target.value
+                        )
+                      }
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 font-mono text-sm text-white outline-none transition focus:border-indigo-600"
+                      placeholder="Enter your Facebook App ID"
+                      autoComplete="off"
+                    />
+
+                    <p className="mt-1 text-[10px] text-zinc-500">
+                      App identifier from the Meta
+                      developer dashboard.
+                    </p>
+                  </div>
+
+                  <div className="min-w-0">
+                    <label
+                      htmlFor="facebook-app-secret"
+                      className="mb-1.5 block font-mono text-xs font-medium uppercase text-zinc-400"
+                    >
+                      Facebook App Secret
+                    </label>
+
+                    <input
+                      id="facebook-app-secret"
+                      type="password"
+                      value={facebookAppSecret}
+                      onChange={(event) =>
+                        setFacebookAppSecret(
+                          event.target.value
+                        )
+                      }
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-indigo-600"
+                      placeholder={FACEBOOK_SECRET_MASK}
+                      autoComplete="new-password"
+                    />
+
+                    <p className="mt-1 text-[10px] leading-relaxed text-zinc-500">
+                      Keep the masked value unchanged to
+                      preserve your currently encrypted
+                      secret.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-4 rounded-lg border border-zinc-800 bg-zinc-950 p-4 sm:flex-row sm:items-center sm:justify-between md:col-span-2">
+                    <div className="space-y-1">
+                      <span className="block text-xs font-bold text-white">
+                        Live Meta API Mode
+                      </span>
+
+                      <span className="block max-w-lg text-[10px] leading-relaxed text-zinc-500">
+                        Enable real Facebook OAuth and
+                        Graph API requests. Leave disabled
+                        while testing with the local
+                        simulator.
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={liveMetaMode}
+                      onClick={() =>
+                        setLiveMetaMode(
+                          (current) => !current
+                        )
+                      }
+                      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                        liveMetaMode
+                          ? "bg-indigo-600"
+                          : "bg-zinc-700"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          liveMetaMode
+                            ? "translate-x-6"
+                            : "translate-x-1"
+                        }`}
+                      />
                     </button>
                   </div>
-                  <p className="text-[10px] text-zinc-500">
-                    Register this callback URL exactly inside developers.facebook.com → Facebook Login → Settings → Valid OAuth Redirect URIs.
-                  </p>
-                </div>
 
-              </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <label
+                      htmlFor="callback-url"
+                      className="block font-mono text-xs font-medium uppercase text-zinc-400"
+                    >
+                      OAuth Callback URL
+                    </label>
 
-              {/* Status responses */}
-              {testResult && (
-                <div className={`p-4 border rounded-xl font-mono text-xs ${
-                  testResult.success 
-                    ? "bg-emerald-950/40 border-emerald-900/60 text-emerald-400" 
-                    : "bg-rose-950/40 border-rose-900/60 text-rose-400"
-                }`}>
-                  <div className="font-bold flex items-center gap-1.5 mb-1 text-sm">
-                    {testResult.success ? (
-                      <>
-                        <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        Test Completed Successfully
-                      </>
-                    ) : (
-                      <>
-                        <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        Test Failed
-                      </>
-                    )}
+                    <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+                      <input
+                        id="callback-url"
+                        type="text"
+                        readOnly
+                        value={
+                          computedCallbackUrl ||
+                          "Awaiting Public App URL..."
+                        }
+                        className="min-w-0 flex-1 select-all rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 font-mono text-xs text-zinc-400 outline-none"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={
+                          handleCopyCallback
+                        }
+                        disabled={
+                          !computedCallbackUrl
+                        }
+                        className="shrink-0 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {copyStatus === "copied"
+                          ? "Copied"
+                          : copyStatus === "failed"
+                            ? "Copy Failed"
+                            : "Copy URL"}
+                      </button>
+                    </div>
+
+                    <p className="text-[10px] leading-relaxed text-zinc-500">
+                      Add this exact URL in Meta Developer
+                      Dashboard &gt; Facebook Login &gt;
+                      Settings &gt; Valid OAuth Redirect
+                      URIs.
+                    </p>
                   </div>
+                </div>
+              )}
+
+              {testResult && (
+                <div
+                  className={`rounded-xl border p-4 font-mono text-xs ${
+                    testResult.success
+                      ? "border-emerald-900/60 bg-emerald-950/40 text-emerald-400"
+                      : "border-rose-900/60 bg-rose-950/40 text-rose-400"
+                  }`}
+                >
+                  <p className="mb-1 text-sm font-bold">
+                    {testResult.success
+                      ? "Local Validation Passed"
+                      : "Validation Failed"}
+                  </p>
+
                   <p>{testResult.message}</p>
-                  {!!testResult.details && (
-                    <pre className="mt-3 bg-zinc-950 p-3 rounded border border-zinc-850 overflow-x-auto text-[11px] leading-relaxed text-zinc-300">
-                      {JSON.stringify(testResult.details, null, 2)}
+
+                  {testResult.details !== undefined && (
+                    <pre className="mt-3 overflow-x-auto rounded border border-zinc-800 bg-zinc-950 p-3 text-[11px] leading-relaxed text-zinc-300">
+                      {JSON.stringify(
+                        testResult.details,
+                        null,
+                        2
+                      )}
                     </pre>
                   )}
                 </div>
               )}
 
               {saveResult && (
-                <div className={`p-4 border rounded-xl text-xs font-semibold ${
-                  saveResult.success 
-                    ? "bg-indigo-950/40 border-indigo-900/60 text-indigo-400" 
-                    : "bg-rose-950/40 border-rose-900/60 text-rose-400"
-                }`}>
-                  <p>{saveResult.message}</p>
+                <div
+                  className={`rounded-xl border p-4 text-xs font-semibold ${
+                    saveResult.success
+                      ? "border-indigo-900/60 bg-indigo-950/40 text-indigo-400"
+                      : "border-rose-900/60 bg-rose-950/40 text-rose-400"
+                  }`}
+                >
+                  {saveResult.message}
                 </div>
               )}
 
-              <div className="flex justify-between items-center pt-4 border-t border-zinc-850">
+              <div className="flex flex-col gap-3 border-t border-zinc-800 pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <button
-                  onClick={handleTestConfig}
-                  disabled={isTesting || isSaving}
-                  className="bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-white font-bold text-xs px-4 py-2.5 rounded-lg border border-zinc-750 transition"
+                  type="button"
+                  onClick={
+                    handleTestConfiguration
+                  }
+                  disabled={
+                    isTesting ||
+                    isSaving ||
+                    isLoadingConfig
+                  }
+                  className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {isTesting ? "Testing Connection..." : "Test Meta Configuration"}
+                  {isTesting
+                    ? "Validating..."
+                    : "Validate Configuration"}
                 </button>
 
                 <button
-                  onClick={handleSaveConfig}
-                  disabled={isSaving || isTesting}
-                  className="bg-indigo-650 hover:bg-indigo-600 disabled:bg-indigo-800 text-white font-bold text-xs px-5 py-2.5 rounded-lg transition shadow shadow-indigo-650/20"
+                  type="button"
+                  onClick={
+                    handleSaveConfiguration
+                  }
+                  disabled={
+                    isSaving ||
+                    isTesting ||
+                    isLoadingConfig
+                  }
+                  className="rounded-lg bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow shadow-indigo-600/20 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {isSaving ? "Saving Config..." : "Save Securely"}
+                  {isSaving
+                    ? "Saving..."
+                    : "Save Securely"}
                 </button>
               </div>
+            </section>
 
-            </div>
+            <div className="min-w-0 space-y-6">
+              <section className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900 p-4 shadow-md sm:p-6">
+                <h3 className="border-b border-zinc-800 pb-3 text-sm font-semibold text-white">
+                  Facebook Authorization
+                </h3>
 
-            {/* Side Facebook authentication panel */}
-            <div className="space-y-6">
-              
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 shadow-md space-y-4">
-                <h3 className="text-sm font-semibold text-white border-b border-zinc-850 pb-3">Authorize Facebook Credentials</h3>
-                <p className="text-xs text-zinc-400 leading-relaxed">
-                  Start the Facebook OAuth login flow to connect a Meta profile. Tokens are retrieved via code-exchange, encrypted on the server, and saved in PostgreSQL.
+                <p className="text-xs leading-relaxed text-zinc-400">
+                  Start Facebook OAuth to connect a Meta
+                  profile to your own application account.
+                  Access tokens are encrypted on the
+                  server.
                 </p>
 
-                <div className="bg-zinc-950 border border-zinc-850 p-4 rounded-lg space-y-3 font-mono text-[10px] text-zinc-500">
-                  <div className="font-bold text-white uppercase text-[9px] tracking-wide mb-1">Active OAuth Scopes</div>
-                  <div className="flex items-center gap-1.5 text-emerald-400">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                    pages_show_list
-                  </div>
-                  <div className="flex items-center gap-1.5 text-emerald-400">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                    pages_read_engagement
-                  </div>
-                  <div className="flex items-center gap-1.5 text-emerald-400">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                    pages_manage_posts
-                  </div>
-                  <div className="text-[9px] mt-2 border-t border-zinc-900 pt-2 leading-relaxed">
-                    No publish_video or deprecated permissions are requested.
-                  </div>
+                <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950 p-4 font-mono text-[10px] text-zinc-500">
+                  <p className="text-[9px] font-bold uppercase tracking-wide text-white">
+                    Requested OAuth Permissions
+                  </p>
+
+                  {[
+                    "pages_show_list",
+                    "pages_read_engagement",
+                    "pages_manage_posts"
+                  ].map((permission) => (
+                    <div
+                      key={permission}
+                      className="flex items-center gap-2 text-emerald-400"
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                      {permission}
+                    </div>
+                  ))}
                 </div>
 
                 <a
                   href="/api/auth/facebook/initiate"
-                  className="block text-center w-full bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs py-3 rounded-lg border border-zinc-750 transition shadow"
+                  className="block w-full rounded-lg border border-zinc-700 bg-zinc-800 py-3 text-center text-xs font-bold text-white shadow transition hover:bg-zinc-700"
                 >
-                  {accounts.length > 0 ? "Add Another Facebook Account" : "Connect Facebook Account"}
+                  {accounts.length > 0
+                    ? "Add Another Facebook Account"
+                    : "Connect Facebook Account"}
                 </a>
-              </div>
+              </section>
 
-              {/* Connected accounts detail list */}
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 shadow-md space-y-4">
-                <h3 className="text-sm font-semibold text-white border-b border-zinc-850 pb-3">Connected Meta Accounts</h3>
+              <section className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900 p-4 shadow-md sm:p-6">
+                <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-3">
+                  <h3 className="text-sm font-semibold text-white">
+                    Connected Meta Accounts
+                  </h3>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void loadConnectedAccounts()
+                    }
+                    disabled={isLoadingAccounts}
+                    className="text-[10px] font-semibold text-indigo-400 transition hover:text-indigo-300 disabled:opacity-50"
+                  >
+                    Refresh
+                  </button>
+                </div>
+
+                {accountLoadError && (
+                  <div className="rounded-lg border border-rose-900/50 bg-rose-950/30 p-3 text-xs text-rose-400">
+                    {accountLoadError}
+                  </div>
+                )}
 
                 {isLoadingAccounts ? (
-                  <div className="py-6 text-center text-xs font-mono text-zinc-500">
-                    Loading accounts details...
+                  <div className="py-6 text-center font-mono text-xs text-zinc-500">
+                    Loading account details...
                   </div>
                 ) : accounts.length === 0 ? (
-                  <p className="text-xs text-zinc-500 py-4 italic text-center">
-                    No Facebook accounts linked to this application config.
+                  <p className="py-4 text-center text-xs italic text-zinc-500">
+                    No Facebook account is linked to your
+                    user account.
                   </p>
                 ) : (
-                  <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1">
-                    {accounts.map((acc) => (
-                      <div key={acc.id} className="bg-zinc-950 border border-zinc-850 rounded-lg p-3.5 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-white truncate max-w-[120px]">{acc.name}</span>
-                          <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full ${
-                            acc.connectionState === "Connected" 
-                              ? "bg-emerald-950 text-emerald-400 border border-emerald-900/40"
-                              : acc.connectionState === "Token Expiring"
-                              ? "bg-amber-950 text-amber-400 border border-amber-900/40"
-                              : "bg-rose-950 text-rose-400 border border-rose-900/40"
-                          }`}>
-                            {acc.connectionState}
+                  <div className="max-h-[360px] space-y-4 overflow-y-auto pr-1">
+                    {accounts.map((account) => (
+                      <article
+                        key={account.id}
+                        className="min-w-0 space-y-2 rounded-lg border border-zinc-800 bg-zinc-950 p-3.5"
+                      >
+                        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <span className="min-w-0 truncate text-xs font-bold text-white">
+                            {account.name}
+                          </span>
+
+                          <span
+                            className={`w-fit shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold ${getConnectionStateClasses(
+                              account.connectionState
+                            )}`}
+                          >
+                            {account.connectionState}
                           </span>
                         </div>
-                        <div className="text-[10px] font-mono text-zinc-500 space-y-0.5">
-                          <div>ID: {acc.facebookUserId}</div>
-                          <div className="truncate">Expires: {new Date(acc.tokenExpiresAt).toLocaleDateString()}</div>
-                          <div>Pages Synced: {acc.pages?.length || 0}</div>
+
+                        <div className="space-y-1 break-words font-mono text-[10px] text-zinc-500">
+                          <div>
+                            Facebook ID:{" "}
+                            {account.facebookUserId}
+                          </div>
+
+                          <div>
+                            Token expires:{" "}
+                            {formatExpiryDate(
+                              account.tokenExpiresAt
+                            )}
+                          </div>
+
+                          <div>
+                            Pages synced:{" "}
+                            {account.pages?.length ?? 0}
+                          </div>
                         </div>
-                      </div>
+                      </article>
                     ))}
                   </div>
                 )}
-              </div>
-
+              </section>
             </div>
-
           </div>
-
         </main>
       </div>
-
     </div>
   );
 }

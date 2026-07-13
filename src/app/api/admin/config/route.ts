@@ -1,17 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAppConfiguration, saveAppConfiguration, createAuditLog } from '@/lib/db';
+import {
+  createAuditLog,
+  getAppConfiguration,
+  saveAppConfiguration
+} from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 import { encryptToken } from '@/lib/crypto';
+
+const FACEBOOK_SECRET_MASK = '************';
+
+function getRequestIp(request: NextRequest): string | null {
+  return (
+    request.headers.get('cf-connecting-ip') ||
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    request.headers.get('x-real-ip') ||
+    null
+  );
+}
 
 export async function GET(request: NextRequest) {
   try {
     const user = await verifyAdminSession(request);
+
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
     }
 
-    const config = await getAppConfiguration(user.id);
-    if (!config) {
+    const configuration = await getAppConfiguration(user.id);
+
+    if (!configuration) {
       return NextResponse.json({
         publicAppUrl: '',
         facebookAppId: '',
@@ -21,110 +41,229 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({
-      publicAppUrl: config.publicAppUrl,
-      facebookAppId: config.facebookAppId,
-      facebookAppSecret: '••••••••••••',
-      liveMetaMode: config.liveMetaMode
+      publicAppUrl: configuration.publicAppUrl,
+      facebookAppId: configuration.facebookAppId,
+      facebookAppSecret: FACEBOOK_SECRET_MASK,
+      liveMetaMode: configuration.liveMetaMode
     });
   } catch (error) {
-    console.error('Error fetching admin config:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    console.error('Error fetching Meta configuration:', error);
+
+    return NextResponse.json(
+      { error: 'Internal Server Error' },
+      { status: 500 }
+    );
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const user = await verifyAdminSession(request);
+
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
     }
 
-    const { publicAppUrl, facebookAppId, facebookAppSecret, liveMetaMode } = await request.json();
+    const body = await request.json();
 
-    // 1. Validation
-    if (!publicAppUrl || typeof publicAppUrl !== 'string') {
-      return NextResponse.json({ error: 'Public App URL is required' }, { status: 400 });
-    }
-    if (!facebookAppId || typeof facebookAppId !== 'string') {
-      return NextResponse.json({ error: 'Facebook App ID is required' }, { status: 400 });
-    }
-    if (!facebookAppSecret || typeof facebookAppSecret !== 'string') {
-      return NextResponse.json({ error: 'Facebook App Secret is required' }, { status: 400 });
+    const publicAppUrl =
+      typeof body?.publicAppUrl === 'string'
+        ? body.publicAppUrl.trim()
+        : '';
+
+    const facebookAppId =
+      typeof body?.facebookAppId === 'string'
+        ? body.facebookAppId.trim()
+        : '';
+
+    const facebookAppSecret =
+      typeof body?.facebookAppSecret === 'string'
+        ? body.facebookAppSecret
+        : '';
+
+    const liveMetaMode = body?.liveMetaMode === true;
+
+    if (!publicAppUrl) {
+      return NextResponse.json(
+        { error: 'Public App URL is required' },
+        { status: 400 }
+      );
     }
 
-    // Sanitize URL: remove trailing slashes
-    const sanitizedUrl = publicAppUrl.trim().replace(/\/+$/, '');
-
-    // Validate HTTPS protocol for live mode
-    if (liveMetaMode === true) {
-      if (!sanitizedUrl.toLowerCase().startsWith('https://')) {
-        return NextResponse.json({ error: 'Public App URL must use HTTPS in Live Meta Mode' }, { status: 400 });
-      }
+    if (!facebookAppId) {
+      return NextResponse.json(
+        { error: 'Facebook App ID is required' },
+        { status: 400 }
+      );
     }
 
-    // Try parsing the URL to check validity and reject subpaths (such as /settings or /api)
+    if (facebookAppId.length > 255) {
+      return NextResponse.json(
+        {
+          error:
+            'Facebook App ID must not exceed 255 characters'
+        },
+        { status: 400 }
+      );
+    }
+
+    let parsedUrl: URL;
+
     try {
-      const parsedUrl = new URL(sanitizedUrl);
-      const cleanPathname = parsedUrl.pathname.replace(/\/+$/, '');
-      if (cleanPathname !== '' && cleanPathname !== '/') {
-        return NextResponse.json({ 
-          error: `Public App URL must be a base URL without subpaths (found subpath: ${parsedUrl.pathname})` 
-        }, { status: 400 });
-      }
+      parsedUrl = new URL(publicAppUrl);
     } catch {
-      return NextResponse.json({ error: 'Invalid Public App URL format' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Invalid Public App URL format' },
+        { status: 400 }
+      );
     }
 
-    // Retrieve current configuration
-    const currentConfig = await getAppConfiguration(user.id);
+    if (
+      parsedUrl.protocol !== 'http:' &&
+      parsedUrl.protocol !== 'https:'
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'Public App URL must use http:// or https://'
+        },
+        { status: 400 }
+      );
+    }
 
-    // Determine target encrypted app secret
-    let encryptedSecret = '';
-    const isSecretMaskedOrEmpty = facebookAppSecret === '••••••••••••' || facebookAppSecret.trim() === '';
+    if (liveMetaMode && parsedUrl.protocol !== 'https:') {
+      return NextResponse.json(
+        {
+          error:
+            'Public App URL must use HTTPS in Live Meta Mode'
+        },
+        { status: 400 }
+      );
+    }
 
-    if (isSecretMaskedOrEmpty) {
-      if (!currentConfig) {
-        return NextResponse.json({ error: 'Facebook App Secret is required for initial configuration' }, { status: 400 });
+    if (parsedUrl.username || parsedUrl.password) {
+      return NextResponse.json(
+        {
+          error:
+            'Public App URL must not contain embedded credentials'
+        },
+        { status: 400 }
+      );
+    }
+
+    const cleanPathname =
+      parsedUrl.pathname.replace(/\/+$/, '');
+
+    if (cleanPathname !== '') {
+      return NextResponse.json(
+        {
+          error: `Public App URL must be a base URL without subpaths (found subpath: ${parsedUrl.pathname})`
+        },
+        { status: 400 }
+      );
+    }
+
+    if (parsedUrl.search || parsedUrl.hash) {
+      return NextResponse.json(
+        {
+          error:
+            'Public App URL must not contain query parameters or fragments'
+        },
+        { status: 400 }
+      );
+    }
+
+    const sanitizedUrl = parsedUrl.origin;
+    const currentConfiguration =
+      await getAppConfiguration(user.id);
+
+    let encryptedSecret: string;
+
+    if (facebookAppSecret === FACEBOOK_SECRET_MASK) {
+      if (!currentConfiguration) {
+        return NextResponse.json(
+          {
+            error:
+              'Facebook App Secret is required for initial configuration'
+          },
+          { status: 400 }
+        );
       }
-      encryptedSecret = currentConfig.encryptedAppSecret;
+
+      encryptedSecret =
+        currentConfiguration.encryptedAppSecret;
     } else {
-      // Encrypt the new secret
+      const cleanSecret = facebookAppSecret.trim();
+
+      if (!cleanSecret) {
+        return NextResponse.json(
+          { error: 'Facebook App Secret is required' },
+          { status: 400 }
+        );
+      }
+
+      if (cleanSecret.length > 1000) {
+        return NextResponse.json(
+          {
+            error:
+              'Facebook App Secret must not exceed 1000 characters'
+          },
+          { status: 400 }
+        );
+      }
+
       try {
-        encryptedSecret = encryptToken(facebookAppSecret);
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        return NextResponse.json({ error: `Encryption failed: ${errMsg}` }, { status: 500 });
+        encryptedSecret = encryptToken(cleanSecret);
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : String(error);
+
+        return NextResponse.json(
+          {
+            error: `Encryption failed: ${message}`
+          },
+          { status: 500 }
+        );
       }
     }
 
-    // Save configuration
     await saveAppConfiguration(user.id, {
       publicAppUrl: sanitizedUrl,
-      facebookAppId: facebookAppId.trim(),
+      facebookAppId,
       encryptedAppSecret: encryptedSecret,
-      liveMetaMode: !!liveMetaMode
+      liveMetaMode
     });
 
-    // Logging & audit entries
-    const isNew = !currentConfig;
-    const action = isNew ? 'CREATE_CONFIG' : 'UPDATE_CONFIG';
-    const modeStr = liveMetaMode ? 'Live' : 'Mock';
-    
+    const isNewConfiguration = !currentConfiguration;
+    const action = isNewConfiguration
+      ? 'CREATE_CONFIG'
+      : 'UPDATE_CONFIG';
+
+    const modeLabel = liveMetaMode ? 'Live' : 'Mock';
+    const requestIp = getRequestIp(request);
+
     await createAuditLog(
       action,
-      isNew 
-        ? `Created secure Meta configuration (App ID: ${facebookAppId.trim()}, Mode: ${modeStr})`
-        : `Updated secure Meta configuration (App ID: ${facebookAppId.trim()}, Mode: ${modeStr})`,
-      request.headers.get('x-forwarded-for') || null,
+      isNewConfiguration
+        ? `Created personal Meta configuration (App ID: ${facebookAppId}, Mode: ${modeLabel})`
+        : `Updated personal Meta configuration (App ID: ${facebookAppId}, Mode: ${modeLabel})`,
+      requestIp,
       user.id
     );
 
-    // If live mode changed, log it specifically
-    if (currentConfig && currentConfig.liveMetaMode !== !!liveMetaMode) {
+    if (
+      currentConfiguration &&
+      currentConfiguration.liveMetaMode !== liveMetaMode
+    ) {
       await createAuditLog(
         'LIVE_MODE_CHANGE',
-        `Live Meta Mode toggled from ${currentConfig.liveMetaMode} to ${!!liveMetaMode}`,
-        request.headers.get('x-forwarded-for') || null,
+        `Live Meta Mode changed from ${currentConfiguration.liveMetaMode} to ${liveMetaMode}`,
+        requestIp,
         user.id
       );
     }
@@ -133,13 +272,17 @@ export async function POST(request: NextRequest) {
       success: true,
       config: {
         publicAppUrl: sanitizedUrl,
-        facebookAppId: facebookAppId.trim(),
-        facebookAppSecret: '••••••••••••',
-        liveMetaMode: !!liveMetaMode
+        facebookAppId,
+        facebookAppSecret: FACEBOOK_SECRET_MASK,
+        liveMetaMode
       }
     });
   } catch (error) {
-    console.error('Error saving admin config:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    console.error('Error saving Meta configuration:', error);
+
+    return NextResponse.json(
+      { error: 'Internal Server Error' },
+      { status: 500 }
+    );
   }
 }

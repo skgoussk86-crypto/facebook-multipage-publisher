@@ -2,10 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { prisma } from './prisma-client';
 
-const MOCK_DB_PATH = path.join(process.cwd(), 'src/lib/mock_db.json');
+const MOCK_DB_PATH = path.join(
+  process.cwd(),
+  'src/lib/mock_db.json'
+);
 
 export interface MockFacebookPage {
-  id: string; // pageId (e.g., 1029384756)
+  id: string;
   name: string;
   category: string;
   pictureUrl: string;
@@ -15,29 +18,53 @@ export interface MockFacebookPage {
 }
 
 export interface MockFacebookAccount {
-  id: string; // accountId
+  id: string;
   facebookUserId: string;
   name: string;
   encryptedAccessToken: string;
   tokenExpiresAt: string;
   pages: MockFacebookPage[];
   userId?: string;
+  connectionState?: MockDbSchema['connectionState'];
 }
 
 export interface MockDbSchema {
   accounts: MockFacebookAccount[];
-  connectionState: 'Not Connected' | 'Connected' | 'Token Expiring' | 'Reconnection Required' | 'Permission Missing';
+  connectionState:
+    | 'Not Connected'
+    | 'Connected'
+    | 'Token Expiring'
+    | 'Reconnection Required'
+    | 'Permission Missing';
+}
+
+export interface FacebookAccountUI {
+  id: string;
+  facebookUserId: string;
+  name: string;
+  tokenExpiresAt: string;
+  connectionState:
+    | 'Connected'
+    | 'Token Expiring'
+    | 'Reconnection Required'
+    | 'Permission Missing';
+  pages: MockFacebookPage[];
 }
 
 function loadMockDb(): MockDbSchema {
   try {
     if (fs.existsSync(MOCK_DB_PATH)) {
       const data = fs.readFileSync(MOCK_DB_PATH, 'utf8');
-      return JSON.parse(data);
+
+      return JSON.parse(data) as MockDbSchema;
     }
-  } catch (e) {
-    console.error('Error loading mock DB, returning default:', e);
+  } catch (error) {
+    console.error(
+      'Error loading mock DB, returning default:',
+      error
+    );
   }
+
   return {
     accounts: [],
     connectionState: 'Not Connected'
@@ -46,334 +73,590 @@ function loadMockDb(): MockDbSchema {
 
 function saveMockDb(data: MockDbSchema) {
   try {
-    const dir = path.dirname(MOCK_DB_PATH);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    const directory = path.dirname(MOCK_DB_PATH);
+
+    if (!fs.existsSync(directory)) {
+      fs.mkdirSync(directory, {
+        recursive: true
+      });
     }
-    fs.writeFileSync(MOCK_DB_PATH, JSON.stringify(data, null, 2), 'utf8');
-  } catch (e) {
-    console.error('Error saving mock DB:', e);
+
+    fs.writeFileSync(
+      MOCK_DB_PATH,
+      JSON.stringify(data, null, 2),
+      'utf8'
+    );
+  } catch (error) {
+    console.error('Error saving mock DB:', error);
   }
 }
 
 export function sanitizeLog(message: string): string {
-  // Redact Facebook access tokens starting with EAA
-  return message.replace(/EAA[A-Za-z0-9]+/g, '[REDACTED_TOKEN]');
+  return message.replace(
+    /EAA[A-Za-z0-9_-]+/g,
+    '[REDACTED_TOKEN]'
+  );
 }
 
-export function logInfo(msg: string) {
-  console.log(sanitizeLog(`[FB_PUBLISHER] INFO: ${msg}`));
+export function logInfo(message: string) {
+  console.log(
+    sanitizeLog(`[FB_PUBLISHER] INFO: ${message}`)
+  );
 }
 
-export function logWarn(msg: string) {
-  console.warn(sanitizeLog(`[FB_PUBLISHER] WARN: ${msg}`));
+export function logWarn(message: string) {
+  console.warn(
+    sanitizeLog(`[FB_PUBLISHER] WARN: ${message}`)
+  );
 }
 
-export function logError(msg: string) {
-  console.error(sanitizeLog(`[FB_PUBLISHER] ERROR: ${msg}`));
+export function logError(message: string) {
+  console.error(
+    sanitizeLog(`[FB_PUBLISHER] ERROR: ${message}`)
+  );
 }
 
-export interface FacebookAccountUI {
-  id: string;
-  facebookUserId: string;
-  name: string;
-  tokenExpiresAt: string;
-  connectionState: 'Connected' | 'Token Expiring' | 'Reconnection Required' | 'Permission Missing';
-  pages: MockFacebookPage[];
-}
+export async function getFacebookConnections(
+  userId?: string
+): Promise<FacebookAccountUI[]> {
+  if (!userId) {
+    logWarn(
+      'Blocked Facebook connection lookup without a user ID.'
+    );
 
-export async function getFacebookConnections(userId?: string): Promise<FacebookAccountUI[]> {
+    return [];
+  }
+
   const isLive = await isLiveMetaMode(userId);
+
   if (isLive) {
     try {
-      const accounts = await prisma.facebookAccount.findMany({
-        where: { userId },
-        include: { pages: true }
-      });
+      const accounts =
+        await prisma.facebookAccount.findMany({
+          where: {
+            userId
+          },
+          include: {
+            pages: {
+              orderBy: {
+                createdAt: 'asc'
+              }
+            }
+          },
+          orderBy: {
+            createdAt: 'desc'
+          }
+        });
 
-      const transformedAccounts: FacebookAccountUI[] = accounts.map(account => {
+      return accounts.map((account) => {
         const now = new Date();
-        let state: 'Connected' | 'Token Expiring' | 'Reconnection Required' | 'Permission Missing' = 'Connected';
-        
+
+        let connectionState:
+          | 'Connected'
+          | 'Token Expiring'
+          | 'Reconnection Required'
+          | 'Permission Missing' = 'Connected';
+
         if (account.tokenExpiresAt < now) {
-          state = 'Reconnection Required';
-        } else if (account.tokenExpiresAt.getTime() - now.getTime() < 7 * 24 * 60 * 60 * 1000) {
-          state = 'Token Expiring';
-        } else if (account.pages.some(p => !p.isSynced)) {
-          state = 'Reconnection Required';
+          connectionState = 'Reconnection Required';
+        } else if (
+          account.tokenExpiresAt.getTime() -
+            now.getTime() <
+          7 * 24 * 60 * 60 * 1000
+        ) {
+          connectionState = 'Token Expiring';
+        } else if (
+          account.pages.some((page) => !page.isSynced)
+        ) {
+          connectionState = 'Reconnection Required';
         }
 
-        const pages = account.pages.map(p => ({
-          id: p.facebookPageId,
-          name: p.pageName,
-          category: p.pageCategory,
-          pictureUrl: p.pagePictureUrl,
-          tokenStatus: p.isSynced ? ('Valid' as const) : ('Expired' as const),
-          connectedAt: p.createdAt.toISOString(),
-          encryptedPageToken: p.encryptedPageToken
-        }));
+        const pages: MockFacebookPage[] =
+          account.pages.map((page) => ({
+            id: page.facebookPageId,
+            name: page.pageName,
+            category: page.pageCategory,
+            pictureUrl: page.pagePictureUrl,
+            tokenStatus: page.isSynced
+              ? 'Valid'
+              : 'Expired',
+            connectedAt: page.createdAt.toISOString(),
+            encryptedPageToken:
+              page.encryptedPageToken
+          }));
 
         return {
           id: account.id,
           facebookUserId: account.facebookUserId,
           name: account.name,
-          tokenExpiresAt: account.tokenExpiresAt.toISOString(),
-          connectionState: state,
+          tokenExpiresAt:
+            account.tokenExpiresAt.toISOString(),
+          connectionState,
           pages
         };
       });
+    } catch (error) {
+      logError(
+        `Prisma fetch error in getFacebookConnections: ${String(
+          error
+        )}`
+      );
 
-      return transformedAccounts;
-    } catch (e) {
-      logError(`Prisma fetch error in getFacebookConnections, falling back to mock DB: ${e}`);
+      return [];
     }
   }
 
-  // Simulation fallback mode
-  const db = loadMockDb();
-  const filteredAccounts = db.accounts.filter(acc => !userId || acc.userId === userId);
-  return filteredAccounts.map(acc => {
-    let state = db.connectionState;
-    if (state === 'Not Connected') {
-      state = 'Connected';
+  const database = loadMockDb();
+
+  const filteredAccounts = database.accounts.filter(
+    (account) => account.userId === userId
+  );
+
+  return filteredAccounts.map((account) => {
+    let connectionState =
+      account.connectionState ??
+      database.connectionState;
+
+    if (connectionState === 'Not Connected') {
+      connectionState = 'Connected';
     }
-    const hasExpired = acc.pages.some(p => p.tokenStatus === 'Expired');
-    if (hasExpired) {
-      state = 'Reconnection Required';
+
+    const hasExpiredPage = account.pages.some(
+      (page) => page.tokenStatus === 'Expired'
+    );
+
+    if (hasExpiredPage) {
+      connectionState = 'Reconnection Required';
     }
+
     return {
-      id: acc.id,
-      facebookUserId: acc.facebookUserId,
-      name: acc.name,
-      tokenExpiresAt: acc.tokenExpiresAt,
-      connectionState: state as FacebookAccountUI['connectionState'],
-      pages: acc.pages
+      id: account.id,
+      facebookUserId: account.facebookUserId,
+      name: account.name,
+      tokenExpiresAt: account.tokenExpiresAt,
+      connectionState,
+      pages: account.pages
     };
   });
 }
 
-export async function getFacebookConnection(userId?: string) {
-  const connections = await getFacebookConnections(userId);
+export async function getFacebookConnection(
+  userId?: string
+) {
+  const connections =
+    await getFacebookConnections(userId);
+
   if (connections.length === 0) {
-    return { account: null, connectionState: 'Not Connected' as const };
+    return {
+      account: null,
+      connectionState: 'Not Connected' as const
+    };
   }
+
   return {
     account: connections[0],
-    connectionState: connections[0].connectionState
+    connectionState:
+      connections[0].connectionState
   };
 }
 
-export async function saveFacebookAccount(userId: string, accountData: MockFacebookAccount, state: MockDbSchema['connectionState']) {
+export async function saveFacebookAccount(
+  userId: string,
+  accountData: MockFacebookAccount,
+  state: MockDbSchema['connectionState']
+) {
+  if (!userId) {
+    throw new Error(
+      'A user ID is required to save a Facebook account.'
+    );
+  }
+
   const isLive = await isLiveMetaMode(userId);
+
   if (isLive) {
     try {
       const user = await prisma.user.findUnique({
-        where: { id: userId }
+        where: {
+          id: userId
+        },
+        select: {
+          id: true
+        }
       });
+
       if (!user) {
         throw new Error('User not found.');
       }
 
-      // Upsert the FacebookAccount by facebookUserId
-      const existingAccount = await prisma.facebookAccount.findUnique({
-        where: { facebookUserId: accountData.facebookUserId }
-      });
+      const savedAccount =
+        await prisma.$transaction(
+          async (transaction) => {
+            const account =
+              await transaction.facebookAccount.upsert(
+                {
+                  where: {
+                    userId_facebookUserId: {
+                      userId,
+                      facebookUserId:
+                        accountData.facebookUserId
+                    }
+                  },
+                  update: {
+                    encryptedAccessToken:
+                      accountData.encryptedAccessToken,
+                    tokenExpiresAt: new Date(
+                      accountData.tokenExpiresAt
+                    ),
+                    name: accountData.name
+                  },
+                  create: {
+                    userId,
+                    facebookUserId:
+                      accountData.facebookUserId,
+                    encryptedAccessToken:
+                      accountData.encryptedAccessToken,
+                    tokenExpiresAt: new Date(
+                      accountData.tokenExpiresAt
+                    ),
+                    name: accountData.name
+                  }
+                }
+              );
 
-      let accountId: string;
-      if (existingAccount) {
-        accountId = existingAccount.id;
-        await prisma.facebookAccount.update({
-          where: { id: accountId },
-          data: {
-            userId: userId,
-            encryptedAccessToken: accountData.encryptedAccessToken,
-            tokenExpiresAt: new Date(accountData.tokenExpiresAt),
-            name: accountData.name,
+            for (const page of accountData.pages) {
+              await transaction.facebookPage.upsert({
+                where: {
+                  userId_facebookPageId: {
+                    userId,
+                    facebookPageId: page.id
+                  }
+                },
+                update: {
+                  accountId: account.id,
+                  pageName: page.name,
+                  pageCategory: page.category,
+                  pagePictureUrl: page.pictureUrl,
+                  encryptedPageToken:
+                    page.encryptedPageToken,
+                  isSynced:
+                    page.tokenStatus === 'Valid'
+                },
+                create: {
+                  accountId: account.id,
+                  userId,
+                  facebookPageId: page.id,
+                  pageName: page.name,
+                  pageCategory: page.category,
+                  pagePictureUrl: page.pictureUrl,
+                  encryptedPageToken:
+                    page.encryptedPageToken,
+                  isSynced:
+                    page.tokenStatus === 'Valid'
+                }
+              });
+            }
+
+            return transaction.facebookAccount.findUnique(
+              {
+                where: {
+                  id: account.id
+                },
+                include: {
+                  pages: true
+                }
+              }
+            );
           }
-        });
-      } else {
-        const newAccount = await prisma.facebookAccount.create({
-          data: {
-            userId: userId,
-            facebookUserId: accountData.facebookUserId,
-            encryptedAccessToken: accountData.encryptedAccessToken,
-            tokenExpiresAt: new Date(accountData.tokenExpiresAt),
-            name: accountData.name,
-          }
-        });
-        accountId = newAccount.id;
+        );
+
+      if (!savedAccount) {
+        throw new Error(
+          'Facebook account was not found after saving.'
+        );
       }
 
-      // Upsert page records for this account
-      for (const p of accountData.pages) {
-        await prisma.facebookPage.upsert({
-          where: { facebookPageId: p.id },
-          update: {
-            accountId: accountId,
-            userId: userId,
-            pageName: p.name,
-            pageCategory: p.category,
-            pagePictureUrl: p.pictureUrl,
-            encryptedPageToken: p.encryptedPageToken,
-            isSynced: p.tokenStatus === 'Valid'
-          },
-          create: {
-            accountId: accountId,
-            facebookPageId: p.id,
-            userId: userId,
-            pageName: p.name,
-            pageCategory: p.category,
-            pagePictureUrl: p.pictureUrl,
-            encryptedPageToken: p.encryptedPageToken,
-            isSynced: p.tokenStatus === 'Valid'
-          }
-        });
-      }
+      logInfo(
+        `Saved live Facebook account ${accountData.name} and ${accountData.pages.length} pages for user ${userId}.`
+      );
 
-      const savedAccount = await prisma.facebookAccount.findUnique({
-        where: { id: accountId },
-        include: { pages: true }
-      });
-
-      logInfo(`Saved live Facebook account ${accountData.name} and ${accountData.pages.length} pages in PostgreSQL.`);
       return savedAccount;
-    } catch (e) {
-      logError(`Prisma write error, falling back to mock DB: ${e}`);
+    } catch (error) {
+      logError(
+        `Prisma Facebook account write failed for user ${userId}: ${String(
+          error
+        )}`
+      );
+
+      throw error;
     }
   }
 
-  // Simulation mode
-  const db = loadMockDb();
-  const accountDataWithUser = { ...accountData, userId };
-  const index = db.accounts.findIndex(acc => acc.facebookUserId === accountData.facebookUserId);
-  if (index !== -1) {
-    db.accounts[index] = accountDataWithUser;
+  const database = loadMockDb();
+
+  const accountDataWithUser: MockFacebookAccount = {
+    ...accountData,
+    userId,
+    connectionState: state
+  };
+
+  const existingAccountIndex =
+    database.accounts.findIndex(
+      (account) =>
+        account.userId === userId &&
+        account.facebookUserId ===
+          accountData.facebookUserId
+    );
+
+  if (existingAccountIndex !== -1) {
+    database.accounts[existingAccountIndex] =
+      accountDataWithUser;
   } else {
-    db.accounts.push(accountDataWithUser);
+    database.accounts.push(accountDataWithUser);
   }
-  db.connectionState = state;
-  saveMockDb(db);
-  logInfo(`Saved mock Facebook account ${accountData.name} and ${accountData.pages.length} pages in mock_db.json.`);
-  return accountData;
+
+  database.connectionState = state;
+
+  saveMockDb(database);
+
+  logInfo(
+    `Saved mock Facebook account ${accountData.name} and ${accountData.pages.length} pages for user ${userId}.`
+  );
+
+  return accountDataWithUser;
 }
 
-export async function disconnectFacebook(userId: string, accountId?: string) {
+export async function disconnectFacebook(
+  userId: string,
+  accountId?: string
+) {
+  if (!userId) {
+    return false;
+  }
+
   const isLive = await isLiveMetaMode(userId);
+
   if (isLive) {
     try {
       if (accountId) {
         await prisma.facebookAccount.deleteMany({
-          where: { id: accountId, userId }
+          where: {
+            id: accountId,
+            userId
+          }
         });
-        logInfo(`Deleted live Facebook account ${accountId} in PostgreSQL.`);
+
+        logInfo(
+          `Deleted live Facebook account ${accountId} for user ${userId}.`
+        );
       } else {
         await prisma.facebookAccount.deleteMany({
-          where: { userId }
+          where: {
+            userId
+          }
         });
-        logInfo('Deleted all live Facebook account linkages in PostgreSQL.');
+
+        logInfo(
+          `Deleted all live Facebook accounts for user ${userId}.`
+        );
       }
+
       return true;
-    } catch (e) {
-      logError(`Prisma delete error, falling back to mock DB: ${e}`);
+    } catch (error) {
+      logError(
+        `Prisma Facebook account delete failed for user ${userId}: ${String(
+          error
+        )}`
+      );
+
+      return false;
     }
   }
 
-  // Simulation mode
-  const db = loadMockDb();
+  const database = loadMockDb();
+
   if (accountId) {
-    db.accounts = db.accounts.filter(acc => acc.id !== accountId || acc.userId !== userId);
-    logInfo(`Deleted mock Facebook account ${accountId} in mock_db.json.`);
+    database.accounts = database.accounts.filter(
+      (account) =>
+        account.id !== accountId ||
+        account.userId !== userId
+    );
+
+    logInfo(
+      `Deleted mock Facebook account ${accountId} for user ${userId}.`
+    );
   } else {
-    db.accounts = db.accounts.filter(acc => acc.userId !== userId);
-    logInfo('Deleted all mock Facebook account linkages in mock_db.json.');
+    database.accounts = database.accounts.filter(
+      (account) => account.userId !== userId
+    );
+
+    logInfo(
+      `Deleted all mock Facebook accounts for user ${userId}.`
+    );
   }
-  if (db.accounts.length === 0) {
-    db.connectionState = 'Not Connected';
+
+  if (database.accounts.length === 0) {
+    database.connectionState = 'Not Connected';
   }
-  saveMockDb(db);
+
+  saveMockDb(database);
+
   return true;
 }
 
-export async function updateConnectionState(state: MockDbSchema['connectionState']) {
-  const db = loadMockDb();
-  db.connectionState = state;
-  saveMockDb(db);
+export async function updateConnectionState(
+  state: MockDbSchema['connectionState']
+) {
+  const database = loadMockDb();
+
+  database.connectionState = state;
+
+  saveMockDb(database);
+
   return true;
 }
 
-export async function updatePagesStatus(userId: string, pagesStatus: { id: string, tokenStatus: 'Valid' | 'Expired' }[]) {
+export async function updatePagesStatus(
+  userId: string,
+  pagesStatus: Array<{
+    id: string;
+    tokenStatus: 'Valid' | 'Expired';
+  }>
+) {
+  if (!userId) {
+    return false;
+  }
+
   const isLive = await isLiveMetaMode(userId);
+
   if (isLive) {
     try {
-      for (const status of pagesStatus) {
+      for (const pageStatus of pagesStatus) {
         await prisma.facebookPage.updateMany({
-          where: { 
-            facebookPageId: status.id,
-            facebookAccount: { userId }
+          where: {
+            userId,
+            facebookPageId: pageStatus.id
           },
-          data: { isSynced: status.tokenStatus === 'Valid' }
-        });
-      }
-    } catch (e) {
-      logError(`Prisma update pages error: ${e}`);
-    }
-  }
-
-  // Mock sync fallback
-  const db = loadMockDb();
-  if (db.accounts.length > 0) {
-    db.accounts = db.accounts.map(acc => {
-      if (acc.userId === userId) {
-        acc.pages = acc.pages.map(p => {
-          const match = pagesStatus.find(ps => ps.id === p.id);
-          if (match) {
-            p.tokenStatus = match.tokenStatus;
+          data: {
+            isSynced:
+              pageStatus.tokenStatus === 'Valid'
           }
-          return p;
         });
       }
-      return acc;
-    });
 
-    // Check if any account has expired pages to trigger Reconnection Required state
-    const anyExpired = db.accounts.some(acc => acc.userId === userId && acc.pages.some(p => p.tokenStatus === 'Expired'));
-    if (anyExpired) {
-      db.connectionState = 'Reconnection Required';
-    } else {
-      db.connectionState = 'Connected';
+      return true;
+    } catch (error) {
+      logError(
+        `Prisma page status update failed for user ${userId}: ${String(
+          error
+        )}`
+      );
+
+      return false;
     }
-    saveMockDb(db);
   }
+
+  const database = loadMockDb();
+
+  database.accounts = database.accounts.map(
+    (account) => {
+      if (account.userId !== userId) {
+        return account;
+      }
+
+      const updatedPages = account.pages.map(
+        (page) => {
+          const matchingStatus = pagesStatus.find(
+            (pageStatus) =>
+              pageStatus.id === page.id
+          );
+
+          if (!matchingStatus) {
+            return page;
+          }
+
+          return {
+            ...page,
+            tokenStatus:
+              matchingStatus.tokenStatus
+          };
+        }
+      );
+
+      const hasExpiredPage = updatedPages.some(
+        (page) => page.tokenStatus === 'Expired'
+      );
+
+      return {
+        ...account,
+        pages: updatedPages,
+        connectionState: hasExpiredPage
+          ? 'Reconnection Required'
+          : 'Connected'
+      };
+    }
+  );
+
+  saveMockDb(database);
+
+  return true;
 }
 
-export async function getAppConfiguration(userId?: string) {
+export async function getAppConfiguration(
+  userId?: string
+) {
   try {
-    if (!userId) return null;
+    if (!userId) {
+      return null;
+    }
+
     return await prisma.appConfiguration.findUnique({
-      where: { userId }
+      where: {
+        userId
+      }
     });
-  } catch (e) {
-    logError(`Error reading app configuration: ${e}`);
+  } catch (error) {
+    logError(
+      `Error reading app configuration for user ${userId}: ${String(
+        error
+      )}`
+    );
+
     return null;
   }
 }
 
-export async function isLiveMetaMode(userId?: string): Promise<boolean> {
-  const config = await getAppConfiguration(userId);
-  if (config) {
-    return config.liveMetaMode;
+export async function isLiveMetaMode(
+  userId?: string
+): Promise<boolean> {
+  const configuration =
+    await getAppConfiguration(userId);
+
+  if (configuration) {
+    return configuration.liveMetaMode;
   }
+
   return process.env.LIVE_META_MODE === 'true';
 }
 
-export async function saveAppConfiguration(userId: string, data: {
-  publicAppUrl: string;
-  facebookAppId: string;
-  encryptedAppSecret: string;
-  liveMetaMode: boolean;
-}) {
-  return await prisma.appConfiguration.upsert({
-    where: { userId },
+export async function saveAppConfiguration(
+  userId: string,
+  data: {
+    publicAppUrl: string;
+    facebookAppId: string;
+    encryptedAppSecret: string;
+    liveMetaMode: boolean;
+  }
+) {
+  if (!userId) {
+    throw new Error(
+      'A user ID is required to save Meta configuration.'
+    );
+  }
+
+  return prisma.appConfiguration.upsert({
+    where: {
+      userId
+    },
     update: data,
     create: {
       id: userId,
@@ -383,7 +666,12 @@ export async function saveAppConfiguration(userId: string, data: {
   });
 }
 
-export async function createAuditLog(action: string, details: string, ipAddress?: string | null, userId?: string | null) {
+export async function createAuditLog(
+  action: string,
+  details: string,
+  ipAddress?: string | null,
+  userId?: string | null
+) {
   try {
     return await prisma.auditLog.create({
       data: {
@@ -393,25 +681,45 @@ export async function createAuditLog(action: string, details: string, ipAddress?
         userId: userId || null
       }
     });
-  } catch (e) {
-    logError(`Error creating audit log: ${e}`);
+  } catch (error) {
+    logError(
+      `Error creating audit log: ${String(error)}`
+    );
+
+    return null;
   }
 }
 
-export async function getAuditLogs(userId?: string, isAdmin?: boolean) {
+export async function getAuditLogs(
+  userId?: string,
+  isAdmin?: boolean
+) {
   try {
     if (isAdmin) {
       return await prisma.auditLog.findMany({
-        orderBy: { createdAt: 'desc' }
+        orderBy: {
+          createdAt: 'desc'
+        }
       });
     }
+
+    if (!userId) {
+      return [];
+    }
+
     return await prisma.auditLog.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' }
+      where: {
+        userId
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
     });
-  } catch (e) {
-    logError(`Error fetching audit logs: ${e}`);
+  } catch (error) {
+    logError(
+      `Error fetching audit logs: ${String(error)}`
+    );
+
     return [];
   }
 }
-
