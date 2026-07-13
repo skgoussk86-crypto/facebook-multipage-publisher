@@ -6,16 +6,23 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "create-admin": "tsx scripts/create-admin.ts",
+    "reset-admin": "tsx scripts/reset-admin.ts",
+    "build:prod": "next build",
+    "start:prod": "next start -H 127.0.0.1 -p 3000",
+    "check:prod": "prisma validate && prisma migrate status && prisma generate && npm run lint && npm run build"
   },
   "dependencies": {
     "@prisma/client": "5.22.0",
+    "bcryptjs": "^3.0.3",
     "next": "16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -23,6 +30,7 @@
     "eslint-config-next": "16.2.10",
     "prisma": "5.22.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.0",
     "typescript": "^5"
   }
 }

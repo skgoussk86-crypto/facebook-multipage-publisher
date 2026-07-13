@@ -37,6 +37,7 @@ model FacebookAccount {
   updatedAt            DateTime       @updatedAt @db.Timestamptz
 
   @@index([facebookUserId])
+  @@index([userId])
 }
 
 model FacebookPage {
@@ -54,6 +55,7 @@ model FacebookPage {
   updatedAt          DateTime        @updatedAt @db.Timestamptz
 
   @@index([facebookPageId])
+  @@index([accountId])
 }
 
 model VideoJob {
@@ -78,3 +80,23 @@ model VideoJob {
   @@index([scheduledTimeUTC])
   @@index([pageId])
 }
+
+model AppConfiguration {
+  id                 String   @id @default("default") @db.VarChar(50)
+  publicAppUrl       String   @db.Text
+  facebookAppId      String   @db.VarChar(255)
+  encryptedAppSecret String   @db.Text
+  liveMetaMode       Boolean  @default(false)
+  createdAt          DateTime @default(now()) @db.Timestamptz
+  updatedAt          DateTime @updatedAt @db.Timestamptz
+}
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  action    String   @db.VarChar(255)
+  details   String   @db.Text
+  ipAddress String?  @db.VarChar(45)
+  userId    String?  @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz
+}
+

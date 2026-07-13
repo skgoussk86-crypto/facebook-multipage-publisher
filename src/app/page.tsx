@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
+import Link from "next/link";
 
 // Types
 interface FacebookPage {
@@ -10,6 +11,17 @@ interface FacebookPage {
   pictureUrl: string;
   tokenStatus: "Valid" | "Expired";
   connectedAt: string;
+  accountId?: string;
+  accountName?: string;
+}
+
+interface FacebookAccountUI {
+  id: string;
+  facebookUserId: string;
+  name: string;
+  tokenExpiresAt: string;
+  connectionState: 'Connected' | 'Token Expiring' | 'Reconnection Required' | 'Permission Missing';
+  pages: FacebookPage[];
 }
 
 type JobStatus =
@@ -140,11 +152,11 @@ export default function Home() {
   const [systemTimeStr, setSystemTimeStr] = useState("2026-07-12 19:42:24");
 
   // Core Persistent States
+  const [accounts, setAccounts] = useState<FacebookAccountUI[]>([]);
   const [pages, setPages] = useState<FacebookPage[]>([]);
-  const [connectionState, setConnectionState] = useState<'Not Connected' | 'Connected' | 'Token Expiring' | 'Reconnection Required' | 'Permission Missing'>('Not Connected');
-  const [fbAccountName, setFbAccountName] = useState<string | null>(null);
-  const [fbUserId, setFbUserId] = useState<string | null>(null);
-  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+  const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
+  const [publicAppUrl, setPublicAppUrl] = useState("");
+  const [facebookAppId, setFacebookAppId] = useState("");
   const [jobs, setJobs] = useState<VideoJob[]>(INITIAL_JOBS);
   const [securityLogs, setSecurityLogs] = useState<SecurityLog[]>([
     { timestampUTC: "2026-07-12T11:30:00Z", level: "INFO", message: "System initialized in Mock Meta Mode." },
@@ -634,19 +646,60 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (activeTab === "logs") {
+      fetch("/api/admin/audit-logs")
+        .then(res => {
+          if (res.status === 401) {
+            window.location.href = "/settings/meta-configuration";
+            return null;
+          }
+          return res.json();
+        })
+        .then(data => {
+          if (data && data.logs) {
+            setSecurityLogs(data.logs);
+          }
+        })
+        .catch(err => console.error("Error fetching audit logs:", err));
+    }
+  }, [activeTab]);
+
   const fetchConnectionAndPages = async () => {
     try {
       const res = await fetch("/api/facebook/pages");
       if (res.ok) {
         const data = await res.json();
-        setPages(data.pages || []);
-        setConnectionState(data.connectionState || "Not Connected");
-        setFbAccountName(data.name || null);
-        setFbUserId(data.facebookUserId || null);
-        
-        // Match checkbox status to token expiry status
-        const hasExpired = data.pages?.some((p: FacebookPage) => p.tokenStatus === "Expired");
-        setSimulateTokenExpiry(hasExpired || data.connectionState === "Reconnection Required");
+        setIsConfigured(data.isConfigured);
+        setPublicAppUrl(data.publicAppUrl || "");
+        setFacebookAppId(data.facebookAppId || "");
+
+        if (data.isConfigured === false) {
+          window.location.href = "/settings/meta-configuration?error=not_configured";
+          return;
+        }
+        setAccounts(data.accounts || []);
+
+        // Flatten pages across all accounts to keep page.tsx components fully compatible
+        const allPages: FacebookPage[] = [];
+        (data.accounts || []).forEach((acc: FacebookAccountUI) => {
+          (acc.pages || []).forEach((p: FacebookPage) => {
+            allPages.push({
+              ...p,
+              accountId: acc.id,
+              accountName: acc.name
+            });
+          });
+        });
+        setPages(allPages);
+
+        // Compute overall reconnection required status from accounts list
+        const isReconnectionRequired = (data.accounts || []).some(
+          (acc: FacebookAccountUI) => acc.connectionState === "Reconnection Required"
+        );
+
+        const hasExpired = allPages.some((p: FacebookPage) => p.tokenStatus === "Expired");
+        setSimulateTokenExpiry(hasExpired || isReconnectionRequired);
       }
     } catch (error) {
       console.error("Failed to fetch connection and pages:", error);
@@ -1061,7 +1114,7 @@ export default function Home() {
               startTime,
               completionTime,
               errorCode: "META_PERMISSION_DENIED",
-              explanation: "Permissions 'pages_manage_posts' or 'publish_video' are missing for this page.",
+              explanation: "Permission 'pages_manage_posts' is missing for this page.",
               resultingState: "FAILED_PERMANENT"
             };
 
@@ -1290,23 +1343,21 @@ export default function Home() {
     runWorkerForJob(targetJob.id, simulationScenario);
   };
 
-  const handleSyncPages = async () => {
+  const handleSyncPages = async (accountId?: string) => {
     setIsSyncingPages(true);
-    addSecurityLog("INFO", "Initiated managed Facebook Pages synchronization request.");
+    addSecurityLog("INFO", accountId 
+      ? `Initiated managed Facebook Pages synchronization for account ID: ${accountId}.`
+      : "Initiated managed Facebook Pages synchronization request."
+    );
     try {
-      const res = await fetch("/api/facebook/sync", { method: "POST" });
+      const url = accountId ? `/api/facebook/sync?accountId=${accountId}` : "/api/facebook/sync";
+      const res = await fetch(url, { method: "POST" });
       if (res.ok) {
-        const data = await res.json();
-        setPages(data.pages || []);
-        setConnectionState(data.connectionState || "Connected");
-        setLastSyncedTime(new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }));
-        addSecurityLog("INFO", `Synced ${data.pages?.length || 0} pages from Meta API. Tokens encrypted and saved.`);
+        await fetchConnectionAndPages();
+        addSecurityLog("INFO", `Synced pages successfully. Tokens encrypted and saved.`);
       } else {
         const data = await res.json();
         addSecurityLog("ERROR", `Synchronization failed: ${data.error || "Unknown Error"}`);
-        if (data.connectionState) {
-          setConnectionState(data.connectionState);
-        }
       }
     } catch (error) {
       console.error("Error during sync:", error);
@@ -1316,21 +1367,20 @@ export default function Home() {
     }
   };
 
-  const handleSimulateTokenExpiry = async (shouldExpire: boolean) => {
+  const handleSimulateTokenExpiry = async (shouldExpire: boolean, accountId?: string) => {
     try {
       const res = await fetch("/api/facebook/simulate-expiry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expire: shouldExpire })
+        body: JSON.stringify({ expire: shouldExpire, accountId })
       });
       if (res.ok) {
         addSecurityLog(
           shouldExpire ? "WARN" : "INFO",
           shouldExpire
-            ? "Simulated Facebook access token expiration: Triggered Code 190."
-            : "Simulated Facebook access token validation restored."
+            ? `Simulated Facebook access token expiration${accountId ? ` for account ${accountId}` : ""}: Triggered Code 190.`
+            : `Simulated Facebook access token validation restored${accountId ? ` for account ${accountId}` : ""}.`
         );
-        setSimulateTokenExpiry(shouldExpire);
         await fetchConnectionAndPages();
       } else {
         addSecurityLog("ERROR", "Failed to update simulated token expiry status.");
@@ -1348,10 +1398,11 @@ export default function Home() {
 
   const handleReconnectAccount = async (pageId: string) => {
     try {
+      const page = pages.find(p => p.id === pageId);
       const res = await fetch("/api/facebook/simulate-expiry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expire: false })
+        body: JSON.stringify({ expire: false, accountId: page?.accountId })
       });
       if (res.ok) {
         await fetchConnectionAndPages();
@@ -1386,23 +1437,27 @@ export default function Home() {
             return { ...j, status: "SCHEDULED" as JobStatus };
           }
           return j;
+          addSecurityLog("INFO", "Reconnected all expired Facebook Pages via mock OAuth.");
         }));
-        addSecurityLog("INFO", "Reconnected all expired Facebook Pages via mock OAuth.");
       }
     } catch (error) {
       console.error("Error reconnecting all:", error);
     }
   };
 
-  const handleDisconnect = async () => {
+  const handleDisconnect = async (accountId?: string) => {
     try {
-      const res = await fetch("/api/facebook/disconnect", { method: "POST" });
+      const url = accountId ? `/api/facebook/disconnect?accountId=${accountId}` : "/api/facebook/disconnect";
+      const res = await fetch(url, { method: "POST" });
       if (res.ok) {
-        addSecurityLog("INFO", "Disconnected Facebook account integration.");
-        setPages([]);
-        setConnectionState("Not Connected");
-        setFbAccountName(null);
-        setFbUserId(null);
+        if (accountId) {
+          addSecurityLog("INFO", `Disconnected Facebook account ID: ${accountId}.`);
+        } else {
+          addSecurityLog("INFO", "Disconnected all Facebook account integrations.");
+          setPages([]);
+          setAccounts([]);
+        }
+        await fetchConnectionAndPages();
       } else {
         addSecurityLog("ERROR", "Failed to disconnect Facebook account.");
       }
@@ -1469,6 +1524,23 @@ export default function Home() {
   const countFailed = jobs.filter((j) => ["FAILED_RETRYABLE", "FAILED_PERMANENT", "FACEBOOK_RECONNECT_REQUIRED"].includes(j.status)).length;
   const hasExpiredTokens = pages.some((p) => p.tokenStatus === "Expired");
   const expiredPages = pages.filter((p) => p.tokenStatus === "Expired");
+
+  // Compute URL matching warning on render
+  let dashboardHostnameWarning: string | null = null;
+  if (publicAppUrl) {
+    try {
+      const configUrl = new URL(publicAppUrl);
+      if (typeof window !== "undefined") {
+        const currentHost = window.location.host;
+        const configHost = configUrl.host;
+        if (configHost !== currentHost) {
+          dashboardHostnameWarning = `Configured Public App URL (${configHost}) does not match current browser location (${currentHost}). OAuth redirects may fail unless accessed via the configured URL.`;
+        }
+      }
+    } catch {
+      dashboardHostnameWarning = "Configured Public App URL has an invalid URL format.";
+    }
+  }
 
   return (
     <div className="flex flex-col flex-1 bg-zinc-950 text-zinc-100 font-sans min-h-screen">
@@ -1563,6 +1635,13 @@ export default function Home() {
             >
               Security Audit Logs
             </button>
+            <div className="h-[1px] bg-zinc-800 my-2"></div>
+            <Link
+              href="/settings/meta-configuration"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+            >
+              Meta Configuration
+            </Link>
           </nav>
 
           {/* Quick Simulation Options */}
@@ -1636,6 +1715,42 @@ export default function Home() {
           {/* Main workspace container */}
           <div className="p-8 overflow-y-auto max-w-7xl w-full mx-auto flex-1">
             
+            {/* System Warnings Panel */}
+            <div className="mb-6 space-y-3">
+              {(isConfigured === false || !facebookAppId) && (
+                <div className="bg-rose-950/40 border border-rose-900/50 rounded-xl p-4 text-xs text-rose-400 font-medium leading-relaxed flex items-start gap-3 shadow-md animate-pulse">
+                  <svg className="h-5 w-5 text-rose-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <div>
+                    <span className="font-bold">Meta Configuration Incomplete:</span> The Meta Configuration is missing or incomplete{facebookAppId ? ` (App ID: ${facebookAppId})` : ""}. Please go to <Link href="/settings/meta-configuration" className="underline text-rose-300 hover:text-rose-200">Meta Configuration</Link> settings to complete it.
+                  </div>
+                </div>
+              )}
+
+              {publicAppUrl && publicAppUrl.includes('trycloudflare.com') && (
+                <div className="bg-amber-950/40 border border-amber-900/50 rounded-xl p-4 text-xs text-amber-400 font-medium leading-relaxed flex items-start gap-3 shadow-md">
+                  <svg className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <div>
+                    <span className="font-bold">Temporary Quick-Tunnel Warning:</span> The application is using a temporary <code className="bg-zinc-950 px-1 py-0.5 rounded text-[10px]">trycloudflare.com</code> tunnel. Please update to a permanent custom domain under <Link href="/settings/meta-configuration" className="underline text-amber-300 hover:text-amber-200">Meta Configuration</Link> for production use.
+                  </div>
+                </div>
+              )}
+
+              {dashboardHostnameWarning && (
+                <div className="bg-amber-950/40 border border-amber-900/50 rounded-xl p-4 text-xs text-amber-400 font-medium leading-relaxed flex items-start gap-3 shadow-md">
+                  <svg className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <div>
+                    <span className="font-bold">Hostname Mismatch:</span> {dashboardHostnameWarning}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* STATS METRIC GRID */}
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
               <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-700 transition">
@@ -2548,256 +2663,170 @@ export default function Home() {
                   </div>
                   <div className="flex gap-2">
                     <button
-                      onClick={handleSyncPages}
-                      disabled={isSyncingPages || connectionState === "Not Connected" || connectionState === "Reconnection Required"}
-                      className="bg-indigo-650 hover:bg-indigo-700 disabled:bg-zinc-850 disabled:text-zinc-500 font-semibold text-xs text-white py-2.5 px-4 rounded-lg transition flex items-center justify-center gap-1.5"
+                      onClick={() => window.location.href = "/api/auth/facebook/initiate"}
+                      className="bg-blue-600 hover:bg-blue-500 font-semibold text-xs text-white py-2.5 px-4 rounded-lg transition flex items-center justify-center gap-1.5"
                     >
-                      {isSyncingPages ? (
-                        <>
-                          <span className="animate-spin h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full"></span>
-                          Syncing...
-                        </>
-                      ) : (
-                        "Sync Facebook Pages"
-                      )}
+                      Add Facebook Account
                     </button>
                   </div>
                 </div>
 
-                {/* Facebook Connection Panel */}
-                {connectionState === "Not Connected" && (
-                  <div className="bg-zinc-950 border border-zinc-850 rounded-xl p-5 mb-6">
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-400">
-                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                          </svg>
-                        </div>
-                        <div>
-                          <h4 className="font-bold text-sm text-zinc-300">Facebook Not Connected</h4>
-                          <p className="text-xs text-zinc-500">Connect your administrator Facebook account to synchronize and publish to managed Pages.</p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => window.location.href = "/api/auth/facebook/initiate"}
-                        className="bg-blue-600 hover:bg-blue-500 font-semibold text-xs text-white py-2.5 px-5 rounded-lg transition shadow-md shadow-blue-600/10 flex-shrink-0"
-                      >
-                        Connect Facebook
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {connectionState === "Connected" && (
-                  <div className="bg-zinc-950 border border-zinc-850 rounded-xl p-5 mb-6">
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-full bg-blue-950/50 flex items-center justify-center text-blue-400 border border-blue-900/30">
-                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                          </svg>
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-bold text-sm text-emerald-400">Facebook Connected</h4>
-                            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-mono font-semibold">ACTIVE</span>
-                          </div>
-                          <p className="text-xs text-zinc-300 mt-1">
-                            Connected as: <span className="font-semibold text-white">{fbAccountName || "Simulated Meta Administrator"}</span> 
-                            <span className="text-zinc-500 font-mono text-[11px] ml-2">(ID: {fbUserId || "mock_fb_user_88888"})</span>
-                          </p>
-                          {lastSyncedTime && (
-                            <p className="text-[10px] text-zinc-500 mt-1 font-mono">Last Synced: {lastSyncedTime}</p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          onClick={handleSyncPages}
-                          disabled={isSyncingPages}
-                          className="bg-indigo-650 hover:bg-indigo-700 disabled:bg-zinc-850 disabled:text-zinc-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition flex items-center gap-1.5"
-                        >
-                          {isSyncingPages ? "Syncing..." : "Refresh Pages"}
-                        </button>
-                        <button
-                          onClick={() => handleSimulateTokenExpiry(true)}
-                          className="bg-amber-600/10 hover:bg-amber-600/25 border border-amber-500/20 hover:border-amber-500/40 text-amber-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
-                        >
-                          Simulate Token Expiry
-                        </button>
-                        <button
-                          onClick={handleDisconnect}
-                          className="bg-rose-950/80 hover:bg-rose-900 border border-rose-900/30 text-rose-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
-                        >
-                          Disconnect
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {connectionState === "Token Expiring" && (
-                  <div className="bg-zinc-950 border border-amber-900/45 rounded-xl p-5 mb-6">
-                    <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-lg p-3.5 mb-4 flex items-start gap-2.5 text-xs">
-                      <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                      </svg>
-                      <div>
-                        <span className="font-bold block">Token Expiring Soon</span>
-                        <span>The Facebook API access token will expire in less than 7 days. Reconnection is recommended to prevent scheduled video publishing failures. Publishing will be blocked if expired.</span>
-                      </div>
-                    </div>
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                      <div>
-                        <p className="text-xs text-zinc-300">
-                          Connected as: <span className="font-semibold text-white">{fbAccountName || "Simulated Meta Administrator"}</span> 
-                          <span className="text-zinc-500 font-mono text-[11px] ml-2">(ID: {fbUserId || "mock_fb_user_88888"})</span>
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => window.location.href = "/api/auth/facebook/initiate"}
-                          className="bg-amber-600 hover:bg-amber-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition"
-                        >
-                          Reconnect Facebook
-                        </button>
-                        <button
-                          onClick={handleDisconnect}
-                          className="bg-rose-950/80 hover:bg-rose-900 border border-rose-900/30 text-rose-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
-                        >
-                          Disconnect
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {connectionState === "Reconnection Required" && (
-                  <div className="bg-zinc-950 border border-rose-950 rounded-xl p-5 mb-6">
-                    <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-lg p-3.5 mb-4 flex items-start gap-2.5 text-xs">
-                      <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                      </svg>
-                      <div>
-                        <span className="font-bold block">Authorization Expired (Error 190)</span>
-                        <span>Your Facebook connection has been invalidated or expired. Page synchronization is disabled, and scheduled publishes are blocked until you reconnect.</span>
-                      </div>
-                    </div>
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                      <div>
-                        <p className="text-xs text-zinc-400">
-                          Account: <span className="font-semibold text-zinc-300">{fbAccountName || "Simulated Meta Administrator"}</span>
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => window.location.href = "/api/auth/facebook/initiate"}
-                          className="bg-rose-600 hover:bg-rose-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition"
-                        >
-                          Reconnect Facebook
-                        </button>
-                        <button
-                          onClick={handleDisconnect}
-                          className="bg-rose-950/80 hover:bg-rose-900 border border-rose-900/30 text-rose-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
-                        >
-                          Disconnect
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {connectionState === "Permission Missing" && (
-                  <div className="bg-zinc-950 border border-rose-950 rounded-xl p-5 mb-6">
-                    <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-lg p-3.5 mb-4 flex items-start gap-2.5 text-xs">
-                      <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                      </svg>
-                      <div>
-                        <span className="font-bold block">Missing Required Permissions</span>
-                        <span>The application is missing required publish permissions (<code className="bg-rose-950/50 px-1 py-0.5 rounded font-mono text-[10px]">pages_manage_posts</code> or <code className="bg-rose-950/50 px-1 py-0.5 rounded font-mono text-[10px]">publish_video</code>). Video publishing and scheduled uploads will be blocked.</span>
-                      </div>
-                    </div>
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                      <div>
-                        <p className="text-xs text-zinc-400">
-                          Account: <span className="font-semibold text-zinc-300">{fbAccountName || "Simulated Meta Administrator"}</span>
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => window.location.href = "/api/auth/facebook/initiate"}
-                          className="bg-blue-600 hover:bg-blue-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition"
-                        >
-                          Reconnect and Grant Permissions
-                        </button>
-                        <button
-                          onClick={handleDisconnect}
-                          className="bg-rose-950/80 hover:bg-rose-900 border border-rose-900/30 text-rose-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
-                        >
-                          Disconnect
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {connectionState === "Not Connected" ? (
+                {accounts.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-16 text-center bg-zinc-950/20 rounded-xl border border-dashed border-zinc-800">
-                    <p className="text-sm text-zinc-400 font-semibold">No Managed Pages Available</p>
+                    <p className="text-sm text-zinc-400 font-semibold">No Facebook Accounts Connected</p>
                     <p className="text-xs text-zinc-600 mt-1 max-w-sm">
-                      Please connect your Facebook account using the connection panel above to synchronize your managed pages.
+                      Please connect a Facebook account using the button above to synchronize your managed pages.
                     </p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {pages.map((page) => (
-                      <div
-                        key={page.id}
-                        className={`bg-zinc-950 border rounded-xl p-5 hover:border-zinc-750 transition flex flex-col justify-between min-h-[160px] ${
-                          page.tokenStatus === "Expired" ? "border-rose-900/60" : "border-zinc-800"
-                        }`}
-                      >
-                        <div className="flex items-start gap-4">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={page.pictureUrl}
-                            alt={page.name}
-                            className="h-11 w-11 rounded-lg bg-zinc-800 object-cover flex-shrink-0"
-                          />
-                          <div className="min-w-0">
-                            <h4 className="font-semibold text-sm text-white truncate">{page.name}</h4>
-                            <span className="block text-[10px] text-zinc-500 mt-0.5">{page.category}</span>
-                            <span className="block text-[10px] font-mono text-zinc-500 mt-0.5">ID: {page.id}</span>
+                  <div className="space-y-8">
+                    {accounts.map((account) => (
+                      <div key={account.id} className="bg-zinc-950/40 border border-zinc-800 rounded-xl p-6 space-y-6">
+                        {/* Account Header */}
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-800/60 pb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-full bg-blue-950/50 flex items-center justify-center text-blue-400 border border-blue-900/30">
+                              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-bold text-sm text-white">{account.name}</h4>
+                                <span className={`text-[10px] border px-2 py-0.5 rounded font-mono font-semibold ${
+                                  account.connectionState === 'Connected' ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                                  account.connectionState === 'Token Expiring' ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                                  "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                                }`}>
+                                  {account.connectionState.toUpperCase()}
+                                </span>
+                              </div>
+                              <p className="text-xs text-zinc-500 font-mono mt-0.5">Meta User ID: {account.facebookUserId}</p>
+                            </div>
                           </div>
-                        </div>
-
-                        <div className="mt-5 pt-4 border-t border-zinc-900 flex items-center justify-between text-xs">
-                          <div className="flex items-center gap-1.5">
-                            <span className={`h-2 w-2 rounded-full ${
-                              page.tokenStatus === "Expired" ? "bg-rose-500" : "bg-emerald-400"
-                            }`}></span>
-                            <span className={`font-mono text-[11px] ${
-                              page.tokenStatus === "Expired" ? "text-rose-400 font-semibold" : "text-emerald-400"
-                            }`}>
-                              Token: {page.tokenStatus}
-                            </span>
-                          </div>
-
-                          {page.tokenStatus === "Expired" ? (
+                          <div className="flex flex-wrap gap-2">
                             <button
-                              onClick={() => handleReconnectAccount(page.id)}
-                              className="bg-rose-650 hover:bg-rose-600 text-white font-bold text-[10px] px-3 py-1 rounded transition"
+                              onClick={() => handleSyncPages(account.id)}
+                              disabled={isSyncingPages}
+                              className="bg-indigo-650 hover:bg-indigo-700 disabled:bg-zinc-850 disabled:text-zinc-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition"
+                            >
+                              Refresh Pages
+                            </button>
+                            <button
+                              onClick={() => window.location.href = "/api/auth/facebook/initiate"}
+                              className="bg-blue-600 hover:bg-blue-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition"
                             >
                               Reconnect
                             </button>
-                          ) : (
-                            <span className="text-[10px] text-zinc-600 font-mono">
-                              Permanent Access Token
-                            </span>
-                          )}
+                            <button
+                              onClick={() => handleDisconnect(account.id)}
+                              className="bg-rose-950/80 hover:bg-rose-900 border border-rose-900/30 text-rose-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
+                            >
+                              Disconnect
+                            </button>
+                            <button
+                              onClick={() => handleSimulateTokenExpiry(account.connectionState !== 'Reconnection Required', account.id)}
+                              className="bg-amber-600/10 hover:bg-amber-600/25 border border-amber-500/20 hover:border-amber-500/40 text-amber-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
+                            >
+                              {account.connectionState === 'Reconnection Required' ? "Restore Token" : "Expire Token"}
+                            </button>
+                          </div>
                         </div>
+
+                        {/* Account Warning/Error Banners */}
+                        {account.connectionState === "Reconnection Required" && (
+                          <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-lg p-3.5 flex items-start gap-2.5 text-xs">
+                            <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                            </svg>
+                            <div>
+                              <span className="font-bold block">Authorization Expired (Error 190)</span>
+                              <span>The Facebook connection for this account has been invalidated or expired. Page synchronization is disabled, and scheduled publishes are blocked until you reconnect.</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {account.connectionState === "Permission Missing" && (
+                          <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-lg p-3.5 flex items-start gap-2.5 text-xs">
+                            <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <div>
+                              <span className="font-bold block">Missing Required Permissions</span>
+                              <span>The application is missing the required <code className="bg-rose-950/50 px-1 py-0.5 rounded font-mono text-[10px]">pages_manage_posts</code> permission. Video publishing and scheduled uploads will be blocked.</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {account.connectionState === "Token Expiring" && (
+                          <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-lg p-3.5 flex items-start gap-2.5 text-xs">
+                            <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <div>
+                              <span className="font-bold block">Token Expiring Soon</span>
+                              <span>The Facebook API access token will expire in less than 7 days. Reconnection is recommended to prevent scheduled video publishing failures. Publishing will be blocked if expired.</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Account Pages List */}
+                        {account.pages.length === 0 ? (
+                          <div className="text-center py-8 text-zinc-500 text-xs bg-zinc-950/20 border border-dashed border-zinc-800 rounded-xl">
+                            No synced pages found for this account.
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {account.pages.map((page) => (
+                              <div
+                                key={page.id}
+                                className={`bg-zinc-950 border rounded-xl p-5 hover:border-zinc-750 transition flex flex-col justify-between min-h-[160px] ${
+                                  page.tokenStatus === "Expired" ? "border-rose-900/60" : "border-zinc-800"
+                                }`}
+                              >
+                                <div className="flex items-start gap-4">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={page.pictureUrl}
+                                    alt={page.name}
+                                    className="h-11 w-11 rounded-lg bg-zinc-800 object-cover flex-shrink-0"
+                                  />
+                                  <div className="min-w-0 flex-1">
+                                    <h4 className="font-semibold text-sm text-white truncate">{page.name}</h4>
+                                    <span className="block text-[10px] text-zinc-500 mt-0.5">{page.category}</span>
+                                    <span className="block text-[10px] font-mono text-zinc-500 mt-0.5">ID: {page.id}</span>
+                                  </div>
+                                </div>
+
+                                <div className="mt-5 pt-4 border-t border-zinc-900 flex items-center justify-between text-xs">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={`h-2 w-2 rounded-full ${
+                                      page.tokenStatus === "Expired" ? "bg-rose-500" : "bg-emerald-400"
+                                    }`}></span>
+                                    <span className={`font-mono text-[11px] ${
+                                      page.tokenStatus === "Expired" ? "text-rose-400 font-semibold" : "text-emerald-400"
+                                    }`}>
+                                      Token: {page.tokenStatus}
+                                    </span>
+                                  </div>
+
+                                  {page.tokenStatus === "Expired" ? (
+                                    <button
+                                      onClick={() => handleReconnectAccount(page.id)}
+                                      className="bg-rose-650 hover:bg-rose-600 text-white font-bold text-[10px] px-3 py-1 rounded transition"
+                                    >
+                                      Reconnect
+                                    </button>
+                                  ) : (
+                                    <span className="text-[10px] text-zinc-600 font-mono">
+                                      Permanent Access Token
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
