@@ -10,6 +10,10 @@ export * from './in-memory-fake-adapter';
 export * from './upload-session-encryption';
 export * from './upload-state-service';
 export * from './upload-session-service';
+export * from './upload-initiation-service';
+export * from './upload-api-errors';
+
+
 
 
 let instance: StorageAdapter | null = null;

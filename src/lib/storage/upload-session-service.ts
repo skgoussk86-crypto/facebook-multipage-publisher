@@ -52,74 +52,101 @@ export class UploadSessionService {
       data.declaredMimeType
     );
 
-    // Perform inside a transaction to prevent race conditions
-    const result = await prisma.$transaction(async (tx) => {
-      // 1. Check existing asset with same idempotency key
-      const existing = await tx.uploadAsset.findUnique({
-        where: {
-          userId_idempotencyKey: {
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        // 1. Check existing asset with same idempotency key
+        const existing = await tx.uploadAsset.findUnique({
+          where: {
+            userId_idempotencyKey: {
+              userId,
+              idempotencyKey: data.idempotencyKey,
+            },
+          },
+        });
+
+        if (existing) {
+          // Compare fingerprint
+          if (existing.requestFingerprint !== requestFingerprint) {
+            throw new IdempotencyConflictError(
+              'An upload asset with this idempotency key already exists with different request parameters.'
+            );
+          }
+          return { asset: existing, idempotentReplay: true };
+        }
+
+        // 2. Create the asset in REQUESTED status
+        const newAsset = await tx.uploadAsset.create({
+          data: {
             userId,
             idempotencyKey: data.idempotencyKey,
+            requestFingerprint,
+            provider: 'R2',
+            bucket: data.bucket,
+            objectKey: data.objectKey,
+            originalName: data.originalName,
+            expectedSize: data.expectedSize,
+            declaredMimeType: data.declaredMimeType,
+            status: UploadStatus.REQUESTED,
+            uploadExpiresAt: data.uploadExpiresAt,
           },
-        },
+        });
+
+        // 3. Create the encrypted session secrets
+        const currentVersion = process.env.UPLOAD_SESSION_ENCRYPTION_KEY_VERSION || '1';
+        const encryptedProviderId = encryptUploadSecret(data.providerSessionId);
+        const encryptedParts = encryptUploadSecret(JSON.stringify([]));
+
+        await tx.uploadSession.create({
+          data: {
+            uploadAssetId: newAsset.id,
+            encryptionKeyVersion: currentVersion,
+            encryptedProviderSessionId: encryptedProviderId,
+            encryptedCompletedParts: encryptedParts,
+            expiresAt: data.uploadExpiresAt, // Align session expiry with asset upload expiry
+            lastActivityAt: new Date(),
+          },
+        });
+
+        // 4. Log session creation in audits
+        await tx.auditLog.create({
+          data: {
+            action: 'UPLOAD_SESSION_CREATED',
+            details: `Created upload session for asset ${newAsset.id} (key: ${data.idempotencyKey}).`,
+            userId,
+          },
+        });
+
+        return { asset: newAsset, idempotentReplay: false };
       });
 
-      if (existing) {
-        // Compare fingerprint
-        if (existing.requestFingerprint !== requestFingerprint) {
-          throw new IdempotencyConflictError(
-            'An upload asset with this idempotency key already exists with different request parameters.'
-          );
+      return {
+        asset: serializeBigInt(result.asset),
+        idempotentReplay: result.idempotentReplay,
+      };
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2002') {
+        const existing = await prisma.uploadAsset.findUnique({
+          where: {
+            userId_idempotencyKey: {
+              userId,
+              idempotencyKey: data.idempotencyKey,
+            },
+          },
+        });
+        if (existing) {
+          if (existing.requestFingerprint !== requestFingerprint) {
+            throw new IdempotencyConflictError(
+              'An upload asset with this idempotency key already exists with different request parameters.'
+            );
+          }
+          return {
+            asset: serializeBigInt(existing),
+            idempotentReplay: true,
+          };
         }
-        return existing;
       }
-
-      // 2. Create the asset in REQUESTED status
-      const newAsset = await tx.uploadAsset.create({
-        data: {
-          userId,
-          idempotencyKey: data.idempotencyKey,
-          requestFingerprint,
-          provider: 'R2',
-          bucket: data.bucket,
-          objectKey: data.objectKey,
-          originalName: data.originalName,
-          expectedSize: data.expectedSize,
-          declaredMimeType: data.declaredMimeType,
-          status: UploadStatus.REQUESTED,
-          uploadExpiresAt: data.uploadExpiresAt,
-        },
-      });
-
-      // 3. Create the encrypted session secrets
-      const currentVersion = process.env.UPLOAD_SESSION_ENCRYPTION_KEY_VERSION || '1';
-      const encryptedProviderId = encryptUploadSecret(data.providerSessionId);
-      const encryptedParts = encryptUploadSecret(JSON.stringify([]));
-
-      await tx.uploadSession.create({
-        data: {
-          uploadAssetId: newAsset.id,
-          encryptionKeyVersion: currentVersion,
-          encryptedProviderSessionId: encryptedProviderId,
-          encryptedCompletedParts: encryptedParts,
-          expiresAt: data.uploadExpiresAt, // Align session expiry with asset upload expiry
-          lastActivityAt: new Date(),
-        },
-      });
-
-      // 4. Log session creation in audits
-      await tx.auditLog.create({
-        data: {
-          action: 'UPLOAD_SESSION_CREATED',
-          details: `Created upload session for asset ${newAsset.id} (key: ${data.idempotencyKey}).`,
-          userId,
-        },
-      });
-
-      return newAsset;
-    });
-
-    return serializeBigInt(result);
+      throw err;
+    }
   }
 
   /**

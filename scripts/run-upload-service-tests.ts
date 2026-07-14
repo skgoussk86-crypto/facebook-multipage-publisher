@@ -190,8 +190,8 @@ async function runTests() {
       uploadExpiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 mins expiry
     };
 
-    const asset1 = (await UploadSessionService.initiateUpload(testUserId1, initData)) as TestAsset;
-    const asset2 = (await UploadSessionService.initiateUpload(testUserId1, initData)) as TestAsset;
+    const { asset: asset1 } = (await UploadSessionService.initiateUpload(testUserId1, initData)) as { asset: TestAsset };
+    const { asset: asset2 } = (await UploadSessionService.initiateUpload(testUserId1, initData)) as { asset: TestAsset };
     if (asset1.id !== asset2.id) {
       throw new Error('Assertion failed: Reinitiating with same parameters should return the same asset ID.');
     }
@@ -365,11 +365,11 @@ async function runTests() {
     console.log('Test: Invalidate session...');
     // Setup new session
     const idempotencyKey2 = randomUUID();
-    const asset3 = (await UploadSessionService.initiateUpload(testUserId1, {
+    const { asset: asset3 } = (await UploadSessionService.initiateUpload(testUserId1, {
       ...initData,
       idempotencyKey: idempotencyKey2,
       objectKey: 'uploads/vid-3.mov',
-    })) as TestAsset;
+    })) as { asset: TestAsset };
     await UploadSessionService.invalidateUploadSession(testUserId1, asset3.id);
     try {
       await UploadSessionService.getDecryptedSession(testUserId1, asset3.id);
@@ -382,12 +382,12 @@ async function runTests() {
     const idempotencyKey3 = randomUUID();
     // Create an asset whose session is already expired
     const expiredDate = new Date(Date.now() - 5000);
-    const asset4 = (await UploadSessionService.initiateUpload(testUserId1, {
+    const { asset: asset4 } = (await UploadSessionService.initiateUpload(testUserId1, {
       ...initData,
       idempotencyKey: idempotencyKey3,
       objectKey: 'uploads/vid-4.mov',
       uploadExpiresAt: expiredDate,
-    })) as TestAsset;
+    })) as { asset: TestAsset };
 
     // Check that reading it throws expired error
     try {
