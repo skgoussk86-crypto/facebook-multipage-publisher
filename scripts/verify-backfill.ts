@@ -191,11 +191,7 @@ async function main() {
         userId: null
       }
     }),
-    prisma.videoJob.count({
-      where: {
-        userId: null
-      }
-    }),
+    prisma.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint as count FROM "VideoJob" WHERE "userId" IS NULL`.then(res => Number(res[0]?.count || 0)),
     prisma.auditLog.count({
       where: {
         userId: null
@@ -247,16 +243,7 @@ async function main() {
         userId: true
       }
     }),
-    prisma.videoJob.findMany({
-      where: {
-        userId: {
-          not: null
-        }
-      },
-      select: {
-        userId: true
-      }
-    }),
+    prisma.$queryRaw<Array<{ userId: string }>>`SELECT "userId" FROM "VideoJob" WHERE "userId" IS NOT NULL`,
     prisma.appConfiguration.findMany({
       where: {
         userId: {

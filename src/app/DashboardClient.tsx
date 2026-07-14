@@ -69,7 +69,10 @@ interface VideoJob {
   customThumbnailUrl?: string; // local url of uploaded thumbnail
   capturedThumbnailUrl?: string; // local data url of captured frame
   localVideoUrl?: string; // local object URL of the video
+  gcsVideoUri?: string; // persistent simulated GCS URI
   attempts?: PublishAttempt[];
+  providerReference?: string;
+  providerProcessingId?: string;
 }
 
 interface SecurityLog {
@@ -107,45 +110,6 @@ const INITIAL_PAGES: FacebookPage[] = [
   },
 ];
 
-const INITIAL_JOBS: VideoJob[] = [
-  {
-    id: "job-1",
-    fileName: "ai_trends_2026.mp4",
-    fileSize: "45.2 MB",
-    fileSizeBytes: 47400000,
-    durationSeconds: 120,
-    uploadProgress: 100,
-    pageId: "1029384756",
-    contentType: "VIDEO",
-    englishTitle: "Top 5 AI Tools of 2026 You Must Use",
-    englishCaption: "AI is evolving rapidly. Here are the tools to boost your productivity this year.",
-    hashtags: "#AITools #Productivity #TechTrends",
-    scheduledTimeKolkata: "2026-07-12T19:30",
-    scheduledTimeUTC: "2026-07-12T14:00:00.000Z",
-    status: "SCHEDULED",
-    retryCount: 0,
-    thumbnailMode: "auto",
-  },
-  {
-    id: "job-2",
-    fileName: "gaming_highlights_ep12.mp4",
-    fileSize: "128.5 MB",
-    fileSizeBytes: 134700000,
-    durationSeconds: 300,
-    uploadProgress: 100,
-    pageId: "5647382910",
-    contentType: "REEL",
-    englishTitle: "Clutch 1v4 Outplay in Finals",
-    englishCaption: "Unbelievable victory in the final round of the tourney. Drop a like!",
-    hashtags: "#ClutchGaming #FinalsOutplay #FPSGames",
-    scheduledTimeKolkata: "2026-07-12T21:30",
-    scheduledTimeUTC: "2026-07-12T16:00:00.000Z",
-    status: "SCHEDULED",
-    retryCount: 0,
-    thumbnailMode: "auto",
-  },
-];
-
 export default function DashboardClient({ currentUser }: { currentUser: { id: string, email: string, name: string, role: string } }) {
   // Navigation State
   const [activeTab, setActiveTab] = useState<"dashboard" | "publisher" | "pages" | "logs">("dashboard");
@@ -168,7 +132,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
   const [publicAppUrl, setPublicAppUrl] = useState("");
   const [facebookAppId, setFacebookAppId] = useState("");
-  const [jobs, setJobs] = useState<VideoJob[]>(INITIAL_JOBS);
+  const [jobs, setJobs] = useState<VideoJob[]>([]);
   const [securityLogs, setSecurityLogs] = useState<SecurityLog[]>([
     { timestampUTC: "2026-07-12T11:30:00Z", level: "INFO", message: "System initialized in Mock Meta Mode." },
     { timestampUTC: "2026-07-12T11:31:05Z", level: "INFO", message: "Loaded 3 Facebook Pages from database schema (Mock)." },
@@ -392,6 +356,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       }
     }
 
+    // Persistent GCS URI validation
+    if (!job.gcsVideoUri) {
+      errors.push("No persistent media upload URI exists yet. Video must be uploaded to GCS.");
+    }
+
     return errors;
   };
 
@@ -429,6 +398,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         retryCount: 0,
         thumbnailMode: "auto",
         localVideoUrl: localUrl,
+        gcsVideoUri: undefined,
       };
 
       setTempJobsQueue((prev) => [...prev, newJob]);
@@ -451,7 +421,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             setTempJobsQueue((prev) =>
               prev.map((j) =>
                 j.id === tempId
-                  ? { ...j, durationSeconds: Math.round(videoElement.duration), status: "MEDIA_UPLOADED" }
+                  ? {
+                      ...j,
+                      durationSeconds: Math.round(videoElement.duration),
+                      status: "MEDIA_UPLOADED"
+                    }
                   : j
               )
             );
@@ -657,6 +631,56 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     return () => clearInterval(interval);
   }, []);
 
+  const fetchJobs = async () => {
+    try {
+      const res = await fetch("/api/facebook/jobs");
+      if (res.ok) {
+        const data = await res.json();
+        const mapped = (data.jobs || []).map((j: {
+          id: string;
+          pageId: string;
+          gcsVideoUri: string;
+          contentType?: string;
+          englishTitle: string;
+          englishCaption: string;
+          hashtags?: string;
+          scheduledTimeUTC: string;
+          status: JobStatus;
+          metaPostId?: string;
+          attemptCount: number;
+          lastErrorMessage?: string;
+          attempts?: unknown[];
+        }) => {
+          const kolkataTimeStr = formatKolkataDatetimeLocal(new Date(j.scheduledTimeUTC));
+          return {
+            id: j.id,
+            fileName: j.gcsVideoUri ? j.gcsVideoUri.split('/').pop() || 'video.mp4' : 'video.mp4',
+            fileSize: "N/A",
+            fileSizeBytes: 0,
+            durationSeconds: 0,
+            uploadProgress: 100,
+            pageId: j.pageId,
+            contentType: j.contentType || "VIDEO",
+            englishTitle: j.englishTitle,
+            englishCaption: j.englishCaption,
+            hashtags: j.hashtags || "",
+            scheduledTimeKolkata: kolkataTimeStr,
+            scheduledTimeUTC: j.scheduledTimeUTC,
+            status: j.status,
+            metaPostId: j.metaPostId || undefined,
+            retryCount: j.attemptCount,
+            errorLog: j.lastErrorMessage || undefined,
+            thumbnailMode: "auto",
+            attempts: j.attempts || []
+          };
+        });
+        setJobs(mapped);
+      }
+    } catch (error) {
+      console.error("Failed to fetch jobs:", error);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === "logs") {
       fetch("/api/admin/audit-logs")
@@ -673,7 +697,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           }
         })
         .catch(err => console.error("Error fetching audit logs:", err));
+    } else if (activeTab === "dashboard") {
+      setTimeout(() => {
+        fetchJobs();
+      }, 0);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   const fetchConnectionAndPages = async () => {
@@ -721,6 +750,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     // Run asynchronously to satisfy the eslint react-hooks/set-state-in-effect rule
     setTimeout(() => {
       fetchConnectionAndPages();
+      fetchJobs();
 
       // Check query params for status messages
       const params = new URLSearchParams(window.location.search);
@@ -737,6 +767,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCaptureFrameAction = () => {
@@ -985,27 +1016,49 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     setIsConfirmationOpen(true);
   };
 
-  const handleConfirmSave = () => {
-    // Promote temp queue to active scheduling list
-    const confirmedJobs = tempJobsQueue.map((job) => {
-      addSecurityLog("INFO", `Job "${job.fileName}" (${job.id}) transitioned from MEDIA_UPLOADED to SCHEDULED.`, job.id);
-      return {
-        ...job,
-        status: "SCHEDULED" as JobStatus,
-      };
-    });
+  const handleConfirmSave = async () => {
+    try {
+      const jobsToSave = tempJobsQueue.map((job) => {
+        if (!job.gcsVideoUri) {
+          throw new Error(`Media upload URI is missing for file "${job.fileName}".`);
+        }
+        return {
+          pageId: job.pageId,
+          gcsVideoUri: job.gcsVideoUri,
+          englishTitle: job.englishTitle,
+          englishCaption: job.englishCaption,
+          hashtags: job.hashtags,
+          scheduledTimeUTC: job.scheduledTimeUTC,
+          mockScenario: simulationScenario,
+          contentType: job.contentType
+        };
+      });
 
-    setJobs((prev) => [...prev, ...confirmedJobs]);
-    setTempJobsQueue([]);
-    setIsConfirmationOpen(false);
+      const res = await fetch("/api/facebook/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobs: jobsToSave })
+      });
 
-    addSecurityLog("INFO", `Scheduled ${confirmedJobs.length} new bulk videos into schedule state queue.`);
-    setActiveTab("dashboard");
+      if (res.ok) {
+        addSecurityLog("INFO", `Scheduled ${jobsToSave.length} new bulk videos into database state queue.`);
+        setTempJobsQueue([]);
+        setIsConfirmationOpen(false);
+        await fetchJobs();
+        setActiveTab("dashboard");
+      } else {
+        const errData = await res.json();
+        alert("Failed to save scheduled jobs: " + (errData.error || "Unknown Error"));
+      }
+    } catch (error) {
+      console.error("Error saving scheduled jobs:", error);
+      alert(error instanceof Error ? error.message : "Network error during job scheduling.");
+    }
   };
 
   // Reset Demo Helper (Extended)
   const handleResetDemo = () => {
-    setJobs(INITIAL_JOBS);
+    setJobs([]);
     handleDisconnect();
     setTempJobsQueue([]);
     setCsvErrors([]);
@@ -1016,342 +1069,33 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     addSecurityLog("INFO", "Reset simulator demo state (Phase 3/4).");
   };
 
-  const startRetryCountdown = (jobId: string, seconds: number, scenario: string) => {
-    setCountdownJobs(prev => ({ ...prev, [jobId]: seconds }));
 
-    const interval = setInterval(() => {
-      setCountdownJobs(prev => {
-        const current = prev[jobId];
-        if (current === undefined) {
-          clearInterval(interval);
-          return prev;
-        }
-        if (current <= 1) {
-          clearInterval(interval);
-          
-          setJobs(jobsList => jobsList.map(j => {
-            if (j.id === jobId) {
-              addSecurityLog("INFO", `Job "${j.fileName}" (${jobId}) retry countdown completed. Re-entering queue worker.`, jobId);
-              return { ...j, status: "SCHEDULED" as JobStatus };
-            }
-            return j;
-          }));
 
-          // Trigger worker execution
-          setTimeout(() => {
-            runWorkerForJob(jobId, scenario);
-          }, 500);
-
-          const updated = { ...prev };
-          delete updated[jobId];
-          return updated;
-        }
-        return { ...prev, [jobId]: current - 1 };
-      });
-    }, 1000);
-  };
-
-  const runWorkerForJob = (targetJobId: string, scenario: string) => {
-    // Find the job inside the state snapshot
-    setJobs(prevJobs => {
-      const job = prevJobs.find(j => j.id === targetJobId);
-      if (!job) return prevJobs;
-
-      setSimulatingPublish(true);
-      setSimulatingJobId(targetJobId);
-      setSimulationLog([`[Worker] Initializing queue worker for job "${job.fileName}"...`]);
-
-      const startTime = new Date().toISOString();
-
-      const transitionState = (nextStatus: JobStatus, logMessage: string, doneCallback?: () => void) => {
-        setJobs(currJobs => currJobs.map(j => {
-          if (j.id === targetJobId) {
-            return { ...j, status: nextStatus };
-          }
-          return j;
-        }));
-        setSimulationLog(prev => [...prev, `[Worker] [${nextStatus}] ${logMessage}`]);
-        addSecurityLog("INFO", `Job "${job.fileName}" (${targetJobId}) status transitioned to ${nextStatus}.`, targetJobId);
-        if (doneCallback) doneCallback();
-      };
-
-      // Step 1: PREPARING
-      setTimeout(() => {
-        transitionState("PREPARING", "Validating video format and metadata standard...");
-
-        // Step 2: Validation checks
-        setTimeout(() => {
-          const targetPage = pages.find(p => p.id === job.pageId);
-
-          // Scenario checks in PREPARING:
-          // Scenario: revoked_token (or if token status is expired already)
-          if (scenario === "revoked_token" || targetPage?.tokenStatus === "Expired") {
-            const completionTime = new Date().toISOString();
-            const attempt: PublishAttempt = {
-              attemptNumber: job.retryCount + 1,
-              startTime,
-              completionTime,
-              errorCode: "META_OAUTH_190",
-              explanation: "Meta access token revoked or expired. Code 190. Please reconnect account.",
-              resultingState: "FACEBOOK_RECONNECT_REQUIRED"
-            };
-
-            setPages(currPages => currPages.map(p => p.id === job.pageId ? { ...p, tokenStatus: "Expired" as const } : p));
-
-            setJobs(currJobs => currJobs.map(j => {
-              if (j.id === targetJobId) {
-                return {
-                  ...j,
-                  status: "FACEBOOK_RECONNECT_REQUIRED" as JobStatus,
-                  errorLog: "Meta API Code 190: Expired Page access token. Re-authorization required.",
-                  attempts: [...(j.attempts || []), attempt]
-                };
-              }
-              return j;
-            }));
-
-            setSimulationLog(prev => [...prev, "[Worker] [ERROR] Meta API Code 190: Revoked token.", "[Worker] Job transitioned to FACEBOOK_RECONNECT_REQUIRED."]);
-            addSecurityLog("ERROR", `Failed executing Job ${targetJobId}: Token expired (Code 190).`, targetJobId);
-            setSimulatingPublish(false);
-            setSimulatingJobId(null);
-            return;
-          }
-
-          // Scenario: missing_permission
-          if (scenario === "missing_permission") {
-            const completionTime = new Date().toISOString();
-            const attempt: PublishAttempt = {
-              attemptNumber: job.retryCount + 1,
-              startTime,
-              completionTime,
-              errorCode: "META_PERMISSION_DENIED",
-              explanation: "Permission 'pages_manage_posts' is missing for this page.",
-              resultingState: "FAILED_PERMANENT"
-            };
-
-            setJobs(currJobs => currJobs.map(j => {
-              if (j.id === targetJobId) {
-                return {
-                  ...j,
-                  status: "FAILED_PERMANENT" as JobStatus,
-                  errorLog: "Meta API Code 200: Permission Denied. Ensure pages_manage_posts is granted.",
-                  attempts: [...(j.attempts || []), attempt]
-                };
-              }
-              return j;
-            }));
-
-            setSimulationLog(prev => [...prev, "[Worker] [ERROR] Meta API Code 200: Missing permission.", "[Worker] Job transitioned to FAILED_PERMANENT."]);
-            addSecurityLog("ERROR", `Failed executing Job ${targetJobId}: Missing Page permission (Code 200).`, targetJobId);
-            setSimulatingPublish(false);
-            setSimulatingJobId(null);
-            return;
-          }
-
-          // Scenario: invalid_format
-          if (scenario === "invalid_format") {
-            const completionTime = new Date().toISOString();
-            const attempt: PublishAttempt = {
-              attemptNumber: job.retryCount + 1,
-              startTime,
-              completionTime,
-              errorCode: "INVALID_VIDEO_FORMAT",
-              explanation: "Video file uses unsupported container, aspect ratio, or audio channels.",
-              resultingState: "FAILED_PERMANENT"
-            };
-
-            setJobs(currJobs => currJobs.map(j => {
-              if (j.id === targetJobId) {
-                return {
-                  ...j,
-                  status: "FAILED_PERMANENT" as JobStatus,
-                  errorLog: "Validation Error: Invalid video format container/aspect ratio.",
-                  attempts: [...(j.attempts || []), attempt]
-                };
-              }
-              return j;
-            }));
-
-            setSimulationLog(prev => [...prev, "[Worker] [ERROR] Validation: Invalid video container format.", "[Worker] Job transitioned to FAILED_PERMANENT."]);
-            addSecurityLog("ERROR", `Failed executing Job ${targetJobId}: Invalid video format.`, targetJobId);
-            setSimulatingPublish(false);
-            setSimulatingJobId(null);
-            return;
-          }
-
-          // Proceeding to UPLOADING_TO_META
-          transitionState("UPLOADING_TO_META", "Streaming raw video chunks to Facebook Graph API reels endpoint...");
-
-          setTimeout(() => {
-            // Scenario: network_failure (on attempt 1)
-            if (scenario === "network_failure" && job.retryCount === 0) {
-              const completionTime = new Date().toISOString();
-              const attempt: PublishAttempt = {
-                attemptNumber: 1,
-                startTime,
-                completionTime,
-                errorCode: "NET_TIMEOUT",
-                explanation: "Connection timed out during file chunk upload stream.",
-                resultingState: "FAILED_RETRYABLE"
-              };
-
-              setJobs(currJobs => currJobs.map(j => {
-                if (j.id === targetJobId) {
-                  return {
-                    ...j,
-                    status: "FAILED_RETRYABLE" as JobStatus,
-                    retryCount: 1,
-                    errorLog: "Network Timeout: Connection lost during stream upload.",
-                    attempts: [...(j.attempts || []), attempt]
-                  };
-                }
-                return j;
-              }));
-
-              setSimulationLog(prev => [...prev, "[Worker] [ERROR] Network Timeout. Transitioned to FAILED_RETRYABLE.", "[Worker] Initiating automatic retry countdown..."]);
-              addSecurityLog("WARN", `Job ${targetJobId} failed temporarily: Connection timeout. Preparing retry...`, targetJobId);
-              setSimulatingPublish(false);
-              setSimulatingJobId(null);
-
-              // Trigger retry countdown of 4 seconds
-              startRetryCountdown(targetJobId, 4, scenario);
-              return;
-            }
-
-            // Proceeding to META_PROCESSING
-            transitionState("META_PROCESSING", "Waiting for Facebook backend transcoding & processing queue...");
-
-            setTimeout(() => {
-              // Scenario: meta_processing_delay (on attempt 1)
-              if (scenario === "meta_processing_delay" && job.retryCount === 0) {
-                const completionTime = new Date().toISOString();
-                const attempt: PublishAttempt = {
-                  attemptNumber: 1,
-                  startTime,
-                  completionTime,
-                  errorCode: "META_PROCESSING_TIMEOUT",
-                  explanation: "Meta took longer than 60 seconds to process video encoding.",
-                  resultingState: "FAILED_RETRYABLE"
-                };
-
-                setJobs(currJobs => currJobs.map(j => {
-                  if (j.id === targetJobId) {
-                    return {
-                      ...j,
-                      status: "FAILED_RETRYABLE" as JobStatus,
-                      retryCount: 1,
-                      errorLog: "API Timeout: Meta processing delay exceeded thresholds.",
-                      attempts: [...(j.attempts || []), attempt]
-                    };
-                  }
-                  return j;
-                }));
-
-                setSimulationLog(prev => [...prev, "[Worker] [ERROR] Meta processing delay exceeded. Transitioned to FAILED_RETRYABLE.", "[Worker] Initiating automatic retry countdown..."]);
-                addSecurityLog("WARN", `Job ${targetJobId} failed temporarily: Meta processing timeout. Preparing retry...`, targetJobId);
-                setSimulatingPublish(false);
-                setSimulatingJobId(null);
-
-                startRetryCountdown(targetJobId, 4, scenario);
-                return;
-              }
-
-              // Proceeding to PUBLISHING
-              transitionState("PUBLISHING", "Sending final publish confirmation payload to Page node...");
-
-              setTimeout(() => {
-                // Scenario: rate_limit (fails on attempts 1 and 2, succeeds on attempt 3)
-                if (scenario === "rate_limit" && job.retryCount < 2) {
-                  const currentAttempt = job.retryCount + 1;
-                  const completionTime = new Date().toISOString();
-                  const attempt: PublishAttempt = {
-                    attemptNumber: currentAttempt,
-                    startTime,
-                    completionTime,
-                    errorCode: "META_RATE_LIMIT",
-                    explanation: `Graph API rate limit exceeded (Code 4). Calls restricted.`,
-                    resultingState: "FAILED_RETRYABLE"
-                  };
-
-                  setJobs(currJobs => currJobs.map(j => {
-                    if (j.id === targetJobId) {
-                      return {
-                        ...j,
-                        status: "FAILED_RETRYABLE" as JobStatus,
-                        retryCount: currentAttempt,
-                        errorLog: `Rate Limit Exceeded (Code 4). Attempt ${currentAttempt}/3 failed.`,
-                        attempts: [...(j.attempts || []), attempt]
-                      };
-                    }
-                    return j;
-                  }));
-
-                  setSimulationLog(prev => [...prev, `[Worker] [ERROR] Rate limit reached. Transitioned to FAILED_RETRYABLE.`, `[Worker] Initiating automatic retry countdown...`]);
-                  addSecurityLog("WARN", `Job ${targetJobId} failed temporarily: Rate limit. Preparing retry...`, targetJobId);
-                  setSimulatingPublish(false);
-                  setSimulatingJobId(null);
-
-                  startRetryCountdown(targetJobId, 4, scenario);
-                  return;
-                }
-
-                // Success! PUBLISHED
-                const mockPostId = Math.floor(1000000000000 + Math.random() * 9000000000000).toString();
-                const completionTime = new Date().toISOString();
-                const attempt: PublishAttempt = {
-                  attemptNumber: job.retryCount + 1,
-                  startTime,
-                  completionTime,
-                  errorCode: null,
-                  explanation: `Successfully published to Page. Post ID: ${mockPostId}`,
-                  resultingState: "PUBLISHED"
-                };
-
-                setJobs(currJobs => currJobs.map(j => {
-                  if (j.id === targetJobId) {
-                    return {
-                      ...j,
-                      status: "PUBLISHED" as JobStatus,
-                      metaPostId: mockPostId,
-                      attempts: [...(j.attempts || []), attempt]
-                    };
-                  }
-                  return j;
-                }));
-
-                setSimulationLog(prev => [
-                  ...prev,
-                  `[Worker] Success! Published video to page. Facebook Post ID: ${mockPostId}`,
-                  `[Worker] Job transitioned to PUBLISHED.`
-                ]);
-                addSecurityLog("INFO", `Job "${job.fileName}" (${targetJobId}) successfully published. Post ID: ${mockPostId}`, targetJobId);
-                setSimulatingPublish(false);
-                setSimulatingJobId(null);
-
-              }, 1000); // PUBLISHING delay
-
-            }, 1500); // META_PROCESSING delay
-
-          }, 1200); // UPLOADING_TO_META delay
-
-        }, 1000); // PREPARING checks delay
-
-      }, 1000); // PREPARING state transition
-
-      return prevJobs;
-    });
-  };
-
-  const handleSimulateQueueWorker = () => {
-    const pendingJobs = jobs.filter((j) => j.status === "SCHEDULED" || j.status === "FAILED_RETRYABLE");
-    if (pendingJobs.length === 0) {
-      setSimulationLog(["No SCHEDULED or retryable jobs found to execute."]);
+  const handleSimulateQueueWorker = async () => {
+    if (currentUser.role !== 'ADMIN' || process.env.NODE_ENV === 'production') {
+      alert("Unauthorized: Worker simulation is disabled in this environment.");
       return;
     }
-    
-    // Pick the first one
-    const targetJob = pendingJobs[0];
-    runWorkerForJob(targetJob.id, simulationScenario);
+    setSimulatingPublish(true);
+    setSimulationLog(["[Worker] Activating queue worker execution run..."]);
+    try {
+      const res = await fetch("/api/admin/worker", {
+        method: "POST"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSimulationLog(data.logs || []);
+        await fetchJobs();
+      } else {
+        const errData = await res.json();
+        setSimulationLog([`[Worker] [ERROR] Run failed: ${errData.error || "Unknown Error"}`]);
+      }
+    } catch (error) {
+      console.error("Error triggering queue worker:", error);
+      setSimulationLog(["[Worker] [ERROR] Network error."]);
+    } finally {
+      setSimulatingPublish(false);
+    }
   };
 
   const handleSyncPages = async (accountId?: string) => {
@@ -1417,15 +1161,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       });
       if (res.ok) {
         await fetchConnectionAndPages();
-        setJobs((prev) =>
-          prev.map((j) => {
-            if (j.pageId === pageId && j.status === "FACEBOOK_RECONNECT_REQUIRED") {
-              addSecurityLog("INFO", `Token reconnected. Job "${j.fileName}" (${j.id}) reset from FACEBOOK_RECONNECT_REQUIRED to SCHEDULED.`, j.id);
-              return { ...j, status: "SCHEDULED" as JobStatus };
-            }
-            return j;
-          })
-        );
+        await fetchJobs();
+        alert("Facebook reconnection succeeded.");
         addSecurityLog("INFO", `Reconnected Page Access Token for Page ID: ${pageId} via Mock OAuth.`);
       }
     } catch (error) {
@@ -1442,14 +1179,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       });
       if (res.ok) {
         await fetchConnectionAndPages();
-        setJobs(prev => prev.map(j => {
-          if (j.status === "FACEBOOK_RECONNECT_REQUIRED") {
-            addSecurityLog("INFO", `Token reconnected. Job "${j.fileName}" (${j.id}) reset from FACEBOOK_RECONNECT_REQUIRED to SCHEDULED.`, j.id);
-            return { ...j, status: "SCHEDULED" as JobStatus };
-          }
-          return j;
-          addSecurityLog("INFO", "Reconnected all expired Facebook Pages via mock OAuth.");
-        }));
+        await fetchJobs();
+        alert("Facebook reconnection succeeded.");
+        addSecurityLog("INFO", "Reconnected all expired Facebook Pages via mock OAuth.");
       }
     } catch (error) {
       console.error("Error reconnecting all:", error);
@@ -1478,54 +1210,77 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     }
   };
 
-  const handleCancelJob = (jobId: string) => {
-    // Clear countdown if any
-    setCountdownJobs(prev => {
-      const updated = { ...prev };
-      delete updated[jobId];
-      return updated;
-    });
+  const handleCancelJob = async (jobId: string) => {
+    try {
+      setCountdownJobs(prev => {
+        const updated = { ...prev };
+        delete updated[jobId];
+        return updated;
+      });
 
-    setJobs(prev => prev.map(j => {
-      if (j.id === jobId) {
-        addSecurityLog("INFO", `Job "${j.fileName}" (${jobId}) was cancelled by the administrator. Status transitioned to CANCELLED.`, jobId);
-        return { ...j, status: "CANCELLED" as JobStatus };
+      const res = await fetch(`/api/facebook/jobs/${jobId}/cancel`, {
+        method: "POST"
+      });
+
+      if (res.ok) {
+        addSecurityLog("INFO", `Job "${jobId}" was cancelled.`, jobId);
+        await fetchJobs();
+      } else {
+        const errData = await res.json();
+        alert("Failed to cancel job: " + (errData.error || "Unknown Error"));
       }
-      return j;
-    }));
+    } catch (error) {
+      console.error("Error cancelling job:", error);
+    }
   };
 
-  const handleRetryJobManual = (jobId: string) => {
-    // Clear countdown if any
-    setCountdownJobs(prev => {
-      const updated = { ...prev };
-      delete updated[jobId];
-      return updated;
-    });
+  const handleRetryJobManual = async (jobId: string) => {
+    try {
+      setCountdownJobs(prev => {
+        const updated = { ...prev };
+        delete updated[jobId];
+        return updated;
+      });
 
-    setJobs(prev => prev.map(j => {
-      if (j.id === jobId) {
-        addSecurityLog("INFO", `Administrator manually triggered retry for Job "${j.fileName}" (${jobId}). Resetting attempts.`, jobId);
-        return { ...j, status: "SCHEDULED" as JobStatus, retryCount: 0 };
+      // Reschedule job to SCHEDULED
+      const retryRes = await fetch(`/api/facebook/jobs/${jobId}/retry`, {
+        method: "POST"
+      });
+
+      if (!retryRes.ok) {
+        const errData = await retryRes.json();
+        alert("Failed to retry job: " + (errData.error || "Unknown Error"));
+        return;
       }
-      return j;
-    }));
 
-    // Trigger worker execution
-    setTimeout(() => {
-      runWorkerForJob(jobId, simulationScenario);
-    }, 500);
+      addSecurityLog("INFO", `Rescheduled Job "${jobId}" back to SCHEDULED.`, jobId);
+
+      // Instantly trigger mock worker execution on this job
+      setSimulatingJobId(jobId);
+      setSimulatingPublish(true);
+      setSimulationLog([`[Worker] Initiating manual trigger run for Job ${jobId}...`]);
+
+      const triggerRes = await fetch(`/api/facebook/jobs/${jobId}/trigger`, {
+        method: "POST"
+      });
+
+      if (triggerRes.ok) {
+        const data = await triggerRes.json();
+        setSimulationLog(data.logs || []);
+        await fetchJobs();
+      } else {
+        const errData = await triggerRes.json();
+        setSimulationLog(prev => [...prev, `[ERROR] Trigger failed: ${errData.error || "Unknown Error"}`]);
+      }
+    } catch (error) {
+      console.error("Error retrying job:", error);
+    } finally {
+      setSimulatingJobId(null);
+      setSimulatingPublish(false);
+    }
   };
 
-  const handleDeleteJob = (id: string) => {
-    setCountdownJobs(prev => {
-      const updated = { ...prev };
-      delete updated[id];
-      return updated;
-    });
-    setJobs((prev) => prev.filter((j) => j.id !== id));
-    addSecurityLog("INFO", `Deleted scheduled job: ${id}.`);
-  };
+
 
   // Stat calculations
   const countPages = pages.length;
@@ -1664,53 +1419,55 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           </nav>
 
           {/* Quick Simulation Options */}
-          <div className="mt-auto pt-6 border-t border-zinc-800">
-            <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-500 mb-3">Simulation Console</h3>
-            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3.5 flex flex-col gap-3">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-zinc-400">Trigger Expired Token</span>
-                <input
-                  type="checkbox"
-                  checked={simulateTokenExpiry}
-                  onChange={handleToggleTokenExpiry}
-                  className="rounded bg-zinc-800 border-zinc-700 text-indigo-650 focus:ring-indigo-650 h-4 w-4"
-                />
-              </div>
-              <div className="flex flex-col gap-1 text-xs">
-                <span className="text-zinc-400 font-medium">Scenario</span>
-                <select
-                  value={simulationScenario}
-                  onChange={(e) => setSimulationScenario(e.target.value as "success" | "network_failure" | "meta_processing_delay" | "rate_limit" | "invalid_format" | "revoked_token" | "missing_permission")}
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 text-[11px] text-white focus:outline-none focus:border-indigo-650 font-sans"
+          {currentUser.role === 'ADMIN' && process.env.NODE_ENV !== 'production' && (
+            <div className="mt-auto pt-6 border-t border-zinc-800">
+              <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-500 mb-3">Simulation Console</h3>
+              <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3.5 flex flex-col gap-3">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-zinc-400">Trigger Expired Token</span>
+                  <input
+                    type="checkbox"
+                    checked={simulateTokenExpiry}
+                    onChange={handleToggleTokenExpiry}
+                    className="rounded bg-zinc-800 border-zinc-700 text-indigo-650 focus:ring-indigo-650 h-4 w-4"
+                  />
+                </div>
+                <div className="flex flex-col gap-1 text-xs">
+                  <span className="text-zinc-400 font-medium">Scenario</span>
+                  <select
+                    value={simulationScenario}
+                    onChange={(e) => setSimulationScenario(e.target.value as "success" | "network_failure" | "meta_processing_delay" | "rate_limit" | "invalid_format" | "revoked_token" | "missing_permission")}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 text-[11px] text-white focus:outline-none focus:border-indigo-650 font-sans"
+                  >
+                    <option value="success">Success Scenario</option>
+                    <option value="network_failure">Network Failure (Retryable)</option>
+                    <option value="meta_processing_delay">Processing Delay (Retryable)</option>
+                    <option value="rate_limit">Rate Limit (Retryable)</option>
+                    <option value="invalid_format">Invalid Video Format (Perm)</option>
+                    <option value="revoked_token">Revoked OAuth Token (Reconnect)</option>
+                    <option value="missing_permission">Missing Page Permission (Perm)</option>
+                  </select>
+                </div>
+                <button
+                  onClick={handleSimulateQueueWorker}
+                  disabled={simulatingPublish}
+                  className="w-full bg-indigo-650 hover:bg-indigo-700 disabled:bg-zinc-850 disabled:text-zinc-500 font-semibold text-xs text-white py-2 px-3 rounded transition shadow-md shadow-indigo-600/10 flex items-center justify-center gap-1.5"
                 >
-                  <option value="success">Success Scenario</option>
-                  <option value="network_failure">Network Failure (Retryable)</option>
-                  <option value="meta_processing_delay">Processing Delay (Retryable)</option>
-                  <option value="rate_limit">Rate Limit (Retryable)</option>
-                  <option value="invalid_format">Invalid Video Format (Perm)</option>
-                  <option value="revoked_token">Revoked OAuth Token (Reconnect)</option>
-                  <option value="missing_permission">Missing Page Permission (Perm)</option>
-                </select>
+                  {simulatingPublish ? (
+                    <>
+                      <span className="animate-spin h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full"></span>
+                      Running...
+                    </>
+                  ) : (
+                    "Simulate Queue Worker"
+                  )}
+                </button>
               </div>
-              <button
-                onClick={handleSimulateQueueWorker}
-                disabled={simulatingPublish}
-                className="w-full bg-indigo-650 hover:bg-indigo-700 disabled:bg-zinc-850 disabled:text-zinc-500 font-semibold text-xs text-white py-2 px-3 rounded transition shadow-md shadow-indigo-600/10 flex items-center justify-center gap-1.5"
-              >
-                {simulatingPublish ? (
-                  <>
-                    <span className="animate-spin h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full"></span>
-                    Running...
-                  </>
-                ) : (
-                  "Simulate Queue Worker"
-                )}
-              </button>
             </div>
-          </div>
+          )}
 
           {/* Profile & Logout Panel */}
-          <div className="mt-6 border-t border-zinc-850 pt-4 flex flex-col gap-3">
+          <div className={`border-t border-zinc-850 pt-4 flex flex-col gap-3 ${currentUser.role === 'ADMIN' && process.env.NODE_ENV !== 'production' ? 'mt-6' : 'mt-auto'}`}>
             <div className="flex flex-col">
               <span className="text-xs font-semibold text-zinc-250 truncate">{currentUser.name}</span>
               <span className="text-[10px] text-zinc-500 truncate mt-0.5">{currentUser.email}</span>
@@ -1960,7 +1717,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                           </div>
                                         ) : (
                                           <div className="flex justify-end gap-1">
-                                            {(job.status === "SCHEDULED" || job.status === "FAILED_RETRYABLE") && (
+                                            {(["DRAFT", "MEDIA_UPLOADED", "SCHEDULED", "FAILED_RETRYABLE"].includes(job.status) ||
+                                              (job.status === "PREPARING" && !job.providerReference && !job.providerProcessingId)) && (
                                               <button
                                                 onClick={() => handleCancelJob(job.id)}
                                                 className="text-zinc-400 hover:text-amber-500 transition px-2 py-1 rounded hover:bg-amber-500/10 text-xs font-semibold"
@@ -1968,7 +1726,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                                 Cancel
                                               </button>
                                             )}
-                                            {(job.status === "FAILED_RETRYABLE" || job.status === "FAILED_PERMANENT" || job.status === "CANCELLED" || job.status === "FACEBOOK_RECONNECT_REQUIRED") && (
+                                            {(job.status === "FAILED_RETRYABLE" || job.status === "FACEBOOK_RECONNECT_REQUIRED") && (
                                               <button
                                                 onClick={() => handleRetryJobManual(job.id)}
                                                 className="text-indigo-400 hover:text-indigo-300 transition px-2 py-1 rounded hover:bg-indigo-500/10 text-xs font-semibold"
@@ -1981,12 +1739,6 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                               className="text-zinc-400 hover:text-white transition px-2 py-1 rounded hover:bg-zinc-800 text-xs font-semibold"
                                             >
                                               History
-                                            </button>
-                                            <button
-                                              onClick={() => handleDeleteJob(job.id)}
-                                              className="text-zinc-600 hover:text-rose-500 transition px-2 py-1 rounded hover:bg-rose-500/10 text-xs"
-                                            >
-                                              Delete
                                             </button>
                                           </div>
                                         )}

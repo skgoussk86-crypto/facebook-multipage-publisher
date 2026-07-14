@@ -723,3 +723,33 @@ export async function getAuditLogs(
     return [];
   }
 }
+
+export async function getVideoJobs(userId: string) {
+  try {
+    return await prisma.videoJob.findMany({
+      where: {
+        userId
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+  } catch (error) {
+    logError(`Error fetching video jobs: ${String(error)}`);
+    return [];
+  }
+}
+
+export async function getVideoJob(userId: string, jobId: string) {
+  try {
+    return await prisma.videoJob.findFirst({
+      where: {
+        id: jobId,
+        userId
+      }
+    });
+  } catch (error) {
+    logError(`Error fetching video job ${jobId}: ${String(error)}`);
+    return null;
+  }
+}
