@@ -81,6 +81,7 @@ model User {
   facebookPages    FacebookPage[]
   videoJobs        VideoJob[]
   auditLogs        AuditLog[]
+  uploadAssets     UploadAsset[]
   createdAt        DateTime           @default(now()) @db.Timestamptz
   updatedAt        DateTime           @updatedAt @db.Timestamptz
 
@@ -130,7 +131,8 @@ model VideoJob {
   id                    String                 @id @default(uuid()) @db.Uuid
   pageId                String                 @db.Uuid
   facebookPage          FacebookPage           @relation(fields: [pageId], references: [id], onDelete: Cascade)
-  gcsVideoUri           String                 @db.Text
+  gcsVideoUri           String?                @db.Text
+  storageUri            String?                @db.Text
   gcsThumbnailUri       String?                @db.Text
   englishTitle          String                 @db.VarChar(255)
   englishCaption        String                 @db.Text
@@ -160,6 +162,8 @@ model VideoJob {
   errorLog              String?                @db.Text
   userId                String                 @db.Uuid
   user                  User                   @relation(fields: [userId], references: [id])
+  uploadAssetId         String?                @db.Uuid
+  uploadAsset           UploadAsset?           @relation(fields: [uploadAssetId], references: [id], onDelete: Restrict)
   createdAt             DateTime               @default(now()) @db.Timestamptz
   updatedAt             DateTime               @updatedAt @db.Timestamptz
 
@@ -167,6 +171,7 @@ model VideoJob {
   @@index([scheduledTimeUTC])
   @@index([pageId])
   @@index([userId])
+  @@index([uploadAssetId])
 }
 
 model AppConfiguration {
@@ -191,4 +196,102 @@ model AuditLog {
   createdAt DateTime @default(now()) @db.Timestamptz
 
   @@index([userId])
+}
+
+enum StorageProvider {
+  R2
+}
+
+enum UploadStatus {
+  REQUESTED
+  UPLOADING
+  UPLOADED
+  VALIDATING
+  VALIDATED
+  FAILED
+  ABORTED
+  EXPIRED
+  OBJECT_DELETED
+}
+
+model UploadAsset {
+  id                 String          @id @default(uuid()) @db.Uuid
+  userId             String          @db.Uuid
+  user               User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  provider           StorageProvider @default(R2)
+  bucket             String          @db.VarChar(255)
+  objectKey          String          @db.VarChar(512)
+  originalName       String          @db.VarChar(255)
+  expectedSize       BigInt          @db.BigInt
+  actualSize         BigInt?         @db.BigInt
+  declaredMimeType   String          @db.VarChar(100)
+  detectedMimeType   String?         @db.VarChar(100)
+  checksum           String?         @db.VarChar(255)
+  objectETag         String?         @db.VarChar(255)
+  status             UploadStatus    @default(REQUESTED)
+  failureCode        String?         @db.VarChar(100)
+  failureMessage     String?         @db.Text
+  idempotencyKey     String          @db.VarChar(255)
+  requestFingerprint String          @db.VarChar(64)
+
+  // Validation lease locking fields
+  validationLockToken     String?   @db.Uuid
+  validationLockedAt      DateTime? @db.Timestamptz
+  validationLockExpiresAt DateTime? @db.Timestamptz
+  validationAttemptCount  Int       @default(0) @db.Integer
+  validationMaxAttempts   Int       @default(3) @db.Integer
+  validationStartedAt     DateTime? @db.Timestamptz
+
+  // Media metadata fields
+  durationMs      Int?    @db.Integer
+  containerFormat String? @db.VarChar(50)
+  videoCodec      String? @db.VarChar(50)
+  audioCodec      String? @db.VarChar(50)
+  width           Int?    @db.Integer
+  height          Int?    @db.Integer
+  frameRate       Float?
+
+  uploadExpiresAt DateTime  @db.Timestamptz
+  uploadedAt      DateTime? @db.Timestamptz
+  validatedAt     DateTime? @db.Timestamptz
+  retentionUntil  DateTime? @db.Timestamptz
+  objectDeletedAt DateTime? @db.Timestamptz
+
+  videoJobs      VideoJob[]
+  uploadAttempts UploadAttempt[]
+  uploadSession  UploadSession?
+  createdAt      DateTime        @default(now()) @db.Timestamptz
+  updatedAt      DateTime        @updatedAt @db.Timestamptz
+
+  @@unique([userId, idempotencyKey])
+  @@unique([provider, bucket, objectKey])
+  @@index([userId, status])
+  @@index([status, uploadExpiresAt])
+  @@index([status, retentionUntil])
+  @@index([status, validationLockExpiresAt])
+}
+
+model UploadAttempt {
+  id            String      @id @default(uuid()) @db.Uuid
+  uploadAssetId String      @db.Uuid
+  uploadAsset   UploadAsset @relation(fields: [uploadAssetId], references: [id], onDelete: Restrict)
+  attemptNumber Int         @db.Integer
+  status        String      @db.VarChar(50)
+  errorLog      String?     @db.Text
+  createdAt     DateTime    @default(now()) @db.Timestamptz
+
+  @@unique([uploadAssetId, attemptNumber])
+  @@index([uploadAssetId, createdAt])
+}
+
+model UploadSession {
+  uploadAssetId              String      @id @db.Uuid
+  uploadAsset                UploadAsset @relation(fields: [uploadAssetId], references: [id], onDelete: Restrict)
+  encryptionKeyVersion       String      @db.VarChar(50)
+  encryptedProviderSessionId String      @db.Text
+  encryptedCompletedParts    String      @db.Text
+  expiresAt                  DateTime    @db.Timestamptz
+  lastActivityAt             DateTime    @db.Timestamptz
+  createdAt                  DateTime    @default(now()) @db.Timestamptz
+  updatedAt                  DateTime    @updatedAt @db.Timestamptz
 }
