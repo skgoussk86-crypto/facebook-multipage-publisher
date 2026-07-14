@@ -7,6 +7,10 @@ export * from './storage-adapter';
 export * from './storage-config';
 export * from './cloudflare-r2-adapter';
 export * from './in-memory-fake-adapter';
+export * from './upload-session-encryption';
+export * from './upload-state-service';
+export * from './upload-session-service';
+
 
 let instance: StorageAdapter | null = null;
 
