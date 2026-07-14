@@ -1,5 +1,5 @@
 import { Readable } from 'stream';
-import { StorageAdapter, CompletedPart, ObjectMetadata } from './storage-adapter';
+import { StorageAdapter, CompletedPart, ObjectMetadata, MultipartUploadNotFoundError } from './storage-adapter';
 
 interface FakeUpload {
   bucket: string;
@@ -19,6 +19,12 @@ interface FakeObject {
 export class InMemoryFakeStorageAdapter implements StorageAdapter {
   private activeUploads = new Map<string, FakeUpload>();
   private storedObjects = new Map<string, FakeObject>();
+
+  public completeCallsCount = 0;
+  public abortCallsCount = 0;
+  public simulateDelayMs = 0;
+  public simulateGenericFailure = false;
+  public simulateMultipartNotFound = false;
 
   constructor() {
     if (process.env.NODE_ENV === 'production') {
@@ -96,9 +102,23 @@ export class InMemoryFakeStorageAdapter implements StorageAdapter {
     uploadId: string,
     parts: CompletedPart[]
   ): Promise<ObjectMetadata> {
+    this.completeCallsCount++;
+
+    if (this.simulateDelayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, this.simulateDelayMs));
+    }
+
+    if (this.simulateGenericFailure) {
+      throw new Error('Fake generic provider complete failure.');
+    }
+
+    if (this.simulateMultipartNotFound) {
+      throw new MultipartUploadNotFoundError();
+    }
+
     const upload = this.activeUploads.get(uploadId);
     if (!upload) {
-      throw new Error('Upload session not found.');
+      throw new MultipartUploadNotFoundError();
     }
 
     // Verify parts matches the input parts list
@@ -153,9 +173,23 @@ export class InMemoryFakeStorageAdapter implements StorageAdapter {
     key: string,
     uploadId: string
   ): Promise<void> {
+    this.abortCallsCount++;
+
+    if (this.simulateDelayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, this.simulateDelayMs));
+    }
+
+    if (this.simulateGenericFailure) {
+      throw new Error('Fake generic provider abort failure.');
+    }
+
+    if (this.simulateMultipartNotFound) {
+      throw new MultipartUploadNotFoundError();
+    }
+
     const upload = this.activeUploads.get(uploadId);
     if (!upload) {
-      throw new Error('Upload session not found.');
+      throw new MultipartUploadNotFoundError();
     }
     this.activeUploads.delete(uploadId);
   }

@@ -11,7 +11,7 @@ import {
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { StorageAdapter, CompletedPart, ObjectMetadata } from './storage-adapter';
+import { StorageAdapter, CompletedPart, ObjectMetadata, MultipartUploadNotFoundError } from './storage-adapter';
 import { StorageConfig, validateR2Config } from './storage-config';
 
 export class CloudflareR2StorageAdapter implements StorageAdapter {
@@ -99,6 +99,19 @@ export class CloudflareR2StorageAdapter implements StorageAdapter {
     }));
   }
 
+  private async executeWithTimeout<T>(
+    operation: (abortSignal: AbortSignal) => Promise<T>,
+    timeoutMs: number = 120000
+  ): Promise<T> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await operation(controller.signal);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   async completeMultipartUpload(
     bucket: string,
     key: string,
@@ -117,7 +130,18 @@ export class CloudflareR2StorageAdapter implements StorageAdapter {
         })),
       },
     });
-    await this.s3.send(command);
+
+    try {
+      await this.executeWithTimeout(async (abortSignal) => {
+        await this.s3.send(command, { abortSignal });
+      }, 120000);
+    } catch (error: unknown) {
+      const err = error as { name?: string; code?: string };
+      if (err.name === 'NoSuchUpload' || err.code === 'NoSuchUpload') {
+        throw new MultipartUploadNotFoundError();
+      }
+      throw error;
+    }
 
     // R2 complete upload returns Location/Bucket/Key/ETag.
     // Fetch head of the object to get accurate size and MIME details.
@@ -139,7 +163,18 @@ export class CloudflareR2StorageAdapter implements StorageAdapter {
       Key: key,
       UploadId: uploadId,
     });
-    await this.s3.send(command);
+
+    try {
+      await this.executeWithTimeout(async (abortSignal) => {
+        await this.s3.send(command, { abortSignal });
+      }, 120000);
+    } catch (error: unknown) {
+      const err = error as { name?: string; code?: string };
+      if (err.name === 'NoSuchUpload' || err.code === 'NoSuchUpload') {
+        throw new MultipartUploadNotFoundError();
+      }
+      throw error;
+    }
   }
 
   async headObject(bucket: string, key: string): Promise<ObjectMetadata | null> {
@@ -149,7 +184,9 @@ export class CloudflareR2StorageAdapter implements StorageAdapter {
         Bucket: bucket,
         Key: key,
       });
-      const response = await this.s3.send(command);
+      const response = await this.executeWithTimeout(async (abortSignal) => {
+        return await this.s3.send(command, { abortSignal });
+      }, 120000);
       return {
         bucket,
         objectKey: key,

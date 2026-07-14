@@ -1,10 +1,11 @@
-import { UploadStatus } from '@prisma/client';
+import { UploadStatus, Prisma, UploadFinalizationOperation } from '@prisma/client';
 import { prisma } from '../prisma-client';
 import {
   NotFoundError,
   ForbiddenOwnershipError,
   InvalidStateTransitionError,
 } from './upload-session-encryption';
+import { FinalizationClaim } from './finalization-claim-service';
 
 const LEGAL_TRANSITIONS: Record<UploadStatus, Set<UploadStatus>> = {
   [UploadStatus.REQUESTED]: new Set([
@@ -245,5 +246,125 @@ export class UploadStateService {
     });
 
     return serializeBigInt(result);
+  }
+
+  static async transitionWithFinalizationClaim(
+    claim: FinalizationClaim,
+    expectedStatus: UploadStatus,
+    targetStatus: UploadStatus,
+    metadataUpdates?: {
+      actualSize?: bigint;
+      objectETag?: string;
+      uploadedAt?: Date;
+    }
+  ): Promise<void> {
+    await prisma.$transaction(async (tx) => {
+      await this.transitionWithFinalizationClaimTx(
+        tx,
+        claim,
+        expectedStatus,
+        targetStatus,
+        metadataUpdates
+      );
+    });
+  }
+
+  static async transitionWithFinalizationClaimTx(
+    tx: Prisma.TransactionClient,
+    claim: FinalizationClaim,
+    expectedStatus: UploadStatus,
+    targetStatus: UploadStatus,
+    metadataUpdates?: {
+      actualSize?: bigint;
+      objectETag?: string;
+      uploadedAt?: Date;
+    }
+  ): Promise<void> {
+    // Verify transition validity
+    if (!canTransitionUpload(expectedStatus, targetStatus)) {
+      throw new InvalidStateTransitionError(
+        `Cannot transition upload asset from status ${expectedStatus} to ${targetStatus}.`
+      );
+    }
+
+    // Validate the exact operation-transition matrix
+    const isComplete = claim.operation === UploadFinalizationOperation.COMPLETE;
+    const isRecovery = claim.mode === 'COMPLETION_RECOVERY';
+
+    if (isRecovery) {
+      if (expectedStatus !== UploadStatus.UPLOADED || targetStatus !== UploadStatus.VALIDATING) {
+        throw new InvalidStateTransitionError(
+          `Completion recovery claim does not authorize transition from ${expectedStatus} to ${targetStatus}. Only UPLOADED -> VALIDATING is allowed.`
+        );
+      }
+    } else if (isComplete) {
+      const isAllowed =
+        (expectedStatus === UploadStatus.UPLOADING && targetStatus === UploadStatus.UPLOADED) ||
+        (expectedStatus === UploadStatus.UPLOADED && targetStatus === UploadStatus.VALIDATING);
+      if (!isAllowed) {
+        throw new InvalidStateTransitionError(
+          `COMPLETE claim does not authorize transition from ${expectedStatus} to ${targetStatus}.`
+        );
+      }
+    } else {
+      // ABORT
+      const isAllowed =
+        (expectedStatus === UploadStatus.REQUESTED && targetStatus === UploadStatus.ABORTED) ||
+        (expectedStatus === UploadStatus.UPLOADING && targetStatus === UploadStatus.ABORTED);
+      if (!isAllowed) {
+        throw new InvalidStateTransitionError(
+          `ABORT claim does not authorize transition from ${expectedStatus} to ${targetStatus}.`
+        );
+      }
+    }
+
+    const dataUpdate: Record<string, unknown> = {
+      status: targetStatus,
+    };
+
+    if (metadataUpdates) {
+      if (metadataUpdates.actualSize !== undefined) {
+        dataUpdate.actualSize = metadataUpdates.actualSize;
+      }
+      if (metadataUpdates.objectETag !== undefined) {
+        dataUpdate.objectETag = metadataUpdates.objectETag;
+      }
+      if (metadataUpdates.uploadedAt !== undefined) {
+        dataUpdate.uploadedAt = metadataUpdates.uploadedAt;
+      }
+    }
+
+    // Fenced conditional update
+    const updateCount = await tx.uploadAsset.updateMany({
+      where: {
+        id: claim.assetId,
+        userId: claim.userId,
+        finalizationOperation: claim.operation,
+        finalizationLockToken: claim.lockToken,
+        finalizationLockExpiresAt: { gt: new Date() },
+        status: expectedStatus,
+      },
+      data: dataUpdate,
+    });
+
+    if (updateCount.count === 0) {
+      throw new FencingError();
+    }
+
+    // Write state-transition audit log inside the same transaction
+    await tx.auditLog.create({
+      data: {
+        action: 'FINALIZATION_STATE_TRANSITIONED',
+        details: `Transitioned asset ${claim.assetId} status from ${expectedStatus} to ${targetStatus}.`,
+        userId: claim.userId,
+      },
+    });
+  }
+}
+
+export class FencingError extends Error {
+  constructor(message: string = 'Fencing assertion failed: lock token mismatch or lease expired.') {
+    super(message);
+    this.name = 'FencingError';
   }
 }

@@ -1,5 +1,12 @@
 import { Readable } from 'stream';
 
+export class MultipartUploadNotFoundError extends Error {
+  constructor() {
+    super('Multipart upload session was not found.');
+    this.name = 'MultipartUploadNotFoundError';
+  }
+}
+
 export interface CompletedPart {
   partNumber: number;
   etag: string;
@@ -32,6 +39,10 @@ export interface StorageAdapter {
     uploadId: string
   ): Promise<CompletedPart[]>;
 
+  /**
+   * Completes a multipart upload on the provider.
+   * @throws {MultipartUploadNotFoundError} if the upload session does not exist.
+   */
   completeMultipartUpload(
     bucket: string,
     key: string,
@@ -39,6 +50,10 @@ export interface StorageAdapter {
     parts: CompletedPart[]
   ): Promise<ObjectMetadata>;
 
+  /**
+   * Aborts a multipart upload on the provider.
+   * @throws {MultipartUploadNotFoundError} if the upload session does not exist.
+   */
   abortMultipartUpload(
     bucket: string,
     key: string,
