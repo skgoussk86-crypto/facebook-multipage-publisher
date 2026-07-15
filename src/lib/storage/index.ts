@@ -13,6 +13,7 @@ export * from './upload-session-service';
 export * from './upload-initiation-service';
 export * from './upload-api-errors';
 export * from './finalization-claim-service';
+export * from './upload-finalization-service';
 
 
 

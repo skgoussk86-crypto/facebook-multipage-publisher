@@ -8,6 +8,8 @@ import {
   InvalidMultipartMetadataError,
   ConfigurationError,
 } from './upload-session-encryption';
+import { FinalizationOperationConflictError, FinalizationInProgressError } from './finalization-claim-service';
+import { MultipartUploadNotFoundError } from './storage-adapter';
 
 export function handleUploadApiError(error: unknown) {
   console.error('Upload API Error:', error);
@@ -56,6 +58,18 @@ export function handleUploadApiError(error: unknown) {
       { error: isEtag ? 'INVALID_ETAG' : 'INVALID_PART_NUMBER' },
       { status: 400 }
     );
+  }
+
+  if (error instanceof FinalizationOperationConflictError) {
+    return NextResponse.json({ error: 'FINALIZATION_OPERATION_CONFLICT' }, { status: 409 });
+  }
+
+  if (error instanceof FinalizationInProgressError) {
+    return NextResponse.json({ error: 'FINALIZATION_IN_PROGRESS' }, { status: 409 });
+  }
+
+  if (error instanceof MultipartUploadNotFoundError) {
+    return NextResponse.json({ error: 'MULTIPART_NOT_FOUND' }, { status: 502 });
   }
 
   if (error instanceof ConfigurationError) {
