@@ -14,6 +14,9 @@ export * from './upload-initiation-service';
 export * from './upload-api-errors';
 export * from './finalization-claim-service';
 export * from './upload-finalization-service';
+export * from './media-probe';
+export * from './ffprobe-media-probe';
+export * from './video-validation-service';
 
 
 
