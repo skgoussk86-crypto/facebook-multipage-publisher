@@ -61,29 +61,30 @@ enum UserApprovalStatus {
 }
 
 model User {
-  id               String             @id @default(uuid()) @db.Uuid
-  email            String             @unique @db.VarChar(255)
-  passwordHash     String
-  name             String?            @db.VarChar(255)
-  role             UserRole           @default(USER)
-  status           UserStatus         @default(ACTIVE)
-  approvalStatus   UserApprovalStatus @default(PENDING)
-  approvedAt       DateTime?          @db.Timestamptz
-  approvedById     String?            @db.Uuid
-  approvedBy       User?              @relation("UserApprovals", fields: [approvedById], references: [id])
-  approvedUsers    User[]             @relation("UserApprovals")
-  rejectedAt       DateTime?          @db.Timestamptz
-  rejectionReason  String?            @db.Text
-  registrationIp   String?            @db.VarChar(45)
-  lastLoginAt      DateTime?          @db.Timestamptz
-  facebookAccounts FacebookAccount[]
-  appConfiguration AppConfiguration?
-  facebookPages    FacebookPage[]
-  videoJobs        VideoJob[]
-  auditLogs        AuditLog[]
-  uploadAssets     UploadAsset[]
-  createdAt        DateTime           @default(now()) @db.Timestamptz
-  updatedAt        DateTime           @updatedAt @db.Timestamptz
+  id                    String                 @id @default(uuid()) @db.Uuid
+  email                 String                 @unique @db.VarChar(255)
+  passwordHash          String
+  name                  String?                @db.VarChar(255)
+  role                  UserRole               @default(USER)
+  status                UserStatus             @default(ACTIVE)
+  approvalStatus        UserApprovalStatus     @default(PENDING)
+  approvedAt            DateTime?              @db.Timestamptz
+  approvedById          String?                @db.Uuid
+  approvedBy            User?                  @relation("UserApprovals", fields: [approvedById], references: [id])
+  approvedUsers         User[]                 @relation("UserApprovals")
+  rejectedAt            DateTime?              @db.Timestamptz
+  rejectionReason       String?                @db.Text
+  registrationIp        String?                @db.VarChar(45)
+  lastLoginAt           DateTime?              @db.Timestamptz
+  facebookAccounts      FacebookAccount[]
+  appConfiguration      AppConfiguration?
+  facebookPages         FacebookPage[]
+  videoJobs             VideoJob[]
+  googleDriveConnection GoogleDriveConnection?
+  auditLogs             AuditLog[]
+  uploadAssets          UploadAsset[]
+  createdAt             DateTime               @default(now()) @db.Timestamptz
+  updatedAt             DateTime               @updatedAt @db.Timestamptz
 
   @@index([approvedById])
 }
@@ -200,6 +201,7 @@ model AuditLog {
 
 enum StorageProvider {
   R2
+  GOOGLE_DRIVE
 }
 
 enum UploadFinalizationOperation {
@@ -251,8 +253,8 @@ model UploadAsset {
   finalizationOperation     UploadFinalizationOperation?
   finalizationLockToken     String?                      @db.Uuid
   finalizationLockedAt      DateTime?                    @db.Timestamptz
-  finalizationLockExpiresAt  DateTime?                    @db.Timestamptz
-  finalizationAttemptCount   Int                          @default(0) @db.Integer
+  finalizationLockExpiresAt DateTime?                    @db.Timestamptz
+  finalizationAttemptCount  Int                          @default(0) @db.Integer
 
   // Media metadata fields
   durationMs      Int?    @db.Integer
@@ -308,4 +310,17 @@ model UploadSession {
   lastActivityAt             DateTime    @db.Timestamptz
   createdAt                  DateTime    @default(now()) @db.Timestamptz
   updatedAt                  DateTime    @updatedAt @db.Timestamptz
+}
+
+model GoogleDriveConnection {
+  id                     String    @id @default(uuid()) @db.Uuid
+  userId                 String    @unique @db.Uuid
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  encryptedRefreshToken  String    @db.Text
+  refreshTokenKeyVersion String    @default("1") @db.VarChar(50)
+  googleAccountEmail     String?   @db.VarChar(255)
+  driveFolderId          String?   @db.VarChar(255)
+  connectedAt            DateTime  @default(now()) @db.Timestamptz
+  updatedAt              DateTime  @updatedAt @db.Timestamptz
+  revokedAt              DateTime? @db.Timestamptz
 }
