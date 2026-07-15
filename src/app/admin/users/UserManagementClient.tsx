@@ -257,7 +257,7 @@ export default function UserManagementClient({
             </div>
           </div>
 
-          <nav className="mt-6 grid grid-cols-3 gap-2 md:flex md:flex-col md:gap-1.5">
+          <nav className="mt-6 grid grid-cols-2 gap-2 md:flex md:flex-col md:gap-1.5">
             <Link
               href="/"
               className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 md:text-left md:text-sm"
@@ -270,6 +270,13 @@ export default function UserManagementClient({
               className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 md:text-left md:text-sm"
             >
               Meta Settings
+            </Link>
+
+            <Link
+              href="/settings/storage"
+              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 md:text-left md:text-sm"
+            >
+              Storage Settings
             </Link>
 
             <Link

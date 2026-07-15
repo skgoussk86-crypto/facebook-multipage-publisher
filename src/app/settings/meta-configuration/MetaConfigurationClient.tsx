@@ -533,6 +533,13 @@ export default function MetaConfigurationClient({
             >
               Meta Configuration
             </Link>
+
+            <Link
+              href="/settings/storage"
+              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 lg:text-left lg:text-sm"
+            >
+              Google Drive Storage
+            </Link>
           </nav>
 
           <div className="border-t border-zinc-800 pt-4 lg:mt-auto lg:pt-6">

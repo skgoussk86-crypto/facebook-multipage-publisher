@@ -1414,6 +1414,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             >
               Meta Configuration
             </Link>
+            <Link
+              href="/settings/storage"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+            >
+              Google Drive Storage
+            </Link>
             {currentUser.role === 'ADMIN' && (
               <Link
                 href="/admin/users"
