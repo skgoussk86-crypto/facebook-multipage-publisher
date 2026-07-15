@@ -637,16 +637,52 @@ export async function manualTriggerJob(
   return updated;
 }
 
+export interface BulkCreateScheduledJobsTx {
+  facebookPage: {
+    findMany(args: { where: { userId: string } }): Promise<Array<{ id: string; userId: string }>>;
+  };
+  videoJob: {
+    create(args: {
+      data: {
+        userId: string;
+        pageId: string;
+        gcsVideoUri: string | null;
+        storageUri: string | null;
+        uploadAssetId: string | null;
+        gcsThumbnailUri: string | null;
+        englishTitle: string;
+        englishCaption: string;
+        hashtags: string | null;
+        scheduledTimeUTC: Date;
+        status: JobStatus;
+        mockScenario: MockScenario | null;
+        contentType: string;
+      }
+    }): Promise<VideoJob>;
+  };
+  auditLog: {
+    create(args: {
+      data: {
+        action: string;
+        details: string;
+        userId: string;
+      }
+    }): Promise<{ id: string }>;
+  };
+}
+
 /**
  * Validates, schedules, and logs bulk video publishing jobs inside a single transaction.
  * status assignment is controlled internally.
  */
 export async function bulkCreateScheduledJobs(
-  tx: Prisma.TransactionClient,
+  tx: BulkCreateScheduledJobsTx,
   userId: string,
   jobsData: Array<{
     pageId: string;
-    gcsVideoUri: string;
+    gcsVideoUri?: string | null;
+    storageUri?: string | null;
+    uploadAssetId?: string | null;
     gcsThumbnailUri?: string | null;
     englishTitle: string;
     englishCaption: string;
@@ -675,7 +711,9 @@ export async function bulkCreateScheduledJobs(
       data: {
         userId,
         pageId: job.pageId,
-        gcsVideoUri: job.gcsVideoUri,
+        gcsVideoUri: job.gcsVideoUri || null,
+        storageUri: job.storageUri || null,
+        uploadAssetId: job.uploadAssetId || null,
         gcsThumbnailUri: job.gcsThumbnailUri || null,
         englishTitle: job.englishTitle,
         englishCaption: job.englishCaption,

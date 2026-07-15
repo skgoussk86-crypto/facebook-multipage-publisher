@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
+import VideoUploader from "../components/uploads/video-uploader";
 
 // Types
 interface FacebookPage {
@@ -73,6 +74,9 @@ interface VideoJob {
   attempts?: PublishAttempt[];
   providerReference?: string;
   providerProcessingId?: string;
+  file?: File;
+  assetId?: string;
+  uploadValidated?: boolean;
 }
 
 interface SecurityLog {
@@ -253,7 +257,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   // CSV Import/Validation States
   const [csvErrors, setCsvErrors] = useState<string[]>([]);
   const [csvSuccessCount, setCsvSuccessCount] = useState<number>(0);
-  
+
   // Confirmation Modal
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false);
 
@@ -356,9 +360,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       }
     }
 
-    // Persistent GCS URI validation
-    if (!job.gcsVideoUri) {
-      errors.push("No persistent media upload URI exists yet. Video must be uploaded to GCS.");
+    // Persistent GCS/R2 validation
+    if (!job.uploadValidated || !job.assetId) {
+      errors.push("Video must be successfully uploaded and validated.");
     }
 
     return errors;
@@ -378,6 +382,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
       const sizeMB = (file.size / (1024 * 1024)).toFixed(1) + " MB";
       const localUrl = URL.createObjectURL(file);
+
+      let initialAssetId: string | undefined;
+      try {
+        const stored = localStorage.getItem(`upload_asset_${file.name}_${file.size}`);
+        if (stored) {
+          initialAssetId = stored;
+        }
+      } catch {
+        // Ignore
+      }
 
       // Create a temporary job object with DRAFT status
       const tempId = "temp-" + Math.random().toString(36).substr(2, 9);
@@ -399,41 +413,30 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         thumbnailMode: "auto",
         localVideoUrl: localUrl,
         gcsVideoUri: undefined,
+        file,
+        assetId: initialAssetId,
+        uploadValidated: false,
       };
 
       setTempJobsQueue((prev) => [...prev, newJob]);
 
-      // Mock Local Upload Progress & metadata scanning
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress += 25;
+      // Probe video duration programmatically
+      const videoElement = document.createElement("video");
+      videoElement.src = localUrl;
+      videoElement.onloadedmetadata = () => {
         setTempJobsQueue((prev) =>
-          prev.map((j) => (j.id === tempId ? { ...j, uploadProgress: progress, status: progress >= 100 ? "MEDIA_UPLOADED" : "DRAFT" } : j))
+          prev.map((j) =>
+            j.id === tempId
+              ? {
+                  ...j,
+                  durationSeconds: Math.round(videoElement.duration),
+                }
+              : j
+          )
         );
+      };
 
-        if (progress >= 100) {
-          clearInterval(interval);
-          
-          // Probe video duration programmatically
-          const videoElement = document.createElement("video");
-          videoElement.src = localUrl;
-          videoElement.onloadedmetadata = () => {
-            setTempJobsQueue((prev) =>
-              prev.map((j) =>
-                j.id === tempId
-                  ? {
-                      ...j,
-                      durationSeconds: Math.round(videoElement.duration),
-                      status: "MEDIA_UPLOADED"
-                    }
-                  : j
-              )
-            );
-          };
-          
-          addSecurityLog("INFO", `Mock upload complete for ${file.name}. Cached local Object URL. Job status transitioned to MEDIA_UPLOADED.`, tempId);
-        }
-      }, 300);
+      addSecurityLog("INFO", `Selected local file ${file.name} for persistent R2 multipart upload.`, tempId);
     });
   };
 
@@ -526,7 +529,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       alert("Invalid format. Use 24-hour format HH:MM (e.g. 09:30, 14:00).");
       return;
     }
-    
+
     // Sort times ascending
     const updated = [...dailyTimeSlots, newSlotInput].sort();
     setDailyTimeSlots(updated);
@@ -578,7 +581,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
           const targetSlotTime = dailyTimeSlots[slotIndex];
           const [hours, minutes] = targetSlotTime.split(":").map(Number);
-          
+
           const scheduled = new Date(dailySlotsStartDate + "T00:00:00+05:30");
           scheduled.setDate(scheduled.getDate() + currentDayOffset);
           scheduled.setHours(hours, minutes, 0, 0);
@@ -639,7 +642,6 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         const mapped = (data.jobs || []).map((j: {
           id: string;
           pageId: string;
-          gcsVideoUri: string;
           contentType?: string;
           englishTitle: string;
           englishCaption: string;
@@ -650,11 +652,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           attemptCount: number;
           lastErrorMessage?: string;
           attempts?: unknown[];
+          fileName?: string;
         }) => {
           const kolkataTimeStr = formatKolkataDatetimeLocal(new Date(j.scheduledTimeUTC));
           return {
             id: j.id,
-            fileName: j.gcsVideoUri ? j.gcsVideoUri.split('/').pop() || 'video.mp4' : 'video.mp4',
+            fileName: j.fileName || 'video.mp4',
             fileSize: "N/A",
             fileSizeBytes: 0,
             durationSeconds: 0,
@@ -776,15 +779,15 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       const canvas = document.createElement("canvas");
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 360;
-      
+
       const ctx = canvas.getContext("2d");
       if (ctx) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL("image/jpeg");
-        
+
         handleUpdateTempJobField(activeFrameCaptureJobId, "capturedThumbnailUrl", dataUrl);
         handleUpdateTempJobField(activeFrameCaptureJobId, "thumbnailMode", "captured");
-        
+
         addSecurityLog("INFO", `Captured dynamic frame at ${frameCaptureTime.toFixed(1)}s from local video file.`);
         setActiveFrameCaptureJobId(null);
       }
@@ -798,7 +801,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     const headers = "filename,title,caption,hashtags,page_id,content_type,publish_time,timezone\n";
     const example1 = `ai_trends_2026.mp4,Top 5 AI Tools of 2026 You Must Use,Explore modern AI integrations,#AITools #Tech,1029384756,Video,2026-07-13 10:00,Asia/Kolkata\n`;
     const example2 = `gaming_highlights_ep12.mp4,Insane 1v4 Outplay,Clutch matches highlight clip,#Gaming #Clutch,5647382910,Reel,2026-07-13 14:00,Asia/Kolkata\n`;
-    
+
     const blob = new Blob([headers + example1 + example2], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -859,7 +862,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
       const headers = rows[0].map(h => h.trim().toLowerCase());
       const expected = ["filename", "title", "caption", "hashtags", "page_id", "content_type", "publish_time", "timezone"];
-      
+
       const missing = expected.filter(exp => !headers.includes(exp));
       if (missing.length > 0) {
         setCsvErrors([`CSV Header mismatch. Missing columns: ${missing.join(", ")}`]);
@@ -1019,12 +1022,15 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   const handleConfirmSave = async () => {
     try {
       const jobsToSave = tempJobsQueue.map((job) => {
-        if (!job.gcsVideoUri) {
-          throw new Error(`Media upload URI is missing for file "${job.fileName}".`);
+        if (!job.assetId) {
+          throw new Error(`Upload asset ID is missing for file "${job.fileName}".`);
+        }
+        if (!job.uploadValidated) {
+          throw new Error(`Upload for "${job.fileName}" has not been validated.`);
         }
         return {
           pageId: job.pageId,
-          gcsVideoUri: job.gcsVideoUri,
+          uploadAssetId: job.assetId,
           englishTitle: job.englishTitle,
           englishCaption: job.englishCaption,
           hashtags: job.hashtags,
@@ -1100,7 +1106,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
   const handleSyncPages = async (accountId?: string) => {
     setIsSyncingPages(true);
-    addSecurityLog("INFO", accountId 
+    addSecurityLog("INFO", accountId
       ? `Initiated managed Facebook Pages synchronization for account ID: ${accountId}.`
       : "Initiated managed Facebook Pages synchronization request."
     );
@@ -1310,7 +1316,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
   return (
     <div className="flex flex-col flex-1 bg-zinc-950 text-zinc-100 font-sans min-h-screen">
-      
+
       {/* 1. MOCK META MODE Pulsating Warning Banner */}
       <div className="w-full bg-amber-500 text-zinc-950 text-center py-2 px-4 font-bold flex items-center justify-center gap-2 text-xs md:text-sm tracking-wide shadow-md">
         <span className="relative flex h-3 w-3">
@@ -1347,7 +1353,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
       {/* Main Layout Grid */}
       <div className="flex flex-1 flex-col md:flex-row">
-        
+
         {/* Sidebar Panel */}
         <aside className="w-full md:w-64 bg-zinc-900 border-r border-zinc-800 p-6 flex flex-col gap-6">
           <div className="flex items-center gap-3">
@@ -1484,7 +1490,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
         {/* Content Panel */}
         <main className="flex-1 flex flex-col bg-zinc-950">
-          
+
           {/* Header */}
           <header className="h-16 border-b border-zinc-900 px-8 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1495,7 +1501,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 {kolkataOffsetStr}
               </span>
             </div>
-            
+
             <div className="flex items-center gap-4 text-xs font-mono text-zinc-400">
               <span>Timezone: Asia/Kolkata</span>
               <span className="text-zinc-700">|</span>
@@ -1505,7 +1511,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
           {/* Main workspace container */}
           <div className="p-8 overflow-y-auto max-w-7xl w-full mx-auto flex-1">
-            
+
             {/* System Warnings Panel */}
             <div className="mb-6 space-y-3">
               {(isConfigured === false || !facebookAppId) && (
@@ -1570,11 +1576,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             </div>
 
             {/* TAB CONTAINER CONTENT */}
-            
+
             {/* 1. OVERVIEW DASHBOARD TAB */}
             {activeTab === "dashboard" && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                
+
                 {/* Active Publishing Queue */}
                 <div className="lg:col-span-2 flex flex-col gap-6">
                   <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
@@ -1803,7 +1809,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                     <p className="text-xs text-zinc-500 mb-4 leading-relaxed">
                       Watch background steps execute, including token decryption and mock video publishing chunk updates.
                     </p>
-                    
+
                     <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 font-mono text-[11px] leading-relaxed text-zinc-300 flex-1 min-h-[300px] overflow-y-auto max-h-[450px]">
                       {simulationLog.length === 0 ? (
                         <div className="text-zinc-650 italic h-full flex items-center justify-center">
@@ -1813,8 +1819,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         <div className="space-y-1.5">
                           {simulationLog.map((logLine, idx) => (
                             <div key={idx} className={
-                              logLine.includes("ERROR") 
-                                ? "text-rose-400 font-semibold" 
+                              logLine.includes("ERROR")
+                                ? "text-rose-400 font-semibold"
                                 : logLine.includes("SUCCESS") || logLine.includes("Success")
                                 ? "text-emerald-400 font-semibold"
                                 : logLine.includes("WARNING")
@@ -1835,10 +1841,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             {/* 2. BULK VIDEO PUBLISHER WORKSPACE (PHASE 2 CORE TAB) */}
             {activeTab === "publisher" && (
               <div className="space-y-8">
-                
+
                 {/* SETTINGS AND CSV PANEL ROW */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                  
+
                   {/* File Upload Dropzone (Local Drag & Drop / File Picker) */}
                   <div className="lg:col-span-2 bg-zinc-900 border border-zinc-800 rounded-xl p-6 flex flex-col justify-between">
                     <div>
@@ -1869,7 +1875,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           Local upload engine validation. Limits applied dynamically.
                         </span>
                       </div>
-                      
+
                       {fileUploadError && (
                         <div className="mt-3 text-xs text-rose-500 font-semibold bg-rose-950/15 border border-rose-900/35 rounded-lg p-2 flex items-center gap-2">
                           <span className="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
@@ -1912,7 +1918,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         >
                           Download CSV Template
                         </button>
-                        
+
                         <div className="relative w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 rounded-lg p-2.5 text-center text-xs font-semibold text-white cursor-pointer transition">
                           Upload Metadata CSV File
                           <input
@@ -1949,7 +1955,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 {tempJobsQueue.length > 0 && (
                   <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
                     <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-400 mb-4 font-bold">Bulk Action Controller</h3>
-                    
+
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end text-xs">
                       {/* Bulk Page Selector */}
                       <div>
@@ -2227,36 +2233,53 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           )}
 
                           <div className="flex flex-col lg:flex-row gap-6">
-                            
+
                             {/* File Preview & Thumbnail Capture Column */}
                             <div className="w-full lg:w-72 flex-shrink-0 flex flex-col gap-4">
-                              
-                              {/* Native video preview */}
-                              {job.localVideoUrl ? (
-                                <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-850 relative flex items-center justify-center">
-                                  <video
-                                    src={job.localVideoUrl}
-                                    className="h-full w-full object-contain"
-                                    controls
-                                  />
-                                </div>
-                              ) : (
-                                <div className="aspect-video bg-zinc-900 rounded-lg flex items-center justify-center border border-zinc-850 text-zinc-600 text-xs">
-                                  Video Preview Unavailable
-                                </div>
-                              )}
 
-                              <div className="text-xs space-y-1.5 text-zinc-400 font-mono">
-                                <div className="truncate max-w-[280px]">Original Name: <span className="text-zinc-200">{job.fileName}</span></div>
-                                <div>Size: <span className="text-zinc-200">{job.fileSize}</span></div>
-                                <div>Duration: <span className="text-zinc-200">{job.durationSeconds ? `${job.durationSeconds}s` : "Scanning..."}</span></div>
-                                <div>Language: <span className="text-indigo-400 font-semibold">English (Fixed)</span></div>
-                              </div>
+                              {job.file ? (
+                                <VideoUploader
+                                  file={job.file}
+                                  initialAssetId={job.assetId}
+                                  recoveryKey={job.id}
+                                  onUploadValidated={(assetId, durationSeconds) => {
+                                    handleUpdateTempJobField(job.id, "assetId", assetId);
+                                    handleUpdateTempJobField(job.id, "durationSeconds", durationSeconds);
+                                    handleUpdateTempJobField(job.id, "uploadValidated", true);
+                                    handleUpdateTempJobField(job.id, "uploadProgress", 100);
+                                  }}
+                                  onRemove={() => handleDeleteDraft(job.id)}
+                                />
+                              ) : (
+                                <>
+                                  {/* Native video preview */}
+                                  {job.localVideoUrl ? (
+                                    <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-850 relative flex items-center justify-center">
+                                      <video
+                                        src={job.localVideoUrl}
+                                        className="h-full w-full object-contain"
+                                        controls
+                                      />
+                                    </div>
+                                  ) : (
+                                    <div className="aspect-video bg-zinc-900 rounded-lg flex items-center justify-center border border-zinc-850 text-zinc-600 text-xs">
+                                      Video Preview Unavailable
+                                    </div>
+                                  )}
+
+                                  <div className="text-xs space-y-1.5 text-zinc-400 font-mono">
+                                    <div className="truncate max-w-[280px]">Original Name: <span className="text-zinc-200">{job.fileName}</span></div>
+                                    <div>Size: <span className="text-zinc-200">{job.fileSize}</span></div>
+                                    <div>Duration: <span className="text-zinc-200">{job.durationSeconds ? `${job.durationSeconds}s` : "Scanning..."}</span></div>
+                                    <div>Language: <span className="text-indigo-400 font-semibold">English (Fixed)</span></div>
+                                  </div>
+                                </>
+                              )}
 
                               {/* Thumbnail Settings */}
                               <div className="border-t border-zinc-850/80 pt-3.5 space-y-2 text-xs">
                                 <label className="block font-mono text-zinc-500 uppercase tracking-wider text-[10px]">Assign Thumbnail</label>
-                                
+
                                 <div className="flex gap-2">
                                   <button
                                     onClick={() => handleUpdateTempJobField(job.id, "thumbnailMode", "auto")}
@@ -2331,7 +2354,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                             {/* Editable Fields Column */}
                             <div className="flex-1 space-y-4 text-xs">
-                              
+
                               {/* English Title input */}
                               <div>
                                 <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-1">English Title</label>
@@ -2794,7 +2817,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       {selectedHistoryJob && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow-2xl p-6 flex flex-col gap-4">
-            
+
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
               <div>

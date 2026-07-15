@@ -22,6 +22,18 @@ interface SerializedAsset {
   updatedAt: string;
 }
 
+function getNormalizedFailureMessage(failureCode: string | null): string | null {
+  if (!failureCode) return null;
+  const messages: Record<string, string> = {
+    'INVALID_MEDIA_FORMAT': 'The uploaded file is not a supported video format.',
+    'PROBING_FAILED': 'Failed to read media metadata. Please ensure it is a valid video file.',
+    'SIZE_MISMATCH': 'Uploaded size does not match the expected file size.',
+    'ABORTED_BY_USER': 'Upload was cancelled.',
+    'TIMEOUT': 'Upload session timed out.',
+  };
+  return messages[failureCode] || 'An error occurred during upload validation.';
+}
+
 export async function handleGetUploadStatus(
   userId: string,
   id: string
@@ -60,6 +72,7 @@ export async function handleGetUploadStatus(
 
     const totalParts = Math.ceil(Number(asset.expectedSize) / PART_SIZE_BYTES);
     const serializedAsset = serializeBigInt(asset) as SerializedAsset;
+    const rawAsset = serializedAsset as unknown as Record<string, unknown>;
 
     const safeResponse = {
       assetId: serializedAsset.id,
@@ -74,6 +87,16 @@ export async function handleGetUploadStatus(
       lastActivityAt,
       createdAt: serializedAsset.createdAt,
       updatedAt: serializedAsset.updatedAt,
+      durationMs: rawAsset.durationMs || null,
+      containerFormat: rawAsset.containerFormat || null,
+      videoCodec: rawAsset.videoCodec || null,
+      audioCodec: rawAsset.audioCodec || null,
+      width: rawAsset.width || null,
+      height: rawAsset.height || null,
+      frameRate: rawAsset.frameRate || null,
+      detectedMimeType: rawAsset.detectedMimeType || null,
+      failureCode: rawAsset.failureCode || null,
+      failureMessage: getNormalizedFailureMessage(rawAsset.failureCode as string | null),
     };
 
     return NextResponse.json(safeResponse, { status: 200 });

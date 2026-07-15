@@ -1,7 +1,11 @@
-import { UploadStatus, UploadFinalizationOperation } from '@prisma/client';
+import { UploadStatus, UploadFinalizationOperation, UploadSession, Prisma } from '@prisma/client';
 import { prisma } from '../prisma-client';
 import { getStorageAdapter } from './index';
-import { FinalizationClaimService, FinalizationOperationConflictError } from './finalization-claim-service';
+import {
+  FinalizationClaimService,
+  FinalizationOperationConflictError,
+  FinalizationClaim,
+} from './finalization-claim-service';
 import { UploadStateService, serializeBigInt } from './upload-state-service';
 import { UploadSessionService } from './upload-session-service';
 import {
@@ -11,7 +15,134 @@ import {
   InvalidMultipartMetadataError,
 } from './upload-session-encryption';
 import { PART_SIZE_BYTES } from './upload-initiation-service';
-import { CompletedPart } from './storage-adapter';
+
+export interface FinalizationTransitionTx {
+  uploadAsset: {
+    updateMany(args: {
+      where: Prisma.UploadAssetWhereInput;
+      data: Prisma.UploadAssetUpdateManyMutationInput;
+    }): Promise<{ count: number }>;
+  };
+  uploadSession: {
+    deleteMany(args: {
+      where: Prisma.UploadSessionWhereInput;
+    }): Promise<{ count: number }>;
+  };
+  auditLog: {
+    create(args: {
+      data: {
+        action: string;
+        details: string;
+        userId: string;
+      };
+    }): Promise<{ id: string }>;
+  };
+}
+
+export interface FinalizationDependencies {
+  findUploadAsset: (id: string) => Promise<{
+    id: string;
+    userId: string;
+    status: UploadStatus;
+    expectedSize: bigint | string;
+    bucket: string;
+    objectKey: string;
+    finalizationOperation: UploadFinalizationOperation | null;
+  } | null>;
+  findUploadSessionRecord: (assetId: string) => Promise<UploadSession | null>;
+  acquireCompletionRecoveryClaim: typeof FinalizationClaimService.acquireCompletionRecoveryClaim;
+  acquireInitialCompletionClaim: typeof FinalizationClaimService.acquireInitialCompletionClaim;
+  acquireInitialAbortClaim: typeof FinalizationClaimService.acquireInitialAbortClaim;
+  releaseFinalizationClaim: typeof FinalizationClaimService.releaseFinalizationClaim;
+  clearFinalizationClaimAfterSuccessTx: (tx: FinalizationTransitionTx, claim: FinalizationClaim) => Promise<void>;
+  getDecryptedSession: typeof UploadSessionService.getDecryptedSession;
+  transitionStateTx: (
+    tx: FinalizationTransitionTx,
+    claim: FinalizationClaim,
+    fromStatus: UploadStatus,
+    toStatus: UploadStatus,
+    metadata?: { actualSize?: bigint; objectETag?: string; uploadedAt?: Date }
+  ) => Promise<void>;
+  deleteUploadSessionTx: (tx: FinalizationTransitionTx, assetId: string) => Promise<void>;
+  getStorageAdapter: () => {
+    completeMultipartUpload: (
+      bucket: string,
+      key: string,
+      uploadId: string,
+      parts: Array<{ partNumber: number; etag: string; size?: number }>
+    ) => Promise<{ size: number; etag: string; lastModified?: Date }>;
+    abortMultipartUpload: (
+      bucket: string,
+      key: string,
+      uploadId: string
+    ) => Promise<void>;
+  };
+  transaction: <T>(cb: (tx: FinalizationTransitionTx) => Promise<T>) => Promise<T>;
+}
+
+export const defaultFinalizationDependencies: FinalizationDependencies = {
+  findUploadAsset: async (id) => {
+    return await prisma.uploadAsset.findUnique({ where: { id } });
+  },
+  findUploadSessionRecord: async (assetId) => {
+    return await prisma.uploadSession.findUnique({ where: { uploadAssetId: assetId } });
+  },
+  acquireCompletionRecoveryClaim: (userId, assetId) => {
+    return FinalizationClaimService.acquireCompletionRecoveryClaim(userId, assetId);
+  },
+  acquireInitialCompletionClaim: (userId, assetId) => {
+    return FinalizationClaimService.acquireInitialCompletionClaim(userId, assetId);
+  },
+  acquireInitialAbortClaim: (userId, assetId) => {
+    return FinalizationClaimService.acquireInitialAbortClaim(userId, assetId);
+  },
+  releaseFinalizationClaim: (claim, reason) => {
+    return FinalizationClaimService.releaseFinalizationClaim(claim, reason);
+  },
+  clearFinalizationClaimAfterSuccessTx: (tx, claim) => {
+    return FinalizationClaimService.clearFinalizationClaimAfterSuccessTx(
+      tx as unknown as Prisma.TransactionClient,
+      claim
+    );
+  },
+  getDecryptedSession: (userId, assetId) => {
+    return UploadSessionService.getDecryptedSession(userId, assetId);
+  },
+  transitionStateTx: (tx, claim, fromStatus, toStatus, metadata) => {
+    return UploadStateService.transitionWithFinalizationClaimTx(
+      tx as unknown as Prisma.TransactionClient,
+      claim,
+      fromStatus,
+      toStatus,
+      metadata
+    );
+  },
+  deleteUploadSessionTx: async (tx, assetId) => {
+    await (tx as unknown as Prisma.TransactionClient).uploadSession.deleteMany({
+      where: { uploadAssetId: assetId },
+    });
+  },
+  getStorageAdapter: () => {
+    return getStorageAdapter() as {
+      completeMultipartUpload: (
+        bucket: string,
+        key: string,
+        uploadId: string,
+        parts: Array<{ partNumber: number; etag: string; size?: number }>
+      ) => Promise<{ size: number; etag: string; lastModified?: Date }>;
+      abortMultipartUpload: (
+        bucket: string,
+        key: string,
+        uploadId: string
+      ) => Promise<void>;
+    };
+  },
+  transaction: async <T>(cb: (tx: FinalizationTransitionTx) => Promise<T>): Promise<T> => {
+    return await prisma.$transaction(async (realTx) => {
+      return await cb(realTx as unknown as FinalizationTransitionTx);
+    });
+  }
+};
 
 export class UploadFinalizationService {
   /**
@@ -20,51 +151,11 @@ export class UploadFinalizationService {
   static async completeUpload(
     userId: string,
     assetId: string,
-    body: unknown
+    _body?: unknown,
+    dependencies: FinalizationDependencies = defaultFinalizationDependencies
   ): Promise<unknown> {
-    // 1. Validate request body layout before acquiring claim
-    if (!body || typeof body !== 'object' || !('parts' in body)) {
-      throw new InvalidMultipartMetadataError('Malformed payload: parts list must be an array.');
-    }
-    const rawParts = (body as Record<string, unknown>).parts;
-    if (!Array.isArray(rawParts)) {
-      throw new InvalidMultipartMetadataError('Malformed payload: parts list must be an array.');
-    }
-    if (rawParts.length === 0) {
-      throw new InvalidMultipartMetadataError('Malformed payload: parts list cannot be empty.');
-    }
-
-    const partNumbers = new Set<number>();
-    const parts: CompletedPart[] = [];
-    for (const p of rawParts as unknown[]) {
-      if (!p || typeof p !== 'object') {
-        throw new InvalidMultipartMetadataError('Malformed payload: part item must be an object.');
-      }
-      const partObj = p as Record<string, unknown>;
-      const { partNumber, etag } = partObj;
-      if (partNumber === undefined || typeof partNumber !== 'number' || !Number.isInteger(partNumber)) {
-        throw new InvalidMultipartMetadataError('Invalid partNumber: must be an integer.');
-      }
-      if (partNumber < 1 || partNumber > 10000) {
-        throw new InvalidMultipartMetadataError(`Invalid partNumber: ${partNumber}. Must be between 1 and 10000.`);
-      }
-      if (typeof etag !== 'string' || !etag.trim()) {
-        throw new InvalidMultipartMetadataError('ETag must be a non-empty string.');
-      }
-      if (partNumbers.has(partNumber)) {
-        throw new InvalidMultipartMetadataError(`Duplicate part number detected: ${partNumber}.`);
-      }
-      partNumbers.add(partNumber);
-      parts.push({ partNumber, etag: etag.trim() });
-    }
-
-    // Normalize: sort ascending by part number
-    parts.sort((a, b) => a.partNumber - b.partNumber);
-
-    // 2. Retrieve asset & check ownership
-    const asset = await prisma.uploadAsset.findUnique({
-      where: { id: assetId },
-    });
+    // 1. Retrieve asset & check ownership
+    const asset = await dependencies.findUploadAsset(assetId);
 
     if (!asset) {
       throw new NotFoundError('Upload asset not found.');
@@ -90,13 +181,13 @@ export class UploadFinalizationService {
       );
     }
 
-    // 3. Status-specific flows
+    // 2. Status-specific flows
     if (asset.status === UploadStatus.UPLOADED) {
       // Recovery path
-      const claim = await FinalizationClaimService.acquireCompletionRecoveryClaim(userId, assetId);
-      const result = await prisma.$transaction(async (tx) => {
+      const claim = await dependencies.acquireCompletionRecoveryClaim(userId, assetId);
+      const result = await dependencies.transaction(async (tx) => {
         // Transition UPLOADED -> VALIDATING
-        await UploadStateService.transitionWithFinalizationClaimTx(
+        await dependencies.transitionStateTx(
           tx,
           claim,
           UploadStatus.UPLOADED,
@@ -104,66 +195,77 @@ export class UploadFinalizationService {
         );
 
         // Invalidate upload session secrets
-        await tx.uploadSession.deleteMany({
-          where: { uploadAssetId: assetId },
-        });
+        await dependencies.deleteUploadSessionTx(tx, assetId);
 
         // Clear finalization claim lock
-        await FinalizationClaimService.clearFinalizationClaimAfterSuccessTx(tx, claim);
+        await dependencies.clearFinalizationClaimAfterSuccessTx(tx, claim);
 
-        return await tx.uploadAsset.findUnique({
-          where: { id: assetId },
-        });
+        return await dependencies.findUploadAsset(assetId);
       });
 
       return serializeBigInt(result);
     }
 
     // status is UPLOADING
-    // Verify client-provided parts sequence matches expected total parts count
-    const expectedTotalParts = Math.ceil(Number(asset.expectedSize) / PART_SIZE_BYTES);
-    if (parts.length !== expectedTotalParts) {
-      throw new InvalidMultipartMetadataError(
-        `Upload is incomplete: expected ${expectedTotalParts} parts, but only ${parts.length} parts were provided.`
-      );
-    }
-    for (let i = 0; i < parts.length; i++) {
-      if (parts[i].partNumber !== i + 1) {
-        throw new InvalidMultipartMetadataError(
-          `Missing part: expected part number ${i + 1}, but got ${parts[i].partNumber}.`
-        );
-      }
-    }
-
     // Acquire initial claim
-    const claim = await FinalizationClaimService.acquireInitialCompletionClaim(userId, assetId);
+    const claim = await dependencies.acquireInitialCompletionClaim(userId, assetId);
 
     // Retrieve session and verify details
     let session;
     try {
-      session = await UploadSessionService.getDecryptedSession(userId, assetId);
+      session = await dependencies.getDecryptedSession(userId, assetId);
 
-      // Verify request parts list matches database session parts list
-      if (session.completedParts.length !== parts.length) {
+      // 1. at least one confirmed part exists
+      if (!session.completedParts || session.completedParts.length === 0) {
+        throw new InvalidMultipartMetadataError('Upload is incomplete: no completed parts recorded.');
+      }
+
+      // 2. part numbers are unique
+      const partNumbers = session.completedParts.map((p) => p.partNumber);
+      const uniqueParts = new Set(partNumbers);
+      if (uniqueParts.size !== partNumbers.length) {
+        throw new InvalidMultipartMetadataError('Duplicate part numbers detected.');
+      }
+
+      // 3. part numbers are sequential and complete (sorted ascending)
+      session.completedParts.sort((a, b) => a.partNumber - b.partNumber);
+      for (let i = 0; i < session.completedParts.length; i++) {
+        if (session.completedParts[i].partNumber !== i + 1) {
+          throw new InvalidMultipartMetadataError(
+            `Missing part: expected part number ${i + 1}, but got ${session.completedParts[i].partNumber}.`
+          );
+        }
+      }
+
+      // 4. expected total part count matches
+      const expectedTotalParts = Math.ceil(Number(asset.expectedSize) / PART_SIZE_BYTES);
+      if (session.completedParts.length !== expectedTotalParts) {
         throw new InvalidMultipartMetadataError(
-          'Parts list mismatch: count of completed parts does not match the recorded session.'
+          `Upload is incomplete: expected ${expectedTotalParts} parts, but only ${session.completedParts.length} parts were completed.`
         );
       }
-      for (let i = 0; i < parts.length; i++) {
-        if (parts[i].partNumber !== session.completedParts[i].partNumber) {
-          throw new InvalidMultipartMetadataError(
-            `Parts list mismatch: expected part number ${session.completedParts[i].partNumber} at index ${i}, got ${parts[i].partNumber}.`
-          );
-        }
-        if (parts[i].etag !== session.completedParts[i].etag) {
-          throw new InvalidMultipartMetadataError(
-            `Parts list mismatch: ETag mismatch for part number ${parts[i].partNumber}.`
-          );
+
+      // 5. required ETags exist in durable server records
+      for (const p of session.completedParts) {
+        if (!p.etag || !p.etag.trim()) {
+          throw new InvalidMultipartMetadataError(`Missing ETag for part number ${p.partNumber}.`);
         }
       }
+
+      // 6. final non-last multipart part-size constraints remain valid
+      for (const p of session.completedParts) {
+        if (p.partNumber !== expectedTotalParts) {
+          if (p.size !== undefined && p.size !== PART_SIZE_BYTES) {
+            throw new InvalidMultipartMetadataError(
+              `Invalid part size: part number ${p.partNumber} size is ${p.size} bytes, but must be exactly ${PART_SIZE_BYTES} bytes.`
+            );
+          }
+        }
+      }
+
     } catch (err) {
       // Safe release on pre-provider failure
-      await FinalizationClaimService.releaseFinalizationClaim(claim, 'PRE_PROVIDER_FAILURE');
+      await dependencies.releaseFinalizationClaim(claim, 'PRE_PROVIDER_FAILURE');
       throw err;
     }
 
@@ -173,18 +275,18 @@ export class UploadFinalizationService {
         throw new Error('Claim does not authorize provider completion call.');
       }
 
-      const adapter = getStorageAdapter();
+      const adapter = dependencies.getStorageAdapter();
       const metadata = await adapter.completeMultipartUpload(
         asset.bucket,
         asset.objectKey,
         session.providerSessionId,
-        parts
+        session.completedParts // Complete using securely decrypted server session parts
       );
 
       // Complete transitions and cleanup
-      const result = await prisma.$transaction(async (tx) => {
+      const result = await dependencies.transaction(async (tx) => {
         // Transition UPLOADING -> UPLOADED
-        await UploadStateService.transitionWithFinalizationClaimTx(
+        await dependencies.transitionStateTx(
           tx,
           claim,
           UploadStatus.UPLOADING,
@@ -197,7 +299,7 @@ export class UploadFinalizationService {
         );
 
         // Transition UPLOADED -> VALIDATING
-        await UploadStateService.transitionWithFinalizationClaimTx(
+        await dependencies.transitionStateTx(
           tx,
           claim,
           UploadStatus.UPLOADED,
@@ -205,16 +307,12 @@ export class UploadFinalizationService {
         );
 
         // Invalidate session secrets
-        await tx.uploadSession.deleteMany({
-          where: { uploadAssetId: assetId },
-        });
+        await dependencies.deleteUploadSessionTx(tx, assetId);
 
         // Clear lease
-        await FinalizationClaimService.clearFinalizationClaimAfterSuccessTx(tx, claim);
+        await dependencies.clearFinalizationClaimAfterSuccessTx(tx, claim);
 
-        return await tx.uploadAsset.findUnique({
-          where: { id: assetId },
-        });
+        return await dependencies.findUploadAsset(assetId);
       });
 
       return serializeBigInt(result);
@@ -229,12 +327,11 @@ export class UploadFinalizationService {
    */
   static async abortUpload(
     userId: string,
-    assetId: string
+    assetId: string,
+    dependencies: FinalizationDependencies = defaultFinalizationDependencies
   ): Promise<unknown> {
     // 1. Retrieve asset & check ownership
-    const asset = await prisma.uploadAsset.findUnique({
-      where: { id: assetId },
-    });
+    const asset = await dependencies.findUploadAsset(assetId);
 
     if (!asset) {
       throw new NotFoundError('Upload asset not found.');
@@ -261,26 +358,24 @@ export class UploadFinalizationService {
     }
 
     // Acquire claim
-    const claim = await FinalizationClaimService.acquireInitialAbortClaim(userId, assetId);
+    const claim = await dependencies.acquireInitialAbortClaim(userId, assetId);
 
     // Find session if any
-    const sessionRecord = await prisma.uploadSession.findUnique({
-      where: { uploadAssetId: assetId },
-    });
+    const sessionRecord = await dependencies.findUploadSessionRecord(assetId);
 
     if (asset.status === UploadStatus.UPLOADING && !sessionRecord) {
       // Safe release on pre-provider failure
-      await FinalizationClaimService.releaseFinalizationClaim(claim, 'PRE_PROVIDER_FAILURE');
+      await dependencies.releaseFinalizationClaim(claim, 'PRE_PROVIDER_FAILURE');
       throw new NotFoundError('Upload session not found for asset in UPLOADING status.');
     }
 
     if (sessionRecord) {
       let session;
       try {
-        session = await UploadSessionService.getDecryptedSession(userId, assetId);
+        session = await dependencies.getDecryptedSession(userId, assetId);
       } catch (err) {
         // Safe release on pre-provider failure
-        await FinalizationClaimService.releaseFinalizationClaim(claim, 'PRE_PROVIDER_FAILURE');
+        await dependencies.releaseFinalizationClaim(claim, 'PRE_PROVIDER_FAILURE');
         throw err;
       }
 
@@ -289,7 +384,7 @@ export class UploadFinalizationService {
           throw new Error('Claim does not authorize provider abort call.');
         }
 
-        const adapter = getStorageAdapter();
+        const adapter = dependencies.getStorageAdapter();
         await adapter.abortMultipartUpload(
           asset.bucket,
           asset.objectKey,
@@ -302,9 +397,9 @@ export class UploadFinalizationService {
     }
 
     // Complete transitions and cleanup
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await dependencies.transaction(async (tx) => {
       // Transition from current state (REQUESTED or UPLOADING) to ABORTED
-      await UploadStateService.transitionWithFinalizationClaimTx(
+      await dependencies.transitionStateTx(
         tx,
         claim,
         asset.status,
@@ -312,16 +407,12 @@ export class UploadFinalizationService {
       );
 
       // Invalidate session secrets
-      await tx.uploadSession.deleteMany({
-        where: { uploadAssetId: assetId },
-      });
+      await dependencies.deleteUploadSessionTx(tx, assetId);
 
       // Clear lease
-      await FinalizationClaimService.clearFinalizationClaimAfterSuccessTx(tx, claim);
+      await dependencies.clearFinalizationClaimAfterSuccessTx(tx, claim);
 
-      return await tx.uploadAsset.findUnique({
-        where: { id: assetId },
-      });
+      return await dependencies.findUploadAsset(assetId);
     });
 
     return serializeBigInt(result);

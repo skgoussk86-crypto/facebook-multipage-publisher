@@ -48,3 +48,23 @@ export function getStorageAdapter(): StorageAdapter {
 export function resetStorageAdapterInstance() {
   instance = null;
 }
+
+export interface StorageReference {
+  gcsVideoUri: string | null;
+  storageUri: string | null;
+}
+
+export function resolveStorageReference(asset: { provider: string; bucket: string; objectKey: string }): StorageReference {
+  if (asset.provider === 'R2') {
+    return {
+      gcsVideoUri: null,
+      storageUri: `r2://${asset.bucket}/${asset.objectKey}`,
+    };
+  } else if (asset.provider === 'GCS') {
+    return {
+      gcsVideoUri: `gcs://${asset.bucket}/${asset.objectKey}`,
+      storageUri: `gcs://${asset.bucket}/${asset.objectKey}`,
+    };
+  }
+  throw new Error(`Security Error: Unknown or unsupported storage provider "${asset.provider}".`);
+}
