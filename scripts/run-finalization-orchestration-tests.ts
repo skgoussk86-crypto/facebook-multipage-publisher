@@ -600,7 +600,7 @@ async function runTests() {
     // 8. Provider failure claims retention
     // -------------------------------------------------------------
     console.log('Test: Provider failures retain claims...');
-    
+
     // Case A: Generic provider error during COMPLETE (ambiguous COMPLETE failure)
     console.log('  Sub-test: ambiguous COMPLETE failure...');
     const fixtureA = await createProviderFailureFixture(userId);
