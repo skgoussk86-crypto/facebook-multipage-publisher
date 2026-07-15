@@ -1350,7 +1350,7 @@ async function runTests() {
     objectKey: 'key',
     finalizationOperation: null as UploadFinalizationOperation | null,
   };
-  
+
   let mockCompletedParts: Array<{ partNumber: number; etag: string; size?: number }> = [];
 
   const fakeTx: FinalizationTransitionTx = {
