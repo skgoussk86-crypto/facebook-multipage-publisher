@@ -11,6 +11,34 @@ export function createGoogleDriveOAuthClient(configOverride?: GoogleDriveConfig)
   });
 }
 
+export type GoogleDriveAccessTokenClient = Pick<
+  OAuth2Client,
+  "setCredentials" | "getAccessToken"
+>;
+
+export async function getAccessTokenFromRefreshToken(
+  refreshToken: string,
+  client?: GoogleDriveAccessTokenClient
+): Promise<string> {
+  if (!refreshToken || refreshToken.trim() === "") {
+    throw new Error("Refresh token is required.");
+  }
+
+  const oauthClient = client || createGoogleDriveOAuthClient();
+  oauthClient.setCredentials({
+    refresh_token: refreshToken,
+  });
+
+  const res = await oauthClient.getAccessToken();
+  const token = res.token;
+
+  if (!token || token.trim() === "") {
+    throw new Error("Access token missing from Google refresh response.");
+  }
+
+  return token;
+}
+
 export interface ExchangedTokens {
   accessToken: string;
   refreshToken: string | null;

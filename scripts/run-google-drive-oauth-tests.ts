@@ -16,6 +16,7 @@ import {
 } from "../src/lib/google-drive/google-drive-oauth-state";
 import { handleInitiate } from "../src/app/api/auth/google-drive/initiate/route";
 import { handleCallback, CallbackDependencies, GoogleDriveConnectAuditInput } from "../src/app/api/auth/google-drive/callback/route";
+import { getAccessTokenFromRefreshToken, GoogleDriveAccessTokenClient } from "../src/lib/google-drive/google-drive-oauth-client";
 
 type UpsertDataInput = NonNullable<Parameters<NonNullable<CallbackDependencies["upsertConn"]>>[1]>;
 import { handleStatus } from "../src/app/api/auth/google-drive/status/route";
@@ -913,8 +914,131 @@ async function runTests() {
     console.error("Test 25 Failed:", msg);
   }
 
-  console.log(`\nGoogle Drive OAuth Validation complete. Passed: ${passedCount}/25`);
-  if (passedCount !== 25) {
+  // Test 26: Empty refresh token is rejected
+  try {
+    let failed = false;
+    try {
+      await getAccessTokenFromRefreshToken("");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      assert(msg.includes("Refresh token is required."), "Expected refresh token required error");
+      assert(!msg.includes("secret-refresh-token"), "Must not leak secret in error");
+      failed = true;
+    }
+    assert(failed, "Empty refresh token should be rejected");
+    console.log("Test 26 Passed: Empty refresh token rejected [✓]");
+    passedCount++;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Test 26 Failed:", msg);
+  }
+
+  // Test 27: Whitespace refresh token is rejected
+  try {
+    let failed = false;
+    try {
+      await getAccessTokenFromRefreshToken("   ");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      assert(msg.includes("Refresh token is required."), "Expected refresh token required error");
+      failed = true;
+    }
+    assert(failed, "Whitespace refresh token should be rejected");
+    console.log("Test 27 Passed: Whitespace refresh token rejected [✓]");
+    passedCount++;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Test 27 Failed:", msg);
+  }
+
+  // Test 28: Supplied client receives exact refresh token
+  try {
+    const setCredentialsCapture: {
+      value:
+        | Parameters<GoogleDriveAccessTokenClient["setCredentials"]>[0]
+        | null;
+    } = {
+      value: null,
+    };
+    let getAccessTokenCalls = 0;
+    const fakeClient: GoogleDriveAccessTokenClient = {
+      setCredentials: (creds) => {
+        setCredentialsCapture.value = creds;
+      },
+      getAccessToken: async () => {
+        getAccessTokenCalls++;
+        return { token: "fake-access-token" };
+      },
+    };
+
+    const token = await getAccessTokenFromRefreshToken("my-test-refresh-token", fakeClient);
+    assert(token === "fake-access-token", "Expected fake-access-token returned");
+    assert(
+      setCredentialsCapture.value?.refresh_token === "my-test-refresh-token",
+      "Client should receive the exact refresh token"
+    );
+    assert(getAccessTokenCalls === 1, "getAccessToken should be called exactly once");
+    console.log("Test 28 Passed: Supplied client receives exact refresh token [✓]");
+    passedCount++;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Test 28 Failed:", msg);
+  }
+
+  // Test 29: Null access token is rejected
+  try {
+    const fakeClient: GoogleDriveAccessTokenClient = {
+      setCredentials: () => {},
+      getAccessToken: async () => {
+        return { token: null };
+      },
+    };
+
+    let failed = false;
+    try {
+      await getAccessTokenFromRefreshToken("my-test-refresh-token", fakeClient);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      assert(msg.includes("Access token missing from Google refresh response."), "Expected missing token error");
+      assert(!msg.includes("my-test-refresh-token"), "Must not leak refresh token in error");
+      failed = true;
+    }
+    assert(failed, "Null access token should be rejected");
+    console.log("Test 29 Passed: Null access token is rejected [✓]");
+    passedCount++;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Test 29 Failed:", msg);
+  }
+
+  // Test 30: Empty access token is rejected
+  try {
+    const fakeClient: GoogleDriveAccessTokenClient = {
+      setCredentials: () => {},
+      getAccessToken: async () => {
+        return { token: "" };
+      },
+    };
+
+    let failed = false;
+    try {
+      await getAccessTokenFromRefreshToken("my-test-refresh-token", fakeClient);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      assert(msg.includes("Access token missing from Google refresh response."), "Expected missing token error");
+      assert(!msg.includes("my-test-refresh-token"), "Must not leak refresh token in error");
+      failed = true;
+    }
+    assert(failed, "Empty access token should be rejected");
+    console.log("Test 30 Passed: Empty access token is rejected [✓]");
+    passedCount++;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Test 30 Failed:", msg);
+  }
+
+  console.log(`\nGoogle Drive OAuth Validation complete. Passed: ${passedCount}/30`);
+  if (passedCount !== 30) {
     console.error("ERROR: Not all validation tests passed.");
     process.exit(1);
   } else {
