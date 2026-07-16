@@ -28,7 +28,7 @@ const mockOwnerUser: User = {
 const mockConfig: GoogleDriveConfig = {
   clientId: "mock-client-id",
   clientSecret: "mock-client-secret",
-  redirectUri: "http://localhost:3000/api/auth/google-drive/callback",
+  redirectUri: "https://staudtmaxturtle.com/api/auth/google-drive/callback",
   encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   ownerUserId: "owner-admin-uuid",
 };
@@ -873,7 +873,7 @@ async function runTests() {
     });
 
     const location = res.headers.get("location");
-    assert(location !== null && location.includes("success=google_drive_connected"), `Expected success redirect, got ${location}`);
+    assert(location === "https://staudtmaxturtle.com/settings/storage?success=google_drive_connected", `Expected success redirect, got ${location}`);
     console.log("Test 12 Passed: Provisioning success retains google_drive_connected success redirect [✓]");
     passedCount++;
   } catch (err: unknown) {
@@ -967,7 +967,7 @@ async function runTests() {
     });
 
     const location = res.headers.get("location");
-    assert(location !== null && location.includes("error=google_drive_folder_failed"), `Expected folder failed redirect, got ${location}`);
+    assert(location === "https://staudtmaxturtle.com/settings/storage?error=google_drive_folder_failed", `Expected folder failed redirect, got ${location}`);
     console.log("Test 14 Passed: Provisioning failure redirects to google_drive_folder_failed [✓]");
     passedCount++;
   } catch (err: unknown) {

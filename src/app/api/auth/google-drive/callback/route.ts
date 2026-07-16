@@ -60,28 +60,29 @@ function createCallbackRedirect(
 
 export async function handleCallback(request: NextRequest, deps?: CallbackDependencies) {
   const getConfig = deps?.getConfig || getGoogleDriveConfig;
-  const baseUrl = request.nextUrl.origin;
+  const requestOrigin = request.nextUrl.origin;
 
   let config: GoogleDriveConfig;
   try {
     config = getConfig();
   } catch {
-    return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_oauth_not_configured`);
+    return createCallbackRedirect(`${requestOrigin}/settings/storage?error=google_oauth_not_configured`);
   }
 
+  const publicOrigin = new URL(config.redirectUri).origin;
   const getSession = deps?.getSessionUser || getSessionUser;
   const user = await getSession();
 
   if (!user) {
-    return createCallbackRedirect(`${baseUrl}/login?callbackUrl=/settings/storage`);
+    return createCallbackRedirect(`${publicOrigin}/login?callbackUrl=/settings/storage`);
   }
 
   if (user.id !== config.ownerUserId) {
-    return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_drive_connection_failed`);
+    return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_drive_connection_failed`);
   }
 
   if (user.role !== "ADMIN" || user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
-    return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_drive_connection_failed`);
+    return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_drive_connection_failed`);
   }
 
   const searchParams = request.nextUrl.searchParams;
@@ -95,7 +96,7 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
   // 1. Check for error parameters returned by Google
   if (errorParam) {
     console.error("Google Drive OAuth callback error parameter returned:", errorParam);
-    return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_oauth_cancelled`);
+    return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_oauth_cancelled`);
   }
 
   // 2. Validate state and nonce cookie
@@ -104,12 +105,12 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
 
   if (!isStateValid || !cookieNonce) {
     console.error("Google Drive OAuth state validation failed.");
-    return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_oauth_state_invalid`);
+    return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_oauth_state_invalid`);
   }
 
   // 3. Ensure authorization code is present
   if (!code || code.trim() === "") {
-    return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_oauth_code_missing`);
+    return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_oauth_code_missing`);
   }
 
   try {
@@ -124,7 +125,7 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
     } catch (exchangeErr: unknown) {
       const errorMsg = exchangeErr instanceof Error ? exchangeErr.message : String(exchangeErr);
       console.error("Token exchange failed:", errorMsg);
-      return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_token_exchange_failed`);
+      return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_token_exchange_failed`);
     }
 
     const { refreshToken } = tokens;
@@ -135,7 +136,7 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
 
     if (!refreshToken && !activeConnection) {
       console.error("Google Drive connection failed: Missing refresh token on first connection or revoked connection.");
-      return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_refresh_token_missing`);
+      return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_refresh_token_missing`);
     }
 
     // 6. Persist or update credentials with email null
@@ -161,7 +162,7 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
     } catch (dbErr: unknown) {
       const errorMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
       console.error("Database upsert failed:", errorMsg);
-      return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_drive_connection_failed`);
+      return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_drive_connection_failed`);
     }
 
     const isFolderIdConfigured =
@@ -177,7 +178,7 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
         });
       } catch {
         console.error("Google Drive media folder provisioning failed.");
-        return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_drive_folder_failed`);
+        return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_drive_folder_failed`);
       }
     }
 
@@ -202,14 +203,14 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
     } catch (auditErr: unknown) {
       const errorMsg = auditErr instanceof Error ? auditErr.message : String(auditErr);
       console.error("Audit logging failed:", errorMsg);
-      return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_drive_connection_failed`);
+      return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_drive_connection_failed`);
     }
 
-    return createCallbackRedirect(`${baseUrl}/settings/storage?success=google_drive_connected`);
+    return createCallbackRedirect(`${publicOrigin}/settings/storage?success=google_drive_connected`);
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     console.error("Unexpected error in callback:", errorMsg);
-    return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_drive_connection_failed`);
+    return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_drive_connection_failed`);
   }
 }
 
