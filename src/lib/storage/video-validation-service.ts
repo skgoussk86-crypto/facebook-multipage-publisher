@@ -4,9 +4,10 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { UploadStatus, Prisma } from '@prisma/client';
 import { prisma } from '../prisma-client';
-import { getStorageAdapter, getStorageConfig } from './index';
+import { getStorageConfig } from './index';
 import { MediaProbe, MediaMetadata, MediaValidationError } from './media-probe';
 import { FfprobeMediaProbe } from './ffprobe-media-probe';
+import { prepareValidationSource } from './validation-source-resolver';
 
 export interface ValidationClaim {
   assetId: string;
@@ -114,16 +115,17 @@ export class VideoValidationService {
       throw new Error(`Asset ${claim.assetId} not found.`);
     }
 
-    const adapter = getStorageAdapter();
     const tempFileName = `val-${randomUUID()}.tmp`;
     const tempFilePath = path.join(os.tmpdir(), tempFileName);
 
     try {
-      // 1. Fetch object metadata from storage
-      const meta = await adapter.headObject(asset.bucket, asset.objectKey);
-      if (!meta) {
+      // 1. Fetch validation source
+      const source = await prepareValidationSource(asset);
+      if (!source) {
         return await this.transitionToFailure(claim, 'OBJECT_MISSING', 'The uploaded file does not exist in persistent storage.');
       }
+
+      const meta = source.metadata;
 
       // 2. Validate object size
       if (asset.actualSize !== null && meta.size !== Number(asset.actualSize)) {
@@ -138,7 +140,7 @@ export class VideoValidationService {
       }
 
       // 3. Download the file locally to temp path with byte counter and bounds protection
-      const readStream = await adapter.createReadStream(asset.bucket, asset.objectKey);
+      const readStream = await source.createReadStream();
       const writeStream = fs.createWriteStream(tempFilePath);
 
       let downloadedBytes = 0;
