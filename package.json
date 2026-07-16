@@ -18,7 +18,8 @@
     "test:google-drive-connection-repository": "node --conditions=react-server --import tsx scripts/run-google-drive-connection-repository-tests.ts",
     "test:google-drive-folder-provisioning": "node --conditions=react-server --import tsx scripts/run-google-drive-folder-provisioning-tests.ts",
     "test:google-drive-callback-folder": "node --conditions=react-server --import tsx scripts/run-google-drive-callback-folder-tests.ts",
-    "test:google-drive-media-client": "node --conditions=react-server --import tsx scripts/run-google-drive-media-client-tests.ts"
+    "test:google-drive-media-client": "node --conditions=react-server --import tsx scripts/run-google-drive-media-client-tests.ts",
+    "test:google-drive-upload-initiation": "node --conditions=react-server --import tsx scripts/run-google-drive-upload-initiation-tests.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1086.0",

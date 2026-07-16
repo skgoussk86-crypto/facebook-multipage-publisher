@@ -5,11 +5,18 @@ import {
   handleUploadApiError,
   PART_SIZE_BYTES,
 } from '@/lib/storage';
+import { getActiveConnectionForOwner } from '@/lib/google-drive/google-drive-connection-repository';
+import { GoogleDriveUploadInitiationService } from '@/lib/google-drive/google-drive-upload-initiation-service';
 
 export async function handleInitiateUpload(
   userId: string,
   idempotencyKey: string | null,
-  body: unknown
+  body: unknown,
+  deps?: {
+    getActiveConnection?: typeof getActiveConnectionForOwner;
+    initiateGDUpload?: typeof GoogleDriveUploadInitiationService.initiateGDUpload;
+    initiateR2Upload?: typeof UploadInitiationService.initiateFlow;
+  }
 ): Promise<NextResponse> {
   try {
     if (!idempotencyKey || idempotencyKey.trim().length === 0 || idempotencyKey.length > 128) {
@@ -32,7 +39,40 @@ export async function handleInitiateUpload(
       return NextResponse.json({ error: 'INVALID_REQUEST' }, { status: 400 });
     }
 
-    const result = await UploadInitiationService.initiateFlow(userId, {
+    const connHelper = deps?.getActiveConnection || getActiveConnectionForOwner;
+    const connection = await connHelper(userId);
+    const hasGoogleDrive = !!(
+      connection &&
+      connection.revokedAt === null &&
+      connection.driveFolderId &&
+      connection.driveFolderId.trim() !== ""
+    );
+
+    if (hasGoogleDrive) {
+      const gdHelper = deps?.initiateGDUpload || GoogleDriveUploadInitiationService.initiateGDUpload;
+      const gdResult = await gdHelper(userId, {
+        idempotencyKey,
+        originalName: filename,
+        expectedSize: expectedSizeBigInt,
+        declaredMimeType,
+      });
+
+      const safeResponse = {
+        provider: 'GOOGLE_DRIVE',
+        assetId: gdResult.assetId,
+        sessionUri: gdResult.sessionUri,
+        filename: gdResult.filename,
+        mimeType: gdResult.mimeType,
+        totalBytes: gdResult.totalBytes.toString(),
+        idempotentReplay: gdResult.idempotentReplay,
+      };
+
+      const status = gdResult.idempotentReplay ? 200 : 201;
+      return NextResponse.json(safeResponse, { status });
+    }
+
+    const initiateR2 = deps?.initiateR2Upload ?? UploadInitiationService.initiateFlow;
+    const result = await initiateR2(userId, {
       idempotencyKey,
       originalName: filename,
       expectedSize: expectedSizeBigInt,
@@ -53,6 +93,7 @@ export async function handleInitiateUpload(
     const totalParts = Math.ceil(Number(asset.expectedSize) / PART_SIZE_BYTES);
 
     const safeResponse = {
+      provider: 'R2',
       assetId: asset.id,
       filename: asset.originalName,
       expectedSize: asset.expectedSize,
