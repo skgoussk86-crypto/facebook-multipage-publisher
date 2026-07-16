@@ -23,6 +23,7 @@ export interface GoogleDriveFileMetadata {
   readonly modifiedTime: Date | null;
   readonly parents: readonly string[];
   readonly trashed: boolean;
+  readonly appProperties: Readonly<Record<string, string>>;
 }
 
 export interface GoogleDriveMediaClientOptions {
@@ -35,6 +36,10 @@ export class GoogleDriveFileNotFoundError extends Error {
     this.name = "GoogleDriveFileNotFoundError";
     Object.setPrototypeOf(this, GoogleDriveFileNotFoundError.prototype);
   }
+}
+
+function isRecord(val: unknown): val is Record<string, unknown> {
+  return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
 // Input validation helpers
@@ -162,7 +167,7 @@ export async function getGoogleDriveFileMetadata(
 
   const activeFetch = options?.fetchImpl || fetch;
   const encodedId = encodeURIComponent(fileId.trim());
-  const url = `https://www.googleapis.com/drive/v3/files/${encodedId}?fields=id%2Cname%2CmimeType%2Csize%2Cmd5Checksum%2CmodifiedTime%2Cparents%2Ctrashed`;
+  const url = `https://www.googleapis.com/drive/v3/files/${encodedId}?fields=id%2Cname%2CmimeType%2Csize%2Cmd5Checksum%2CmodifiedTime%2Cparents%2Ctrashed%2CappProperties`;
 
   const headers: Record<string, string> = {
     "Authorization": `Bearer ${accessToken.trim()}`,
@@ -195,14 +200,13 @@ export async function getGoogleDriveFileMetadata(
     throw new Error(`Failed to parse response JSON: ${msg}`);
   }
 
-  if (typeof data !== "object" || data === null) {
+  if (!isRecord(data)) {
     throw new Error("Google Drive file metadata response is invalid.");
   }
 
-  const record = data as Record<string, unknown>;
-  const id = record.id;
-  const name = record.name;
-  const mimeType = record.mimeType;
+  const id = data.id;
+  const name = data.name;
+  const mimeType = data.mimeType;
 
   if (typeof id !== "string" || id.trim() === "") {
     throw new Error("Google Drive file metadata is missing required field: id.");
@@ -214,27 +218,38 @@ export async function getGoogleDriveFileMetadata(
     throw new Error("Google Drive file metadata is missing required field: mimeType.");
   }
 
-  const parsedSize = Number(record.size);
+  const parsedSize = Number(data.size);
   if (!Number.isSafeInteger(parsedSize) || parsedSize < 0) {
     throw new Error("Google Drive file metadata has invalid size.");
   }
 
-  const md5Checksum = typeof record.md5Checksum === "string" && record.md5Checksum.trim() !== "" ? record.md5Checksum : null;
+  const md5Checksum = typeof data.md5Checksum === "string" && data.md5Checksum.trim() !== "" ? data.md5Checksum : null;
 
   let modifiedTime: Date | null = null;
-  if (typeof record.modifiedTime === "string" && record.modifiedTime.trim() !== "") {
-    const d = new Date(record.modifiedTime);
+  if (typeof data.modifiedTime === "string" && data.modifiedTime.trim() !== "") {
+    const d = new Date(data.modifiedTime);
     if (!isNaN(d.getTime())) {
       modifiedTime = d;
     }
   }
 
   let parents: readonly string[] = [];
-  if (Array.isArray(record.parents)) {
-    parents = Object.freeze(record.parents.filter((p: unknown) => typeof p === "string" && p.trim() !== "") as string[]);
+  if (Array.isArray(data.parents)) {
+    parents = Object.freeze(data.parents.filter((p: unknown) => typeof p === "string" && p.trim() !== "") as string[]);
   }
 
-  const trashed = typeof record.trashed === "boolean" ? record.trashed : false;
+  const trashed = typeof data.trashed === "boolean" ? data.trashed : false;
+
+  const parsedAppProps: Record<string, string> = {};
+  const rawAppProps = data.appProperties;
+  if (isRecord(rawAppProps)) {
+    for (const [key, val] of Object.entries(rawAppProps)) {
+      if (typeof val === "string") {
+        parsedAppProps[key] = val;
+      }
+    }
+  }
+  const appProperties = Object.freeze(parsedAppProps);
 
   return {
     id: id.trim(),
@@ -245,6 +260,7 @@ export async function getGoogleDriveFileMetadata(
     modifiedTime,
     parents,
     trashed,
+    appProperties,
   };
 }
 

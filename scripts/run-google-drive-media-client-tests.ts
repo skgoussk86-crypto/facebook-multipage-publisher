@@ -578,7 +578,7 @@ async function runTests() {
     };
 
     await getGoogleDriveFileMetadata(validAccessToken, "file-xyz", { fetchImpl });
-    assert(requestUrl === "https://www.googleapis.com/drive/v3/files/file-xyz?fields=id%2Cname%2CmimeType%2Csize%2Cmd5Checksum%2CmodifiedTime%2Cparents%2Ctrashed", `Incorrect URL: ${requestUrl}`);
+    assert(requestUrl === "https://www.googleapis.com/drive/v3/files/file-xyz?fields=id%2Cname%2CmimeType%2Csize%2Cmd5Checksum%2CmodifiedTime%2Cparents%2Ctrashed%2CappProperties", `Incorrect URL: ${requestUrl}`);
     assert(authHeader === `Bearer ${validAccessToken}`, `Incorrect Authorization header: ${authHeader}`);
     console.log("Test 22 Passed: Metadata request uses exact URL and auth header [✓]");
     passedCount++;
@@ -641,10 +641,40 @@ async function runTests() {
     assert(metadata.modifiedTime === null, "Expected default null for modifiedTime");
     assert(Array.isArray(metadata.parents) && metadata.parents.length === 0, "Expected default empty array for parents");
     assert(metadata.trashed === false, "Expected default false for trashed");
+    assert(metadata.appProperties !== null && typeof metadata.appProperties === "object" && Object.keys(metadata.appProperties).length === 0, "Expected default empty object for appProperties");
     console.log("Test 25 Passed: Metadata defaults optional fields safely [✓]");
     passedCount++;
   } catch (err: unknown) {
     console.error("Test 25 Failed:", err);
+  }
+
+  // Test 25b: Metadata parses appProperties safely.
+  try {
+    const fetchImpl = async (): Promise<Response> => {
+      return new Response(JSON.stringify({
+        id: "file-xyz",
+        name: "video.mp4",
+        mimeType: "video/mp4",
+        size: "0",
+        appProperties: {
+          assetId: "asset-123",
+          nonStringVal: 12345, // should be ignored
+          anotherStr: "hello",
+        },
+      }));
+    };
+
+    const metadata = await getGoogleDriveFileMetadata(validAccessToken, "file-xyz", { fetchImpl });
+    if (!metadata) {
+      throw new Error("Expected Google Drive metadata.");
+    }
+    assert(metadata.appProperties.assetId === "asset-123", "Expected assetId to be parsed");
+    assert(metadata.appProperties.anotherStr === "hello", "Expected anotherStr to be parsed");
+    assert(!("nonStringVal" in metadata.appProperties), "Non-string appProperties entries must be ignored safely");
+    console.log("Test 25b Passed: Metadata parses appProperties safely [✓]");
+    passedCount++;
+  } catch (err: unknown) {
+    console.error("Test 25b Failed:", err);
   }
 
   // Test 26: Malformed metadata is rejected.
@@ -905,19 +935,19 @@ async function runTests() {
     console.error("Test 37 Failed:", err);
   }
 
-  // Test 38: No real Google or database call occurs.
+  // Test 39: No real Google or database call occurs.
   try {
     // Satisfied since all tests above only utilize mock fetch implementations and never touch database or active networks
-    assert(passedCount === 37, `Precursor test counts mismatch: expected 37, got ${passedCount}`);
-    console.log("Test 38 Passed: No real Google or database call occurs [✓]");
+    assert(passedCount === 38, `Precursor test counts mismatch: expected 38, got ${passedCount}`);
+    console.log("Test 39 Passed: No real Google or database call occurs [✓]");
     passedCount++;
   } catch (err: unknown) {
-    console.error("Test 38 Failed:", err);
+    console.error("Test 39 Failed:", err);
   }
 
-  console.log(`\nGoogle Drive Media Client Validation complete. Passed: ${passedCount}/38`);
+  console.log(`\nGoogle Drive Media Client Validation complete. Passed: ${passedCount}/39`);
 
-  if (passedCount !== 38) {
+  if (passedCount !== 39) {
     console.error("ERROR: Not all validation tests passed.");
     process.exit(1);
   } else {
