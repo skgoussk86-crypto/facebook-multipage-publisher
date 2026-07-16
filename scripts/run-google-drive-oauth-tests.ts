@@ -15,7 +15,7 @@ import {
   verifyOAuthState,
 } from "../src/lib/google-drive/google-drive-oauth-state";
 import { handleInitiate } from "../src/app/api/auth/google-drive/initiate/route";
-import { handleCallback, CallbackDependencies } from "../src/app/api/auth/google-drive/callback/route";
+import { handleCallback, CallbackDependencies, GoogleDriveConnectAuditInput } from "../src/app/api/auth/google-drive/callback/route";
 
 type UpsertDataInput = NonNullable<Parameters<NonNullable<CallbackDependencies["upsertConn"]>>[1]>;
 import { handleStatus } from "../src/app/api/auth/google-drive/status/route";
@@ -428,6 +428,7 @@ async function runTests() {
       getSessionUser: async () => mockOwnerAdmin,
       getConfig: () => testConfig,
       verifyState: () => true,
+      writeAuditLog: async () => {},
     });
     assert(res.headers.get("location")?.includes("error=google_oauth_code_missing") === true, "Expected missing code error redirect");
     assertCookieCleared(res);
@@ -451,6 +452,7 @@ async function runTests() {
       getSessionUser: async () => mockOwnerAdmin,
       getConfig: () => testConfig,
       verifyState: () => true,
+      writeAuditLog: async () => {},
     });
     assert(res.headers.get("location")?.includes("error=google_oauth_cancelled") === true, "Expected cancelled error redirect");
     assertCookieCleared(res);
@@ -477,6 +479,7 @@ async function runTests() {
       exchangeCode: async () => {
         throw new Error("Invalid token endpoint exchange request");
       },
+      writeAuditLog: async () => {},
     });
     assert(res.headers.get("location")?.includes("error=google_token_exchange_failed") === true, "Expected exchange failure redirect");
     assertCookieCleared(res);
@@ -506,6 +509,7 @@ async function runTests() {
         expiryDate: Date.now() + 3600,
       }),
       getActiveConnection: async () => null, // first connection
+      writeAuditLog: async () => {},
     });
     assert(res.headers.get("location")?.includes("error=google_refresh_token_missing") === true, "Expected refresh token missing redirect");
     assertCookieCleared(res);
@@ -542,6 +546,7 @@ async function runTests() {
     } = {
       value: null,
     };
+    const auditLogs17: GoogleDriveConnectAuditInput[] = [];
     const res = await handleCallback(req, {
       getSessionUser: async () => mockOwnerAdmin,
       getConfig: () => testConfig,
@@ -556,6 +561,9 @@ async function runTests() {
         capture17.value = data;
         return activeConn;
       },
+      writeAuditLog: async (input) => {
+        auditLogs17.push(input);
+      },
     });
     const captured17 = capture17.value;
     if (captured17 === null) {
@@ -564,6 +572,12 @@ async function runTests() {
     assert(res.headers.get("location")?.includes("success=google_drive_connected") === true, "Expected success redirect");
     assert(captured17.encryptedRefreshToken === "v1:existing-token-envelope", "Should preserve existing refresh token");
     assertCookieCleared(res);
+    assert(auditLogs17.length === 1, "Expected exactly 1 audit call");
+    assert(auditLogs17[0].action === "GOOGLE_DRIVE_CONNECT", "Action should be GOOGLE_DRIVE_CONNECT");
+    assert(auditLogs17[0].userId === mockOwnerAdmin.id, "User ID should match");
+    assert(auditLogs17[0].details.includes("whether Google returned a new refresh token: no"), "Details should say refresh token: no");
+    assert(auditLogs17[0].details.includes("drive.file"), "Details should contain drive.file");
+    assert(!auditLogs17[0].details.includes("access-token"), "Details must not leak access token");
     console.log("Test 17 Passed: Existing token preserved when reconnect response omits refresh token [✓]");
     passedCount++;
   } catch (e: unknown) {
@@ -586,6 +600,7 @@ async function runTests() {
     } = {
       value: null,
     };
+    const auditLogs18: GoogleDriveConnectAuditInput[] = [];
     const res = await handleCallback(req, {
       getSessionUser: async () => mockOwnerAdmin,
       getConfig: () => testConfig,
@@ -607,6 +622,9 @@ async function runTests() {
           revokedAt: null,
         } as GoogleDriveConnectionRecord;
       },
+      writeAuditLog: async (input) => {
+        auditLogs18.push(input);
+      },
     });
     const captured18 = capture18.value;
     if (captured18 === null) {
@@ -616,6 +634,13 @@ async function runTests() {
     assert(captured18.encryptedRefreshToken.startsWith("v1:"), "Should start with version envelope prefix");
     assert(captured18.encryptedRefreshToken !== "new-secret-refresh-token", "Token must be encrypted");
     assertCookieCleared(res);
+    assert(auditLogs18.length === 1, "Expected exactly 1 audit call");
+    assert(auditLogs18[0].action === "GOOGLE_DRIVE_CONNECT", "Action should be GOOGLE_DRIVE_CONNECT");
+    assert(auditLogs18[0].userId === mockOwnerAdmin.id, "User ID should match");
+    assert(auditLogs18[0].details.includes("whether Google returned a new refresh token: yes"), "Details should say refresh token: yes");
+    assert(auditLogs18[0].details.includes("drive.file"), "Details should contain drive.file");
+    assert(!auditLogs18[0].details.includes("new-secret-refresh-token"), "Details must not contain new-secret-refresh-token");
+    assert(!auditLogs18[0].details.includes("access-token"), "Details must not contain access token");
     console.log("Test 18 Passed: Refresh token encrypted before repository write [✓]");
     passedCount++;
   } catch (e: unknown) {
@@ -789,6 +814,7 @@ async function runTests() {
     } = {
       value: null,
     };
+    const auditLogs24: GoogleDriveConnectAuditInput[] = [];
     const res = await handleCallback(req, {
       getSessionUser: async () => mockOwnerAdmin,
       getConfig: () => testConfig,
@@ -810,6 +836,9 @@ async function runTests() {
           revokedAt: null,
         } as GoogleDriveConnectionRecord;
       },
+      writeAuditLog: async (input) => {
+        auditLogs24.push(input);
+      },
     });
 
     const captured24 = capture24.value;
@@ -823,6 +852,13 @@ async function runTests() {
     const decrypted = decryptRefreshToken(captured24.encryptedRefreshToken, testConfig.encryptionKey);
     assert(decrypted === "brand-new-refresh-token", "Should decrypt back to the brand new refresh token");
     assertCookieCleared(res);
+    assert(auditLogs24.length === 1, "Expected exactly 1 audit call");
+    assert(auditLogs24[0].action === "GOOGLE_DRIVE_CONNECT", "Action should be GOOGLE_DRIVE_CONNECT");
+    assert(auditLogs24[0].userId === mockOwnerAdmin.id, "User ID should match");
+    assert(auditLogs24[0].details.includes("whether Google returned a new refresh token: yes"), "Details should say refresh token: yes");
+    assert(auditLogs24[0].details.includes("drive.file"), "Details should contain drive.file");
+    assert(!auditLogs24[0].details.includes("brand-new-refresh-token"), "Details must not contain new refresh token");
+    assert(!auditLogs24[0].details.includes("access-token"), "Details must not contain access token");
     console.log("Test 24 Passed: Reconnect replacing tombstone [✓]");
     passedCount++;
   } catch (e: unknown) {
@@ -830,8 +866,55 @@ async function runTests() {
     console.error("Test 24 Failed:", msg);
   }
 
-  console.log(`\nGoogle Drive OAuth Validation complete. Passed: ${passedCount}/24`);
-  if (passedCount !== 24) {
+  // Test 25: Connect fails if audit logging fails
+  try {
+    resetMocks();
+    const { state, nonce } = generateOAuthState(mockOwnerAdmin.id);
+    const req = new NextRequest(`http://localhost:3000/api/auth/google-drive/callback?state=${state}&code=mock-code`, {
+      headers: {
+        Cookie: `google_drive_oauth_state_nonce=${nonce}`
+      }
+    });
+
+    const res = await handleCallback(req, {
+      getSessionUser: async () => mockOwnerAdmin,
+      getConfig: () => testConfig,
+      verifyState: () => true,
+      exchangeCode: async () => ({
+        accessToken: "access-token",
+        refreshToken: "brand-new-refresh-token",
+        expiryDate: Date.now() + 3600,
+      }),
+      getActiveConnection: async () => null,
+      upsertConn: async () => {
+        return {
+          id: "connection-id",
+          userId: mockOwnerAdmin.id,
+          encryptedRefreshToken: "v1:enc",
+          refreshTokenKeyVersion: "1",
+          googleAccountEmail: null,
+          driveFolderId: null,
+          connectedAt: new Date(),
+          updatedAt: new Date(),
+          revokedAt: null,
+        };
+      },
+      writeAuditLog: async () => {
+        throw new Error("Audit service unavailable");
+      },
+    });
+
+    assert(res.headers.get("location")?.includes("error=google_drive_connection_failed") === true, "Expected redirect to connection failed on audit error");
+    assertCookieCleared(res);
+    console.log("Test 25 Passed: Connect fails if audit logging fails [✓]");
+    passedCount++;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Test 25 Failed:", msg);
+  }
+
+  console.log(`\nGoogle Drive OAuth Validation complete. Passed: ${passedCount}/25`);
+  if (passedCount !== 25) {
     console.error("ERROR: Not all validation tests passed.");
     process.exit(1);
   } else {

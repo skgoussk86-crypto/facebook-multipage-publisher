@@ -7,11 +7,18 @@ import { getActiveConnectionForOwner, upsertConnection, GoogleDriveConnectionRec
 import { verifyOAuthState } from "@/lib/google-drive/google-drive-oauth-state";
 import { createGoogleDriveOAuthClient, exchangeAuthorizationCode } from "@/lib/google-drive/google-drive-oauth-client";
 import { encryptRefreshToken } from "@/lib/google-drive/google-drive-token-crypto";
+import { prisma } from "@/lib/prisma-client";
 
 export interface CallbackTokensDto {
   accessToken: string;
   refreshToken: string | null;
   expiryDate: number | null;
+}
+
+export interface GoogleDriveConnectAuditInput {
+  readonly action: "GOOGLE_DRIVE_CONNECT";
+  readonly details: string;
+  readonly userId: string;
 }
 
 export interface CallbackDependencies {
@@ -23,6 +30,7 @@ export interface CallbackDependencies {
   upsertConn?: (userId: string, data: { encryptedRefreshToken: string; refreshTokenKeyVersion: string; googleAccountEmail?: string | null; driveFolderId?: string | null }) => Promise<GoogleDriveConnectionRecord>;
   encryptToken?: (plainText: string, keyHex?: string) => string;
   createOAuthClient?: (config: GoogleDriveConfig) => OAuth2Client;
+  readonly writeAuditLog?: (input: GoogleDriveConnectAuditInput) => Promise<void>;
 }
 
 function createCallbackRedirect(
@@ -144,6 +152,30 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
     } catch (dbErr: unknown) {
       const errorMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
       console.error("Database upsert failed:", errorMsg);
+      return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_drive_connection_failed`);
+    }
+
+    // 7. Write audit log
+    const writeAuditLogFn = deps?.writeAuditLog || (async (input) => {
+      await prisma.auditLog.create({
+        data: {
+          action: input.action,
+          details: input.details,
+          userId: input.userId,
+        },
+      });
+    });
+
+    try {
+      const hasNewTokenStr = refreshToken ? "yes" : "no";
+      await writeAuditLogFn({
+        action: "GOOGLE_DRIVE_CONNECT",
+        details: `owner-scoped Google Drive credentials were connected, whether Google returned a new refresh token: ${hasNewTokenStr}, requested scope was drive.file`,
+        userId: user.id,
+      });
+    } catch (auditErr: unknown) {
+      const errorMsg = auditErr instanceof Error ? auditErr.message : String(auditErr);
+      console.error("Audit logging failed:", errorMsg);
       return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_drive_connection_failed`);
     }
 
