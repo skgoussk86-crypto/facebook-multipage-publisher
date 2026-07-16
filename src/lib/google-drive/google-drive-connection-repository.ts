@@ -126,3 +126,58 @@ export async function disconnectConnection(
   });
   return result as GoogleDriveConnectionRecord;
 }
+
+export interface GoogleDriveFolderIdPersistenceInput {
+  readonly ownerUserId: string;
+  readonly driveFolderId: string;
+}
+
+export interface GoogleDriveFolderIdPersistence {
+  readonly updateActiveOwnerFolderId: (
+    input: GoogleDriveFolderIdPersistenceInput
+  ) => Promise<number>;
+}
+
+export async function saveDriveFolderIdForOwner(
+  ownerUserId: string,
+  driveFolderId: string,
+  persistence?: GoogleDriveFolderIdPersistence
+): Promise<boolean> {
+  if (!ownerUserId || ownerUserId.trim() === "") {
+    throw new Error("Owner User ID is required.");
+  }
+  if (!driveFolderId || driveFolderId.trim() === "") {
+    throw new Error("Drive folder ID is required.");
+  }
+
+  const trimmedOwnerUserId = ownerUserId.trim();
+  const trimmedDriveFolderId = driveFolderId.trim();
+
+  const activePersistence = persistence || {
+    updateActiveOwnerFolderId: async (input) => {
+      const result = await defaultPrisma.googleDriveConnection.updateMany({
+        where: {
+          userId: input.ownerUserId,
+          revokedAt: null,
+        },
+        data: {
+          driveFolderId: input.driveFolderId,
+        },
+      });
+      return result.count;
+    },
+  };
+
+  const count = await activePersistence.updateActiveOwnerFolderId({
+    ownerUserId: trimmedOwnerUserId,
+    driveFolderId: trimmedDriveFolderId,
+  });
+
+  if (count === 1) {
+    return true;
+  }
+  if (count === 0) {
+    return false;
+  }
+  throw new Error("Unexpected Google Drive connection update count.");
+}
