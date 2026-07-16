@@ -118,6 +118,13 @@ const mockPrisma = {
 
 const fakePrismaClient = mockPrisma as unknown as typeof defaultPrisma;
 
+const fakeProvisionFolder: NonNullable<
+  CallbackDependencies["provisionFolder"]
+> = async () => ({
+  folderId: "test-folder-id",
+  folderName: "Test Folder",
+});
+
 // --- CONFIG MOCKS ---
 const testConfig = {
   clientId: "test-client-id",
@@ -562,6 +569,7 @@ async function runTests() {
         capture17.value = data;
         return activeConn;
       },
+      provisionFolder: fakeProvisionFolder,
       writeAuditLog: async (input) => {
         auditLogs17.push(input);
       },
@@ -623,6 +631,7 @@ async function runTests() {
           revokedAt: null,
         } as GoogleDriveConnectionRecord;
       },
+      provisionFolder: fakeProvisionFolder,
       writeAuditLog: async (input) => {
         auditLogs18.push(input);
       },
@@ -837,6 +846,7 @@ async function runTests() {
           revokedAt: null,
         } as GoogleDriveConnectionRecord;
       },
+      provisionFolder: fakeProvisionFolder,
       writeAuditLog: async (input) => {
         auditLogs24.push(input);
       },
@@ -900,6 +910,7 @@ async function runTests() {
           revokedAt: null,
         };
       },
+      provisionFolder: fakeProvisionFolder,
       writeAuditLog: async () => {
         throw new Error("Audit service unavailable");
       },

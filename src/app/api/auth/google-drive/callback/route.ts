@@ -8,6 +8,11 @@ import { verifyOAuthState } from "@/lib/google-drive/google-drive-oauth-state";
 import { createGoogleDriveOAuthClient, exchangeAuthorizationCode } from "@/lib/google-drive/google-drive-oauth-client";
 import { encryptRefreshToken } from "@/lib/google-drive/google-drive-token-crypto";
 import { prisma } from "@/lib/prisma-client";
+import {
+  provisionGoogleDriveMediaFolderForOwner,
+  GoogleDriveFolderProvisioningInput,
+  GoogleDriveFolderProvisioningResult,
+} from "@/lib/google-drive/google-drive-folder-provisioning-service";
 
 export interface CallbackTokensDto {
   accessToken: string;
@@ -31,6 +36,9 @@ export interface CallbackDependencies {
   encryptToken?: (plainText: string, keyHex?: string) => string;
   createOAuthClient?: (config: GoogleDriveConfig) => OAuth2Client;
   readonly writeAuditLog?: (input: GoogleDriveConnectAuditInput) => Promise<void>;
+  readonly provisionFolder?: (
+    input: GoogleDriveFolderProvisioningInput
+  ) => Promise<GoogleDriveFolderProvisioningResult>;
 }
 
 function createCallbackRedirect(
@@ -142,8 +150,9 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
       refreshTokenKeyVersion = "1";
     }
 
+    let savedConnection: GoogleDriveConnectionRecord;
     try {
-      await upsertConnFn(user.id, {
+      savedConnection = await upsertConnFn(user.id, {
         encryptedRefreshToken,
         refreshTokenKeyVersion,
         googleAccountEmail: null,
@@ -153,6 +162,23 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
       const errorMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
       console.error("Database upsert failed:", errorMsg);
       return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_drive_connection_failed`);
+    }
+
+    const isFolderIdConfigured =
+      typeof savedConnection.driveFolderId === "string" &&
+      savedConnection.driveFolderId.trim() !== "";
+
+    if (!isFolderIdConfigured) {
+      const provisionFolderFn = deps?.provisionFolder || provisionGoogleDriveMediaFolderForOwner;
+      try {
+        await provisionFolderFn({
+          ownerUserId: user.id,
+          encryptedRefreshToken: savedConnection.encryptedRefreshToken,
+        });
+      } catch {
+        console.error("Google Drive media folder provisioning failed.");
+        return createCallbackRedirect(`${baseUrl}/settings/storage?error=google_drive_folder_failed`);
+      }
     }
 
     // 7. Write audit log
