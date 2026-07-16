@@ -40,6 +40,11 @@ export default function VideoUploader({
   });
 
   const uploaderRef = useRef<BrowserMultipartUploader | null>(null);
+  const onUploadValidatedRef = useRef(onUploadValidated);
+
+  useEffect(() => {
+    onUploadValidatedRef.current = onUploadValidated;
+  }, [onUploadValidated]);
 
   useEffect(() => {
     let active = true;
@@ -64,6 +69,9 @@ export default function VideoUploader({
         })
         .then((data) => {
           if (active && data) {
+            if (data.provider === 'GOOGLE_DRIVE') {
+              return;
+            }
             const completedCount = (data.completedPartNumbers || []).length;
             const progress = data.totalParts > 0 ? Math.round((completedCount / data.totalParts) * 100) : 0;
             const partSize = data.partSize || 10 * 1024 * 1024;
@@ -116,7 +124,7 @@ export default function VideoUploader({
         // Notify parent when validation succeeds
         if (newStatus.state === 'validated' && newStatus.assetId && newStatus.metadata) {
           const durationSeconds = Math.round((newStatus.metadata.durationMs || 0) / 1000);
-          onUploadValidated(newStatus.assetId, durationSeconds);
+          onUploadValidatedRef.current(newStatus.assetId, durationSeconds);
         }
       },
     });
@@ -126,7 +134,7 @@ export default function VideoUploader({
     return () => {
       uploader.destroy();
     };
-  }, [file, initialAssetId, recoveryKey, onUploadValidated]);
+  }, [file, initialAssetId, recoveryKey]);
 
   const handleStart = () => {
     uploaderRef.current?.start();

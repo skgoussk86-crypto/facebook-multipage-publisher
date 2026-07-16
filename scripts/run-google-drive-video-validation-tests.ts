@@ -3,7 +3,7 @@ import { prepareValidationSource, ValidationSourceAssetInput, PreparedValidation
 import { prepareGoogleDriveSource, GDValidationSourceDependencies } from "../src/lib/google-drive/google-drive-validation-source";
 import { GoogleDriveConnectionRecord } from "../src/lib/google-drive/google-drive-connection-repository";
 import { GoogleDriveConfig } from "../src/lib/google-drive/google-drive-config";
-import { GoogleDriveFileMetadata } from "../src/lib/google-drive/google-drive-media-client";
+import { GoogleDriveFileMetadata, GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY } from "../src/lib/google-drive/google-drive-media-client";
 import { MediaValidationError } from "../src/lib/storage/media-probe";
 
 function assert(condition: boolean, message: string) {
@@ -42,7 +42,7 @@ const mockMetadata: GoogleDriveFileMetadata = {
   parents: ["folder-456"],
   trashed: false,
   appProperties: {
-    assetId: "asset-123",
+    [GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY]: "asset-123",
   },
 };
 
@@ -546,7 +546,7 @@ async function runTests() {
         getFileMetadata: async () => ({
           ...mockMetadata,
           appProperties: {
-            assetId: "mismatched-asset-id",
+            [GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY]: "mismatched-asset-id",
           },
         }),
       });
@@ -562,6 +562,31 @@ async function runTests() {
     passedCount++;
   } catch (err) {
     console.error("Test 17 Failed:", err);
+  }
+
+  // 17b. Missing appProperties entirely produces STORAGE_BINDING_MISMATCH.
+  try {
+    let failed = false;
+    try {
+      await prepareGoogleDriveSource(validAssetInput, {
+        ...defaultDeps,
+        getFileMetadata: async () => ({
+          ...mockMetadata,
+          appProperties: {},
+        }),
+      });
+    } catch (err: unknown) {
+      failed = true;
+      assert(err instanceof MediaValidationError, "Expected MediaValidationError");
+      assert((err as MediaValidationError).code === "STORAGE_BINDING_MISMATCH", "Code mismatch");
+      assert((err as MediaValidationError).message === "The uploaded file does not match its recorded storage binding.", "Message mismatch");
+      assertNoLeak(err);
+    }
+    assert(failed, "Missing appProperties.assetId must throw");
+    console.log("Test 17b Passed: Missing appProperties.assetId produces STORAGE_BINDING_MISMATCH [✓]");
+    passedCount++;
+  } catch (err) {
+    console.error("Test 17b Failed:", err);
   }
 
   // 18. Wrong metadata parent produces STORAGE_BINDING_MISMATCH.
@@ -693,9 +718,9 @@ async function runTests() {
     console.error("Test 22 Failed:", err);
   }
 
-  console.log(`\nGoogle Drive Video Validation complete. Passed: ${passedCount}/22`);
+  console.log(`\nGoogle Drive Video Validation complete. Passed: ${passedCount}/23`);
 
-  if (passedCount !== 22) {
+  if (passedCount !== 23) {
     console.error("ERROR: Not all validation tests passed.");
     process.exit(1);
   } else {

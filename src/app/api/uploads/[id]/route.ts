@@ -76,11 +76,13 @@ export async function handleGetUploadStatus(
 
     const safeResponse = {
       assetId: serializedAsset.id,
+      provider: asset.provider,
       filename: serializedAsset.originalName,
       expectedSize: serializedAsset.expectedSize,
       declaredMimeType: serializedAsset.declaredMimeType,
       status: serializedAsset.status,
       partSize: PART_SIZE_BYTES,
+
       totalParts,
       completedPartNumbers,
       uploadExpiresAt: serializedAsset.uploadExpiresAt,

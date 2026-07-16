@@ -5,7 +5,7 @@ import { getGoogleDriveConfig, GoogleDriveConfig } from "./google-drive-config";
 import { getActiveConnectionForOwner, GoogleDriveConnectionRecord } from "./google-drive-connection-repository";
 import { decryptRefreshToken } from "./google-drive-token-crypto";
 import { getAccessTokenFromRefreshToken } from "./google-drive-oauth-client";
-import { getGoogleDriveFileMetadata, deleteGoogleDriveFile } from "./google-drive-media-client";
+import { getGoogleDriveFileMetadata, deleteGoogleDriveFile, GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY } from "./google-drive-media-client";
 import { NotFoundError, ForbiddenOwnershipError, InvalidStateTransitionError, ExpiredSessionError } from "../storage/upload-session-encryption";
 
 export interface DbClient {
@@ -235,7 +235,7 @@ export class GoogleDriveUploadCompletionService {
     }
 
     // Enforce metadata matching
-    if (!metadata.appProperties || metadata.appProperties.assetId !== asset.id) {
+    if (!metadata.appProperties || metadata.appProperties[GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY] !== asset.id) {
       throw new Error("METADATA_MISMATCH");
     }
     if (!asset.bucket || asset.bucket.trim() === "") {

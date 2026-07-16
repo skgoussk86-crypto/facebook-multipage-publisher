@@ -5,7 +5,7 @@ import { GoogleDriveConfig } from "../src/lib/google-drive/google-drive-config";
 import { handleCompleteUpload } from "../src/app/api/uploads/[id]/complete/route";
 import { handleAbortUpload } from "../src/app/api/uploads/[id]/abort/route";
 import { ForbiddenOwnershipError, ExpiredSessionError } from "../src/lib/storage/upload-session-encryption";
-import { GoogleDriveFileMetadata } from "../src/lib/google-drive/google-drive-media-client";
+import { GoogleDriveFileMetadata, GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY } from "../src/lib/google-drive/google-drive-media-client";
 
 // Assertion helper
 function assert(condition: boolean, message: string) {
@@ -135,7 +135,7 @@ function makeGoogleDriveFileMetadata(overrides?: Partial<GoogleDriveFileMetadata
     parents: ["folder-456"],
     trashed: false,
     appProperties: {
-      assetId: "asset-123",
+      [GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY]: "asset-123",
     },
   };
   return {
@@ -455,7 +455,7 @@ async function runTests() {
       void fileId;
       return makeGoogleDriveFileMetadata({
         appProperties: {
-          assetId: "wrong-asset-id",
+          [GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY]: "wrong-asset-id",
         },
       });
     };
@@ -475,6 +475,39 @@ async function runTests() {
     passedCount++;
   } catch (err) {
     console.error("Test 8 Failed:", err);
+  }
+
+  // Test 8b: missing appProperties entirely, or missing fbPublisherAssetId
+  try {
+    resetMockDb();
+    mockUsers.push(validUser);
+    mockAssets.push(validAsset);
+    mockConnections.push(validConnection);
+    mockSessions.push(validSession);
+
+    const getFileMetadataMock = async (accessToken: string, fileId: string) => {
+      void accessToken;
+      void fileId;
+      return makeGoogleDriveFileMetadata({
+        appProperties: {},
+      });
+    };
+
+    let failed = false;
+    try {
+      await GoogleDriveUploadCompletionService.completeUpload(validUserId, "asset-123", validBody, {
+        ...defaultDeps,
+        getFileMetadata: getFileMetadataMock,
+      });
+    } catch (err: unknown) {
+      failed = true;
+      assert(err instanceof Error && err.message === "METADATA_MISMATCH", "Expected METADATA_MISMATCH error");
+    }
+    assert(failed, "Missing assetId in appProperties should be rejected");
+    console.log("Test 8b Passed: missing appProperties assetId [✓]");
+    passedCount++;
+  } catch (err) {
+    console.error("Test 8b Failed:", err);
   }
 
   // Test 9: wrong parent folder (bucket parent)
@@ -1039,9 +1072,9 @@ async function runTests() {
     console.error("Test 24 Failed:", err);
   }
 
-  console.log(`\nGoogle Drive Upload Completion and Abort Integration Validation complete. Passed: ${passedCount}/24`);
+  console.log(`\nGoogle Drive Upload Completion and Abort Integration Validation complete. Passed: ${passedCount}/25`);
 
-  if (passedCount !== 24) {
+  if (passedCount !== 25) {
     console.error("ERROR: Not all validation tests passed.");
     process.exit(1);
   } else {

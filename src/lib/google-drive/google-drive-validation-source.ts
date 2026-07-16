@@ -7,7 +7,7 @@ import { getGoogleDriveConfig } from "./google-drive-config";
 import type { GoogleDriveConfig } from "./google-drive-config";
 import { decryptRefreshToken } from "./google-drive-token-crypto";
 import { getAccessTokenFromRefreshToken } from "./google-drive-oauth-client";
-import { getGoogleDriveFileMetadata, createGoogleDriveFileReadStream } from "./google-drive-media-client";
+import { getGoogleDriveFileMetadata, createGoogleDriveFileReadStream, GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY } from "./google-drive-media-client";
 import { MediaValidationError } from "../storage/media-probe";
 
 export interface GDValidationSourceDependencies {
@@ -90,7 +90,7 @@ export async function prepareGoogleDriveSource(
   const bindingMismatch =
     metadata.id !== fileId ||
     !metadata.appProperties ||
-    metadata.appProperties.assetId !== asset.id ||
+    metadata.appProperties[GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY] !== asset.id ||
     !metadata.parents ||
     !metadata.parents.includes(asset.bucket) ||
     metadata.name !== asset.originalName ||

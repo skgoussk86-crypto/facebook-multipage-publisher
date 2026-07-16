@@ -5,6 +5,7 @@ import {
   deleteGoogleDriveFile,
   GoogleDriveFileNotFoundError,
   GoogleDriveResumableUploadInput,
+  GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY,
 } from "../src/lib/google-drive/google-drive-media-client";
 
 // Assertion helper
@@ -657,7 +658,7 @@ async function runTests() {
         mimeType: "video/mp4",
         size: "0",
         appProperties: {
-          assetId: "asset-123",
+          [GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY]: "asset-123",
           nonStringVal: 12345, // should be ignored
           anotherStr: "hello",
         },
@@ -668,7 +669,7 @@ async function runTests() {
     if (!metadata) {
       throw new Error("Expected Google Drive metadata.");
     }
-    assert(metadata.appProperties.assetId === "asset-123", "Expected assetId to be parsed");
+    assert(metadata.appProperties[GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY] === "asset-123", "Expected assetId to be parsed");
     assert(metadata.appProperties.anotherStr === "hello", "Expected anotherStr to be parsed");
     assert(!("nonStringVal" in metadata.appProperties), "Non-string appProperties entries must be ignored safely");
     console.log("Test 25b Passed: Metadata parses appProperties safely [✓]");

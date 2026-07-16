@@ -85,6 +85,8 @@ function validateFileId(fileId: string): void {
   }
 }
 
+export const GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY = "fbPublisherAssetId";
+
 export async function initiateGoogleDriveResumableUpload(
   input: GoogleDriveResumableUploadInput,
   options?: GoogleDriveMediaClientOptions
@@ -106,7 +108,7 @@ export async function initiateGoogleDriveResumableUpload(
     parents: [input.folderId.trim()],
     appProperties: {
       fbPublisherPurpose: "mediaAsset",
-      fbPublisherAssetId: input.assetId.trim(),
+      [GOOGLE_DRIVE_ASSET_ID_APP_PROPERTY]: input.assetId.trim(),
     },
   });
 

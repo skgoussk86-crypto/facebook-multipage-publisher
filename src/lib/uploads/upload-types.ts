@@ -32,4 +32,13 @@ export interface BrowserUploaderStatus {
   error?: string;
   retryAttempt?: number;
   metadata?: VideoMetadata;
+  provider?: 'R2' | 'GOOGLE_DRIVE';
+}
+
+export interface UploadFileLike {
+  readonly name: string;
+  readonly size: number;
+  readonly type: string;
+  readonly lastModified: number;
+  slice(start?: number, end?: number, contentType?: string): Blob;
 }
