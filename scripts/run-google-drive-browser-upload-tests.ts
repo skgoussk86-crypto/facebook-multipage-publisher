@@ -3,7 +3,8 @@ import {
   GoogleUploadTransport,
   GoogleUploadTransportRequest,
   GoogleUploadTransportResponse,
-  parseRangeHeader
+  parseRangeHeader,
+  parseRetryAfterHeader
 } from '../src/lib/uploads/google-drive-resumable-uploader';
 import { BrowserMultipartUploader } from '../src/lib/uploads/browser-multipart-uploader';
 import { BrowserUploaderStatus, UploadFileLike } from '../src/lib/uploads/upload-types';
@@ -1107,12 +1108,1602 @@ async function runTests() {
       await uploader.start();
       throw new Error('Test 21 failed: uploader should have thrown error');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '';
+            const msg = err instanceof Error ? err.message : '';
       if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED' && msg !== 'GOOGLE_DRIVE_UPLOAD_RETRY_EXHAUSTED') {
         throw new Error(`Security Leak / Unsafe Error Mapping: Expected safe error message, got: ${msg}`);
       }
     }
     console.log('✓ Test 21: thrown errors, emitted statuses, and server-status responses never contain sessionUri passed');
+    testCount++;
+  }
+
+  // 22. Session status 429 retries successfully
+  {
+    reset();
+    const transport = new MockTransport();
+    let queryCount = 0;
+    let fetchCount = 0;
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id/complete') {
+        return createMockResponse(200, { status: 'VALIDATING' });
+      }
+      if (url === '/api/uploads/gd-asset-id') {
+        fetchCount++;
+        if (fetchCount === 1) {
+          return createMockResponse(200, { status: 'UPLOADING' });
+        }
+        return createMockResponse(200, { status: 'VALIDATED' });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    transport.responseHandler = async (req) => {
+      if (req.headers['Content-Range']?.includes('*/15000000')) {
+        queryCount++;
+        if (queryCount === 1) {
+          // Date with 1-second resolution
+          const futureDate = new Date(1710000001000).toUTCString();
+          return createTransportResponse(429, 'Rate Limit Exceeded', { 'Retry-After': futureDate });
+        }
+        return createTransportResponse(308, '', { Range: 'bytes=0-10485759' });
+      }
+      return createTransportResponse(200, JSON.stringify({ id: 'valid_drive_id' }));
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 2,
+      retryBackoffMs: 1,
+      transport,
+    });
+
+    await uploader.start({ isRetryOrResume: true });
+
+    if (queryCount !== 2) {
+      throw new Error(`Test 22 failed: expected 2 queries, got ${queryCount}`);
+    }
+    const status = uploader.getStatus();
+    if (status.uploadedBytes !== 15000000) {
+      throw new Error(`Test 22 failed: expected offset 15000000, got ${status.uploadedBytes}`);
+    }
+    console.log('Test 22 passed: Session status 429 retries successfully');
+    testCount++;
+  }
+
+  // 23. Chunk PUT 429 queries the confirmed offset before retransmission
+  {
+    reset();
+    const transport = new MockTransport();
+    let putCount = 0;
+    let queryCount = 0;
+    let fetchCount = 0;
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id/complete') {
+        return createMockResponse(200, { status: 'VALIDATING' });
+      }
+      if (url === '/api/uploads/gd-asset-id') {
+        fetchCount++;
+        if (fetchCount === 1) {
+          return createMockResponse(200, { status: 'UPLOADING' });
+        }
+        return createMockResponse(200, { status: 'VALIDATED' });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    transport.responseHandler = async (req) => {
+      if (req.headers['Content-Range']?.includes('*/15000000')) {
+        queryCount++;
+        if (putCount === 0) {
+          return createTransportResponse(308, '');
+        } else {
+          return createTransportResponse(308, '', { Range: 'bytes=0-10485759' });
+        }
+      }
+
+      if (req.method === 'PUT') {
+        putCount++;
+        if (putCount === 1) {
+          // No Retry-After header, sleeps for 1ms
+          return createTransportResponse(429, 'Rate Limit Exceeded', {});
+        }
+        return createTransportResponse(200, JSON.stringify({ id: 'valid_drive_id' }));
+      }
+      throw new Error('Unexpected request');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 2,
+      retryBackoffMs: 1,
+      transport,
+    });
+
+    await uploader.start({ isRetryOrResume: true });
+
+    if (putCount !== 2) {
+      throw new Error(`Test 23 failed: expected 2 PUT requests, got ${putCount}`);
+    }
+    if (queryCount !== 2) {
+      throw new Error(`Test 23 failed: expected 2 queries, got ${queryCount}`);
+    }
+    console.log('Test 23 passed: Chunk PUT 429 queries the confirmed offset before retransmission');
+    testCount++;
+  }
+
+  // 24. Retry-After is honored without creating a long-running test
+  {
+    reset();
+    const transport = new MockTransport();
+    let queryCount = 0;
+    let fetchCount = 0;
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id/complete') {
+        return createMockResponse(200, { status: 'VALIDATING' });
+      }
+      if (url === '/api/uploads/gd-asset-id') {
+        fetchCount++;
+        if (fetchCount === 1) {
+          return createMockResponse(200, { status: 'UPLOADING' });
+        }
+        return createMockResponse(200, { status: 'VALIDATED' });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    transport.responseHandler = async (req) => {
+      if (req.headers['Content-Range']?.includes('*/15000000')) {
+        queryCount++;
+        if (queryCount === 1) {
+          // Date with 1-second resolution
+          const futureDate = new Date(1710000001000).toUTCString();
+          return createTransportResponse(429, 'Rate Limit Exceeded', { 'Retry-After': futureDate });
+        }
+        return createTransportResponse(308, '', { Range: 'bytes=0-10485759' });
+      }
+      return createTransportResponse(200, JSON.stringify({ id: 'valid_drive_id' }));
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 2,
+      retryBackoffMs: 1,
+      transport,
+    });
+
+    const originalNow = Date.now;
+    let nowCallCount = 0;
+    Date.now = () => {
+      nowCallCount++;
+      if (nowCallCount === 1) {
+        return 1710000000950;
+      }
+      return originalNow();
+    };
+
+    const startTime = originalNow();
+    await uploader.start({ isRetryOrResume: true });
+    const elapsed = originalNow() - startTime;
+    Date.now = originalNow;
+
+    if (elapsed < 40) {
+      throw new Error(`Test 24 failed: Retry-After delay of 50ms was not honored, elapsed: ${elapsed}ms`);
+    }
+    console.log('Test 24 passed: Retry-After is honored without creating a long-running test');
+    testCount++;
+  }
+
+  // 25. A terminal 400 remains UPLOAD_SESSION_RESTART_REQUIRED
+  {
+    reset();
+    const transport = new MockTransport();
+    transport.responseHandler = async () => {
+      return createTransportResponse(400, 'Bad Request');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 5000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      transport,
+    });
+
+    try {
+      await uploader.start();
+      throw new Error('Test 25 failed: should have thrown UPLOAD_SESSION_RESTART_REQUIRED');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'UPLOAD_SESSION_RESTART_REQUIRED') {
+        throw new Error(`Test 25 failed: unexpected error: ${msg}`);
+      }
+    }
+    console.log('Test 25 passed: A terminal 400 remains UPLOAD_SESSION_RESTART_REQUIRED');
+    testCount++;
+  }
+
+  // 26. No emitted error/status leaks sessionUri
+  {
+    reset();
+    const transport = new MockTransport();
+    const sessionUri = 'https://google.mock/sensitive-resumable-session-uri';
+    let statusContainsLeak = false;
+
+    transport.responseHandler = async () => {
+      throw new Error(`Failed to upload to ${sessionUri}`);
+    };
+
+    const file = new FakeUploadFile('video.mp4', 5000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri,
+      recoveryKey: 'test-key',
+      maxRetries: 0,
+      transport,
+      onStatusChange: (status) => {
+        if (JSON.stringify(status).includes(sessionUri)) {
+          statusContainsLeak = true;
+        }
+      },
+    });
+
+    try {
+      await uploader.start();
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes(sessionUri)) {
+        throw new Error('Test 26 failed: Thrown error leaks sessionUri');
+      }
+    }
+
+    if (statusContainsLeak) {
+      throw new Error('Test 26 failed: Emitted status leaks sessionUri');
+    }
+
+    console.log('Test 26 passed: No emitted error/status leaks sessionUri');
+    testCount++;
+  }
+
+  // 27. Direct assertions on parseRetryAfterHeader
+  {
+    reset();
+
+    // Retry-After integer clamp
+    const clamped1 = parseRetryAfterHeader('15'); // 15s = 15000ms -> clamped to 10000ms
+    if (clamped1 !== 10000) {
+      throw new Error(`Test 27 failed: expected 10000, got ${clamped1}`);
+    }
+
+    const clamped2 = parseRetryAfterHeader('5'); // 5s = 5000ms -> 5000ms
+    if (clamped2 !== 5000) {
+      throw new Error(`Test 27 failed: expected 5000, got ${clamped2}`);
+    }
+
+    // Retry-After HTTP-date clamp
+    const originalNow = Date.now;
+    Date.now = () => 1710000000000;
+    try {
+      const futureDate = new Date(1710000025000).toUTCString(); // 25s in future -> clamped to 10000ms
+      const clamped3 = parseRetryAfterHeader(futureDate);
+      if (clamped3 !== 10000) {
+        throw new Error(`Test 27 failed: expected 10000, got ${clamped3}`);
+      }
+
+      const futureDate2 = new Date(1710000004000).toUTCString(); // 4s in future -> 4000ms
+      const clamped4 = parseRetryAfterHeader(futureDate2);
+      if (clamped4 !== 4000) {
+        throw new Error(`Test 27 failed: expected 4000, got ${clamped4}`);
+      }
+
+      // Past date returns 0
+      const pastDate = new Date(1710000000000 - 10000).toUTCString();
+      const clampedPast = parseRetryAfterHeader(pastDate);
+      if (clampedPast !== 0) {
+        throw new Error(`Test 27 failed: expected 0 for past date, got ${clampedPast}`);
+      }
+    } finally {
+      Date.now = originalNow;
+    }
+
+    // malformed/negative/unsafe input returns null
+    if (parseRetryAfterHeader('') !== null) {
+      throw new Error('Test 27 failed: empty string should return null');
+    }
+    if (parseRetryAfterHeader('   ') !== null) {
+      throw new Error('Test 27 failed: whitespace-only string should return null');
+    }
+    if (parseRetryAfterHeader('-5') !== null) {
+      throw new Error('Test 27 failed: negative integer should return null');
+    }
+    if (parseRetryAfterHeader('abc') !== null) {
+      throw new Error('Test 27 failed: alphabetic string should return null');
+    }
+    const unsafeInt = (Number.MAX_SAFE_INTEGER + 10).toString();
+    if (parseRetryAfterHeader(unsafeInt) !== null) {
+      throw new Error('Test 27 failed: unsafe integer should return null');
+    }
+
+    console.log('Test 27 passed: Direct assertions on parseRetryAfterHeader completed');
+    testCount++;
+  }
+
+  // 28. Direct assertions on GoogleDriveResumableUploader lastRetryAfterMs transitions
+  {
+    reset();
+    const transport = new MockTransport();
+    let responseHeaders: Record<string, string> = {};
+
+    transport.responseHandler = async () => {
+      return createTransportResponse(429, 'Rate Limit Exceeded', responseHeaders);
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      transport,
+    });
+    const uploaderWithInternals = uploader as unknown as { lastRetryAfterMs: number | null };
+
+    // 1. Simulate 429 with valid Retry-After: 5
+    responseHeaders = { 'Retry-After': '5' };
+    try {
+      await uploader.querySessionStatus();
+    } catch {
+      // Expected
+    }
+    if (uploaderWithInternals.lastRetryAfterMs !== 5000) {
+      throw new Error(`Test 28 failed: expected lastRetryAfterMs 5000, got ${uploaderWithInternals.lastRetryAfterMs}`);
+    }
+
+    // 2. Simulate 429 with missing Retry-After (should become null)
+    responseHeaders = {};
+    try {
+      await uploader.querySessionStatus();
+    } catch {
+      // Expected
+    }
+    if (uploaderWithInternals.lastRetryAfterMs !== null) {
+      throw new Error(`Test 28 failed: expected lastRetryAfterMs null when missing, got ${uploaderWithInternals.lastRetryAfterMs}`);
+    }
+
+    // 3. Simulate 429 with valid Retry-After: 5 again, then invalid Retry-After (should become null)
+    responseHeaders = { 'Retry-After': '5' };
+    try {
+      await uploader.querySessionStatus();
+    } catch {
+      // Expected
+    }
+    responseHeaders = { 'Retry-After': 'abc' };
+    try {
+      await uploader.querySessionStatus();
+    } catch {
+      // Expected
+    }
+    if (uploaderWithInternals.lastRetryAfterMs !== null) {
+      throw new Error(`Test 28 failed: expected lastRetryAfterMs null when invalid, got ${uploaderWithInternals.lastRetryAfterMs}`);
+    }
+
+    // 4. Reset stale Retry-After state on second start invocation
+    uploaderWithInternals.lastRetryAfterMs = 5000;
+    fetchHandler = async () => {
+      throw new Error('Stop start');
+    };
+    try {
+      await uploader.start();
+    } catch {
+      // Expected
+    }
+    if (uploaderWithInternals.lastRetryAfterMs !== null) {
+      throw new Error(`Test 28 failed: start did not reset lastRetryAfterMs to null`);
+    }
+
+    console.log('Test 28 passed: Direct assertions on GoogleDriveResumableUploader lastRetryAfterMs transitions completed');
+    testCount++;
+  }
+
+  // 29. Terminal chunk HTTP 400 PUT asserts
+  {
+    reset();
+    const transport = new MockTransport();
+    let putCount = 0;
+    let queryCount = 0;
+
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id') {
+        return createMockResponse(200, { status: 'UPLOADING' });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    transport.responseHandler = async (req) => {
+      if (req.headers['Content-Range']?.includes('*/15000000')) {
+        queryCount++;
+        return createTransportResponse(308, ''); // 0 bytes confirmed
+      }
+      if (req.method === 'PUT') {
+        putCount++;
+        return createTransportResponse(400, 'Bad Request');
+      }
+      throw new Error('Unexpected request');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 3,
+      retryBackoffMs: 1,
+      transport,
+    });
+
+    const startTime = Date.now();
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 29 failed: should have thrown UPLOAD_SESSION_RESTART_REQUIRED');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'UPLOAD_SESSION_RESTART_REQUIRED') {
+        throw new Error(`Test 29 failed: unexpected error message: ${msg}`);
+      }
+    }
+    const elapsed = Date.now() - startTime;
+
+    if (putCount !== 1) {
+      throw new Error(`Test 29 failed: expected chunk PUT to occur exactly once, got ${putCount}`);
+    }
+
+    if (queryCount !== 1) {
+      throw new Error(`Test 29 failed: expected offset query to occur exactly once, got ${queryCount}`);
+    }
+
+    if (elapsed > 100) {
+      throw new Error(`Test 29 failed: expected no retry delay, took ${elapsed}ms`);
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 29 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 29 passed: Terminal chunk HTTP 400 PUT asserts completed');
+    testCount++;
+  }
+
+  // 30. Transient retry exhaustion preserves recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id') {
+        return createMockResponse(200, { status: 'UPLOADING' });
+      }
+      if (url === '/api/uploads/gd-asset-id/reconcile') {
+        return createMockResponse(502, 'Bad Gateway');
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    transport.responseHandler = async () => {
+      throw new Error('Network request failed');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 1,
+      retryBackoffMs: 1,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 30 failed: should have thrown retry exhausted');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED' && msg !== 'GOOGLE_DRIVE_UPLOAD_RETRY_EXHAUSTED') {
+        throw new Error(`Test 30 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (!localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 30 failed: recovery storage was incorrectly cleared');
+    }
+
+    console.log('Test 30 passed: Transient retry exhaustion preserves recovery storage completed');
+    testCount++;
+  }
+
+  // 31. Transient reconciliation 502 preserves recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id') {
+        return createMockResponse(200, { status: 'UPLOADING' });
+      }
+      if (url === '/api/uploads/gd-asset-id/reconcile') {
+        return createMockResponse(502, 'Bad Gateway');
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    transport.responseHandler = async () => {
+      throw new Error('Network request failed');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 1,
+      retryBackoffMs: 1,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 31 failed: should have thrown retry exhausted');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED' && msg !== 'GOOGLE_DRIVE_UPLOAD_RETRY_EXHAUSTED') {
+        throw new Error(`Test 31 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (!localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 31 failed: recovery storage was incorrectly cleared');
+    }
+
+    console.log('Test 31 passed: Transient reconciliation 502 preserves recovery storage completed');
+    testCount++;
+  }
+
+  // 32. Invalid Drive file ID clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async (req) => {
+      if (req.headers['Content-Range']?.includes('*/15000000')) {
+        return createTransportResponse(308, ''); // 0 bytes
+      }
+      return createTransportResponse(200, JSON.stringify({ id: 'invalid$file$id' }));
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 0,
+      transport,
+    });
+
+    try {
+      await uploader.start();
+      throw new Error('Test 32 failed: should have rejected invalid Drive file ID');
+    } catch {
+      // Expected
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 32 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 32 passed: Invalid Drive file ID clears recovery storage completed');
+    testCount++;
+  }
+
+  // 33. Invalid Range header clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      return createTransportResponse(308, '', { Range: 'bytes=10-20' });
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 33 failed: should have rejected invalid Range');
+    } catch {
+      // Expected
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 33 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 33 passed: Invalid Range header clears recovery storage completed');
+    testCount++;
+  }
+
+  // 34. A resume/status query returning malformed Range is attempted once, surfaces GOOGLE_DRIVE_INVALID_RESUME_RANGE, and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    let queryCount = 0;
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      queryCount++;
+      return createTransportResponse(308, '', { Range: 'bytes=abc' });
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 3,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 34 failed: should have thrown GOOGLE_DRIVE_INVALID_RESUME_RANGE');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_INVALID_RESUME_RANGE') {
+        throw new Error(`Test 34 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (queryCount !== 1) {
+      throw new Error(`Test 34 failed: expected 1 query, got ${queryCount}`);
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 34 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 34 passed: A resume/status query returning malformed Range is attempted once and clears recovery storage');
+    testCount++;
+  }
+
+  // 35. A resume/status query returning an invalid final Drive ID is attempted once, surfaces GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE, and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    let queryCount = 0;
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      queryCount++;
+      return createTransportResponse(200, JSON.stringify({ id: '' })); // invalid empty id
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 3,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 35 failed: should have thrown GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE') {
+        throw new Error(`Test 35 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (queryCount !== 1) {
+      throw new Error(`Test 35 failed: expected 1 query, got ${queryCount}`);
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 35 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 35 passed: A resume/status query returning an invalid final Drive ID is attempted once and clears recovery storage');
+    testCount++;
+  }
+
+  // 36. A malformed JSON final response is not retried and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    let queryCount = 0;
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      queryCount++;
+      return createTransportResponse(200, '{invalid_json');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 3,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 36 failed: should have thrown GOOGLE_DRIVE_UPLOAD_FAILED');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+        throw new Error(`Test 36 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (queryCount !== 1) {
+      throw new Error(`Test 36 failed: expected 1 query, got ${queryCount}`);
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 36 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 36 passed: A malformed JSON final response is not retried and clears recovery storage');
+    testCount++;
+  }
+
+  // 37. A chunk response containing malformed Range is not retransmitted
+  {
+    reset();
+    const transport = new MockTransport();
+    let putCount = 0;
+    let queryCount = 0;
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id') {
+        return createMockResponse(200, { status: 'UPLOADING' });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    transport.responseHandler = async (req) => {
+      if (req.headers['Content-Range']?.includes('*/15000000')) {
+        queryCount++;
+        return createTransportResponse(308, ''); // 0 bytes confirmed
+      }
+      if (req.method === 'PUT') {
+        putCount++;
+        return createTransportResponse(308, '', { Range: 'bytes=abc' }); // malformed range
+      }
+      throw new Error('Unexpected request');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 3,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 37 failed: should have thrown GOOGLE_DRIVE_INVALID_RESUME_RANGE');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_INVALID_RESUME_RANGE') {
+        throw new Error(`Test 37 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (putCount !== 1) {
+      throw new Error(`Test 37 failed: expected exactly 1 PUT, got ${putCount}`);
+    }
+
+    if (queryCount !== 1) {
+      throw new Error(`Test 37 failed: expected exactly 1 query, got ${queryCount}`);
+    }
+
+    console.log('Test 37 passed: A chunk response containing malformed Range is not retransmitted');
+    testCount++;
+  }
+
+  // 38. Query status HTTP 204 is attempted once and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    let queryCount = 0;
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      queryCount++;
+      return createTransportResponse(204, 'No Content');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 3,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 38 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+        throw new Error(`Test 38 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (queryCount !== 1) {
+      throw new Error(`Test 38 failed: expected 1 query, got ${queryCount}`);
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 38 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 38 passed: Query status HTTP 204 is attempted once and clears recovery storage');
+    testCount++;
+  }
+
+  // 39. Query status HTTP 301 is attempted once and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    let queryCount = 0;
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      queryCount++;
+      return createTransportResponse(301, 'Moved Permanently');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 3,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 39 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+        throw new Error(`Test 39 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (queryCount !== 1) {
+      throw new Error(`Test 39 failed: expected 1 query, got ${queryCount}`);
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 39 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 39 passed: Query status HTTP 301 is attempted once and clears recovery storage');
+    testCount++;
+  }
+
+  // 40. Query status HTTP 501 is attempted once and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    let queryCount = 0;
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      queryCount++;
+      return createTransportResponse(501, 'Not Implemented');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 3,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 40 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+        throw new Error(`Test 40 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (queryCount !== 1) {
+      throw new Error(`Test 40 failed: expected 1 query, got ${queryCount}`);
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 40 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 40 passed: Query status HTTP 501 is attempted once and clears recovery storage');
+    testCount++;
+  }
+
+  // 41. Chunk PUT HTTP 204 is not retransmitted and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    let putCount = 0;
+    let queryCount = 0;
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id') {
+        return createMockResponse(200, { status: 'UPLOADING' });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    transport.responseHandler = async (req) => {
+      if (req.headers['Content-Range']?.includes('*/15000000')) {
+        queryCount++;
+        return createTransportResponse(308, '', { Range: 'bytes=0-0' }); // starts from 0 confirmed bytes
+      }
+      if (req.method === 'PUT') {
+        putCount++;
+        return createTransportResponse(204, 'No Content');
+      }
+      throw new Error('Unexpected request');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 3,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 41 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+        throw new Error(`Test 41 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (putCount !== 1) {
+      throw new Error(`Test 41 failed: expected exactly 1 PUT, got ${putCount}`);
+    }
+
+    if (queryCount !== 1) {
+      throw new Error(`Test 41 failed: expected exactly 1 query, got ${queryCount}`);
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 41 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 41 passed: Chunk PUT HTTP 204 is not retransmitted and clears recovery storage');
+    testCount++;
+  }
+
+  // 42. Chunk PUT HTTP 501 is not retransmitted and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    let putCount = 0;
+    let queryCount = 0;
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id') {
+        return createMockResponse(200, { status: 'UPLOADING' });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    transport.responseHandler = async (req) => {
+      if (req.headers['Content-Range']?.includes('*/15000000')) {
+        queryCount++;
+        return createTransportResponse(308, '', { Range: 'bytes=0-0' });
+      }
+      if (req.method === 'PUT') {
+        putCount++;
+        return createTransportResponse(501, 'Not Implemented');
+      }
+      throw new Error('Unexpected request');
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 3,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 42 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+        throw new Error(`Test 42 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (putCount !== 1) {
+      throw new Error(`Test 42 failed: expected exactly 1 PUT, got ${putCount}`);
+    }
+
+    if (queryCount !== 1) {
+      throw new Error(`Test 42 failed: expected exactly 1 query, got ${queryCount}`);
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 42 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 42 passed: Chunk PUT HTTP 501 is not retransmitted and clears recovery storage');
+    testCount++;
+  }
+
+  // 43. Reconciliation HTTP 200 with malformed JSON is terminal and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      throw new Error('Network request failed'); // triggers reconciliation
+    };
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id/reconcile') {
+        return createMockResponse(200, '{invalid');
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 0,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 43 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE') {
+        throw new Error(`Test 43 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 43 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 43 passed: Reconciliation HTTP 200 with malformed JSON is terminal and clears recovery storage');
+    testCount++;
+  }
+
+  // 44. Reconciliation HTTP 200 with an unknown/missing status is terminal and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      throw new Error('Network request failed'); // triggers reconciliation
+    };
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id/reconcile') {
+        return createMockResponse(200, { status: 'UNKNOWN_STATUS' });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 0,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 44 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE') {
+        throw new Error(`Test 44 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 44 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 44 passed: Reconciliation HTTP 200 with unknown status is terminal and clears recovery storage');
+    testCount++;
+  }
+
+  // 45. Reconciliation HTTP 503 remains recoverable and preserves recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      throw new Error('Network request failed'); // triggers reconciliation
+    };
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id/reconcile') {
+        return createMockResponse(503, 'Service Unavailable');
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 0,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 45 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+        throw new Error(`Test 45 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (!localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 45 failed: recovery storage was cleared');
+    }
+
+    console.log('Test 45 passed: Reconciliation HTTP 503 remains recoverable and preserves recovery storage');
+    testCount++;
+  }
+
+  // 46. Completion API HTTP 400 is terminal and clears recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      return createTransportResponse(200, JSON.stringify({ id: 'drive-file-123' }));
+    };
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id/complete') {
+        return createMockResponse(400, 'Bad Request');
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 0,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 46 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'UPLOAD_SESSION_RESTART_REQUIRED') {
+        throw new Error(`Test 46 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 46 failed: recovery storage was not cleared');
+    }
+
+    console.log('Test 46 passed: Completion API HTTP 400 is terminal and clears recovery storage');
+    testCount++;
+  }
+
+  // 47. Completion API HTTP 503 remains recoverable and preserves recovery storage
+  {
+    reset();
+    const transport = new MockTransport();
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      return createTransportResponse(200, JSON.stringify({ id: 'drive-file-123' }));
+    };
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id/complete') {
+        return createMockResponse(503, 'Service Unavailable');
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 0,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 47 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+        throw new Error(`Test 47 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (!localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 47 failed: recovery storage was cleared');
+    }
+
+    console.log('Test 47 passed: Completion API HTTP 503 remains recoverable and preserves recovery storage');
+    testCount++;
+  }
+
+  // 48. Completion API network rejection remains recoverable
+  {
+    reset();
+    const transport = new MockTransport();
+    localStorage.setItem(
+      'upload_recovery_test-key',
+      JSON.stringify({
+        version: 2,
+        provider: 'GOOGLE_DRIVE',
+        assetId: 'gd-asset-id',
+        sessionUri: 'https://google.mock/session-123',
+        filename: 'video.mp4',
+        mimeType: 'video/mp4',
+        totalBytes: '15000000',
+        lastModified: 1234567890,
+      })
+    );
+
+    transport.responseHandler = async () => {
+      return createTransportResponse(200, JSON.stringify({ id: 'drive-file-123' }));
+    };
+
+    fetchHandler = async (url) => {
+      if (url === '/api/uploads/gd-asset-id/complete') {
+        throw new Error('Failed to fetch'); // network exception on fetch
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    };
+
+    const file = new FakeUploadFile('video.mp4', 15000000, 'video/mp4');
+    const uploader = new GoogleDriveResumableUploader({
+      file,
+      assetId: 'gd-asset-id',
+      sessionUri: 'https://google.mock/session-123',
+      recoveryKey: 'test-key',
+      maxRetries: 0,
+      transport,
+    });
+
+    try {
+      await uploader.start({ isRetryOrResume: true });
+      throw new Error('Test 48 failed: should have thrown');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg !== 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+        throw new Error(`Test 48 failed: unexpected error message: ${msg}`);
+      }
+    }
+
+    if (!localStorage.getItem('upload_recovery_test-key')) {
+      throw new Error('Test 48 failed: recovery storage was cleared');
+    }
+
+    console.log('Test 48 passed: Completion API network rejection remains recoverable and preserves recovery storage');
     testCount++;
   }
 
