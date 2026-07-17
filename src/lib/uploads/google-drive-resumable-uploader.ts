@@ -381,6 +381,8 @@ export class GoogleDriveResumableUploader {
   private pollIntervalId: ReturnType<typeof setInterval> | null = null;
   private isPaused = false;
   private isAborted = false;
+  private isReconciling = false;
+  private reconciliationAttempted = false;
 
   private readonly CHUNK_SIZE = 10 * 1024 * 1024; // 10 MiB
 
@@ -429,13 +431,53 @@ export class GoogleDriveResumableUploader {
     }
   }
 
-  public async start() {
+  public async start(options?: { isRetryOrResume?: boolean }) {
     if (this.state !== 'idle' && this.state !== 'selected' && this.state !== 'paused') return;
     this.isPaused = false;
     this.isAborted = false;
+    this.reconciliationAttempted = false;
 
     try {
       this.emit({ state: 'initiating' });
+
+      // 1. Fetch server state first if this is a retry or resume/recovery attempt
+      if (options?.isRetryOrResume) {
+        try {
+          this.activeController = new AbortController();
+          const serverCheckResponse = await fetch(`/api/uploads/${this.assetId}`, {
+            signal: this.activeController.signal,
+          });
+
+          if (serverCheckResponse.ok) {
+            const checkData: unknown = await serverCheckResponse.json();
+            const parsedStatus = parseValidationStatus(checkData);
+            if (parsedStatus.status === 'VALIDATING') {
+              this.emit({ state: 'validating' });
+              this.startValidationPolling();
+              return;
+            } else if (parsedStatus.status === 'VALIDATED') {
+              const metadata: VideoMetadata = {
+                durationMs: parsedStatus.durationMs,
+                width: parsedStatus.width,
+                height: parsedStatus.height,
+                frameRate: parsedStatus.frameRate,
+                videoCodec: parsedStatus.videoCodec,
+                audioCodec: parsedStatus.audioCodec,
+                containerFormat: parsedStatus.containerFormat,
+                detectedMimeType: parsedStatus.detectedMimeType,
+              };
+              this.clearStorage();
+              this.emit({ state: 'validated', metadata });
+              return;
+            }
+          }
+        } catch (err: unknown) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            throw err;
+          }
+          // Ignore server check errors and proceed with normal resume/retry flow
+        }
+      }
 
       // Write Google Drive recovery record (version 2)
       try {
@@ -461,11 +503,108 @@ export class GoogleDriveResumableUploader {
       await this.uploadLoop(startOffset);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
+
+      if (!this.isPaused && !this.isAborted && !this.reconciliationAttempted && this.isNetworkOrStatus0Error(err)) {
+        this.reconciliationAttempted = true;
+        try {
+          const reconciled = await this.attemptServerReconciliation();
+          if (reconciled) {
+            return;
+          }
+        } catch (reconErr: unknown) {
+          if (reconErr instanceof DOMException && reconErr.name === 'AbortError') {
+            return;
+          }
+          const cleanReconErr = redactError(reconErr);
+          this.emit({ state: 'failed', error: cleanReconErr.message });
+          this.clearStorage();
+          throw cleanReconErr;
+        }
+      }
+
       const cleanErr = redactError(err);
       this.emit({ state: 'failed', error: cleanErr.message });
       this.clearStorage();
       throw cleanErr;
     }
+  }
+
+  private isNetworkOrStatus0Error(err: unknown): boolean {
+    if (err instanceof Error) {
+      const msg = err.message;
+      return (
+        msg === 'GOOGLE_DRIVE_UPLOAD_RETRY_EXHAUSTED' ||
+        msg === 'Network request failed' ||
+        msg.includes('HTTP 0') ||
+        msg.includes('code 0')
+      );
+    }
+    return false;
+  }
+
+  private async attemptServerReconciliation(): Promise<boolean> {
+    if (this.isPaused || this.isAborted || this.isReconciling) {
+      return false;
+    }
+
+    this.isReconciling = true;
+    try {
+      this.activeController = new AbortController();
+      const response = await fetch(`/api/uploads/${this.assetId}/reconcile`, {
+        method: 'POST',
+        signal: this.activeController.signal,
+      });
+
+      if (response.status === 404 || response.status === 410) {
+        throw new Error('UPLOAD_SESSION_EXPIRED');
+      }
+      if (response.status >= 400 && response.status < 500) {
+        throw new Error('UPLOAD_SESSION_RESTART_REQUIRED');
+      }
+      if (!response.ok) {
+        throw new Error('GOOGLE_DRIVE_UPLOAD_FAILED');
+      }
+
+      const data: unknown = await response.json();
+      if (!isRecord(data)) {
+        throw new Error('GOOGLE_DRIVE_UPLOAD_FAILED');
+      }
+
+      const serverStatus = data.status;
+      if (serverStatus === 'VALIDATING') {
+        this.emit({ state: 'validating' });
+        this.startValidationPolling();
+        return true;
+      } else if (serverStatus === 'VALIDATED') {
+        const checkResponse = await fetch(`/api/uploads/${this.assetId}`, {
+          signal: this.activeController.signal,
+        });
+        if (!checkResponse.ok) {
+          throw new Error('GOOGLE_DRIVE_UPLOAD_FAILED');
+        }
+        const checkData: unknown = await checkResponse.json();
+        const parsed = parseValidationStatus(checkData);
+        if (parsed.status === 'VALIDATED') {
+          const metadata: VideoMetadata = {
+            durationMs: parsed.durationMs,
+            width: parsed.width,
+            height: parsed.height,
+            frameRate: parsed.frameRate,
+            videoCodec: parsed.videoCodec,
+            audioCodec: parsed.audioCodec,
+            containerFormat: parsed.containerFormat,
+            detectedMimeType: parsed.detectedMimeType,
+          };
+          this.clearStorage();
+          this.emit({ state: 'validated', metadata });
+          return true;
+        }
+        throw new Error('GOOGLE_DRIVE_UPLOAD_FAILED');
+      }
+    } finally {
+      this.isReconciling = false;
+    }
+    return false;
   }
 
   public async querySessionStatus(): Promise<number> {
@@ -789,7 +928,7 @@ export class GoogleDriveResumableUploader {
   public async resume() {
     if (this.state !== 'paused') return;
     this.state = 'idle';
-    await this.start();
+    await this.start({ isRetryOrResume: true });
   }
 
   public async cancel() {
@@ -826,7 +965,7 @@ export class GoogleDriveResumableUploader {
   public async retry() {
     if (this.state !== 'failed') return;
     this.state = 'idle';
-    await this.start();
+    await this.start({ isRetryOrResume: true });
   }
 
   public destroy() {

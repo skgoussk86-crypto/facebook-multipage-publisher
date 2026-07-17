@@ -286,7 +286,7 @@ export class BrowserMultipartUploader {
 
   public async start() {
     if (this.googleUploader) {
-      await this.googleUploader.start();
+      await this.googleUploader.start({ isRetryOrResume: true });
       return;
     }
 
@@ -325,7 +325,7 @@ export class BrowserMultipartUploader {
           retryBackoffMs: this.retryBackoffMs,
           transport: this.transport,
         });
-        await this.googleUploader.start();
+        await this.googleUploader.start({ isRetryOrResume: true });
         return;
       }
 
@@ -458,7 +458,7 @@ export class BrowserMultipartUploader {
         retryBackoffMs: this.retryBackoffMs,
         transport: this.transport,
       });
-      await this.googleUploader.start();
+      await this.googleUploader.start({ isRetryOrResume: true });
       return;
     }
 

@@ -129,6 +129,9 @@ async function runTests() {
   function reset() {
     fetchRequests.length = 0;
     mockLocalStorage.clear();
+    fetchHandler = () => {
+      throw new Error('No fetch handler configured');
+    };
   }
 
   // 1. parses the Google Drive initiation response

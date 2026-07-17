@@ -15,6 +15,18 @@ export function handleUploadApiError(error: unknown) {
   console.error('Upload API Error:', error);
 
   if (error instanceof Error) {
+    if (error.message === 'INVALID_PROVIDER') {
+      return NextResponse.json({ error: 'INVALID_PROVIDER' }, { status: 400 });
+    }
+    if (error.message === 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE') {
+      return NextResponse.json({ error: 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE' }, { status: 502 });
+    }
+    if (error.message === 'UPLOAD_SESSION_RESTART_REQUIRED') {
+      return NextResponse.json({ error: 'UPLOAD_SESSION_RESTART_REQUIRED' }, { status: 400 });
+    }
+    if (error.message === 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+      return NextResponse.json({ error: 'GOOGLE_DRIVE_UPLOAD_FAILED' }, { status: 502 });
+    }
     if (error.message === 'INVALID_IDEMPOTENCY_KEY') {
       return NextResponse.json({ error: 'INVALID_IDEMPOTENCY_KEY' }, { status: 400 });
     }
