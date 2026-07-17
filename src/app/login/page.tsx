@@ -95,19 +95,19 @@ function LoginContent() {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-zinc-950 px-4 font-sans text-white">
-      <div className="absolute left-1/4 top-1/4 h-96 w-96 animate-pulse rounded-full bg-indigo-900/10 blur-3xl" />
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-zinc-50 px-4 font-sans text-zinc-900">
+      <div className="absolute left-1/4 top-1/4 h-96 w-96 animate-pulse rounded-full bg-indigo-900/5 blur-3xl" />
 
-      <div className="absolute bottom-1/4 right-1/4 h-96 w-96 animate-pulse rounded-full bg-purple-900/10 blur-3xl" />
+      <div className="absolute bottom-1/4 right-1/4 h-96 w-96 animate-pulse rounded-full bg-purple-900/5 blur-3xl" />
 
-      <div className="relative z-10 flex w-full max-w-md flex-col rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-8 shadow-2xl backdrop-blur-md">
+      <div className="relative z-10 flex w-full max-w-md flex-col rounded-2xl border border-zinc-200 bg-white p-8 shadow-xl">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-600/30">
             F
           </div>
 
           <div>
-            <h1 className="text-sm font-semibold leading-tight text-white">
+            <h1 className="text-sm font-semibold leading-tight text-zinc-900">
               FB Multi-Page
             </h1>
 
@@ -117,22 +117,22 @@ function LoginContent() {
           </div>
         </div>
 
-        <h2 className="mb-2 text-xl font-bold text-white">
+        <h2 className="mb-2 text-xl font-bold text-zinc-900">
           Sign in to Your Account
         </h2>
 
-        <p className="mb-6 text-xs text-zinc-400">
+        <p className="mb-6 text-xs text-zinc-500">
           Manage scheduled videos, reels and photo publications securely.
         </p>
 
         {notice && (
-          <div className="mb-5 rounded-lg border border-amber-900/60 bg-amber-950/30 p-4 text-xs font-semibold leading-5 text-amber-300">
+          <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs font-semibold leading-5 text-amber-800">
             {notice}
           </div>
         )}
 
         {error && (
-          <div className="mb-5 flex items-center gap-2 rounded-lg border border-rose-900/60 bg-rose-950/40 p-3 text-xs font-semibold leading-5 text-rose-400">
+          <div className="mb-5 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-semibold leading-5 text-rose-800">
             <svg
               className="h-4 w-4 flex-shrink-0"
               fill="none"
@@ -156,7 +156,7 @@ function LoginContent() {
           className="space-y-4"
         >
           <div>
-            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-400">
+            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-500">
               Email Address
             </label>
 
@@ -169,13 +169,13 @@ function LoginContent() {
                 setEmail(event.target.value)
               }
               disabled={isLoggingIn}
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-white transition focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 transition placeholder-zinc-400 focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400"
               placeholder="e.g. user@domain.com"
             />
           </div>
 
           <div>
-            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-400">
+            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-500">
               Password
             </label>
 
@@ -188,7 +188,7 @@ function LoginContent() {
                 setPassword(event.target.value)
               }
               disabled={isLoggingIn}
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-white transition focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 transition placeholder-zinc-400 focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400"
               placeholder="Enter your password"
             />
           </div>
@@ -196,7 +196,7 @@ function LoginContent() {
           <button
             type="submit"
             disabled={isLoggingIn}
-            className="w-full rounded-lg bg-indigo-600 py-3 text-sm font-bold text-white shadow-md shadow-indigo-600/20 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+            className="w-full rounded-lg bg-indigo-600 py-3 text-sm font-bold text-white shadow-md shadow-indigo-600/20 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400"
           >
             {isLoggingIn
               ? "Authenticating Session..."
@@ -204,12 +204,12 @@ function LoginContent() {
           </button>
         </form>
 
-        <div className="mt-6 border-t border-zinc-800 pt-4 text-center text-xs text-zinc-500">
+        <div className="mt-6 border-t border-zinc-200 pt-4 text-center text-xs text-zinc-500">
           Need a publisher account?{" "}
 
           <Link
             href="/register"
-            className="font-semibold text-indigo-400 transition hover:text-indigo-300"
+            className="font-semibold text-indigo-600 transition hover:text-indigo-500"
           >
             Register Account
           </Link>
@@ -223,7 +223,7 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center bg-zinc-950 font-sans text-white">
+        <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans text-zinc-900">
           <span className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
         </div>
       }

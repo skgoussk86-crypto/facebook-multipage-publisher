@@ -163,31 +163,31 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   const getStatusBadge = (status: JobStatus) => {
     switch (status) {
       case "DRAFT":
-        return "bg-zinc-800 text-zinc-400 border border-zinc-700/30";
+        return "bg-zinc-100 text-zinc-700 border border-zinc-200";
       case "MEDIA_UPLOADED":
-        return "bg-blue-950/80 text-blue-400 border border-blue-900/40";
+        return "bg-blue-50 text-blue-800 border border-blue-200";
       case "SCHEDULED":
-        return "bg-indigo-950/80 text-indigo-400 border border-indigo-900/40";
+        return "bg-indigo-50 text-indigo-800 border border-indigo-200";
       case "PREPARING":
-        return "bg-purple-950/80 text-purple-400 border border-purple-900/40 animate-pulse";
+        return "bg-purple-50 text-purple-800 border border-purple-200 animate-pulse";
       case "UPLOADING_TO_META":
-        return "bg-cyan-950/80 text-cyan-400 border border-cyan-900/40 animate-pulse";
+        return "bg-cyan-50 text-cyan-800 border border-cyan-200 animate-pulse";
       case "META_PROCESSING":
-        return "bg-amber-950/30 text-amber-400 border border-amber-900/40 animate-pulse";
+        return "bg-amber-50 text-amber-800 border border-amber-200 animate-pulse";
       case "PUBLISHING":
-        return "bg-amber-950/80 text-amber-400 border border-amber-900/40 animate-pulse";
+        return "bg-amber-50 text-amber-800 border border-amber-200 animate-pulse";
       case "PUBLISHED":
-        return "bg-emerald-950/80 text-emerald-400 border border-emerald-900/40";
+        return "bg-emerald-50 text-emerald-800 border border-emerald-200";
       case "FAILED_RETRYABLE":
-        return "bg-amber-900/20 text-amber-500 border border-amber-700/30";
+        return "bg-amber-50 text-amber-800 border border-amber-200";
       case "FAILED_PERMANENT":
-        return "bg-rose-950/80 text-rose-400 border border-rose-900/40";
+        return "bg-rose-50 text-rose-800 border border-rose-200";
       case "CANCELLED":
-        return "bg-zinc-900 text-zinc-500 border border-zinc-800";
+        return "bg-zinc-100 text-zinc-500 border border-zinc-200";
       case "FACEBOOK_RECONNECT_REQUIRED":
-        return "bg-rose-950/90 text-rose-500 border border-rose-900/80 animate-pulse";
+        return "bg-rose-50 text-rose-800 border border-rose-200 animate-pulse";
       default:
-        return "bg-zinc-850 text-zinc-400 border border-zinc-800";
+        return "bg-zinc-100 text-zinc-500 border border-zinc-200";
     }
   };
 
@@ -1357,7 +1357,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         {/* Sidebar Panel */}
         <aside className="w-full md:w-64 bg-zinc-900 border-r border-zinc-800 p-6 flex flex-col gap-6">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-lg bg-indigo-650 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-600/30">
+            <div className="h-9 w-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-600/30">
               F
             </div>
             <div>
@@ -1371,8 +1371,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               onClick={() => setActiveTab("dashboard")}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium ${
                 activeTab === "dashboard"
-                  ? "bg-zinc-800 text-white shadow-inner border border-zinc-700/50"
-                  : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+                  ? "bg-indigo-600 text-white shadow-sm border border-indigo-700 font-semibold"
+                  : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
               }`}
             >
               Overview Dashboard
@@ -1381,8 +1381,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               onClick={() => setActiveTab("publisher")}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium ${
                 activeTab === "publisher"
-                  ? "bg-zinc-800 text-white shadow-inner border border-zinc-700/50"
-                  : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+                  ? "bg-indigo-600 text-white shadow-sm border border-indigo-700 font-semibold"
+                  : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
               }`}
             >
               Bulk Video Publisher {tempJobsQueue.length > 0 && `(${tempJobsQueue.length})`}
@@ -1391,8 +1391,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               onClick={() => setActiveTab("pages")}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium ${
                 activeTab === "pages"
-                  ? "bg-zinc-800 text-white shadow-inner border border-zinc-700/50"
-                  : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+                  ? "bg-indigo-600 text-white shadow-sm border border-indigo-700 font-semibold"
+                  : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
               }`}
             >
               Synced Pages ({countPages})
@@ -1401,29 +1401,29 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               onClick={() => setActiveTab("logs")}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium ${
                 activeTab === "logs"
-                  ? "bg-zinc-800 text-white shadow-inner border border-zinc-700/50"
-                  : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+                  ? "bg-indigo-600 text-white shadow-sm border border-indigo-700 font-semibold"
+                  : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
               }`}
             >
               Security Audit Logs
             </button>
-            <div className="h-[1px] bg-zinc-800 my-2"></div>
+            <div className="h-[1px] bg-zinc-200 my-2"></div>
             <Link
               href="/settings/meta-configuration"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
             >
               Meta Configuration
             </Link>
             <Link
               href="/settings/storage"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
             >
               Google Drive Storage
             </Link>
             {currentUser.role === 'ADMIN' && (
               <Link
                 href="/admin/users"
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition font-medium text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
               >
                 User Management
               </Link>
@@ -1432,24 +1432,24 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
           {/* Quick Simulation Options */}
           {currentUser.role === 'ADMIN' && process.env.NODE_ENV !== 'production' && (
-            <div className="mt-auto pt-6 border-t border-zinc-800">
+            <div className="mt-auto pt-6 border-t border-zinc-200">
               <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-500 mb-3">Simulation Console</h3>
-              <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3.5 flex flex-col gap-3">
+              <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-3.5 flex flex-col gap-3">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-zinc-400">Trigger Expired Token</span>
+                  <span className="text-zinc-500">Trigger Expired Token</span>
                   <input
                     type="checkbox"
                     checked={simulateTokenExpiry}
                     onChange={handleToggleTokenExpiry}
-                    className="rounded bg-zinc-800 border-zinc-700 text-indigo-650 focus:ring-indigo-650 h-4 w-4"
+                    className="rounded bg-white border-zinc-200 text-indigo-600 focus:ring-indigo-600 h-4 w-4"
                   />
                 </div>
                 <div className="flex flex-col gap-1 text-xs">
-                  <span className="text-zinc-400 font-medium">Scenario</span>
+                  <span className="text-zinc-500 font-medium">Scenario</span>
                   <select
                     value={simulationScenario}
                     onChange={(e) => setSimulationScenario(e.target.value as "success" | "network_failure" | "meta_processing_delay" | "rate_limit" | "invalid_format" | "revoked_token" | "missing_permission")}
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 text-[11px] text-white focus:outline-none focus:border-indigo-650 font-sans"
+                    className="w-full bg-white border border-zinc-200 rounded px-2.5 py-1.5 text-[11px] text-zinc-700 focus:outline-none focus:border-indigo-600 font-sans"
                   >
                     <option value="success">Success Scenario</option>
                     <option value="network_failure">Network Failure (Retryable)</option>
@@ -1463,7 +1463,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 <button
                   onClick={handleSimulateQueueWorker}
                   disabled={simulatingPublish}
-                  className="w-full bg-indigo-650 hover:bg-indigo-700 disabled:bg-zinc-850 disabled:text-zinc-500 font-semibold text-xs text-white py-2 px-3 rounded transition shadow-md shadow-indigo-600/10 flex items-center justify-center gap-1.5"
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-200 disabled:text-zinc-400 font-semibold text-xs text-white py-2 px-3 rounded transition shadow-md shadow-indigo-600/10 flex items-center justify-center gap-1.5"
                 >
                   {simulatingPublish ? (
                     <>
@@ -1479,15 +1479,15 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           )}
 
           {/* Profile & Logout Panel */}
-          <div className={`border-t border-zinc-850 pt-4 flex flex-col gap-3 ${currentUser.role === 'ADMIN' && process.env.NODE_ENV !== 'production' ? 'mt-6' : 'mt-auto'}`}>
+          <div className={`border-t border-zinc-200 pt-4 flex flex-col gap-3 ${currentUser.role === 'ADMIN' && process.env.NODE_ENV !== 'production' ? 'mt-6' : 'mt-auto'}`}>
             <div className="flex flex-col">
-              <span className="text-xs font-semibold text-zinc-250 truncate">{currentUser.name}</span>
+              <span className="text-xs font-semibold text-zinc-900 truncate">{currentUser.name}</span>
               <span className="text-[10px] text-zinc-500 truncate mt-0.5">{currentUser.email}</span>
-              <span className="text-[9px] text-indigo-400 font-mono tracking-wider uppercase mt-1 px-1.5 py-0.5 bg-indigo-950/40 border border-indigo-900/30 rounded w-fit">{currentUser.role}</span>
+              <span className="text-[9px] text-indigo-700 font-mono tracking-wider uppercase mt-1 px-1.5 py-0.5 bg-indigo-50 border border-indigo-200 rounded w-fit">{currentUser.role}</span>
             </div>
             <button
               onClick={handleLogout}
-              className="w-full text-center flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-zinc-900 hover:bg-rose-950/20 border border-zinc-800 hover:border-rose-900/30 text-rose-450 hover:text-rose-450 text-xs font-semibold transition"
+              className="w-full text-center flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 hover:border-rose-300 text-rose-800 hover:text-rose-900 text-xs font-semibold transition"
             >
               Logout
             </button>
@@ -1495,22 +1495,22 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         </aside>
 
         {/* Content Panel */}
-        <main className="flex-1 flex flex-col bg-zinc-950">
+        <main className="flex-1 flex flex-col bg-zinc-50">
 
           {/* Header */}
-          <header className="h-16 border-b border-zinc-900 px-8 flex items-center justify-between">
+          <header className="h-16 border-b border-zinc-200 px-8 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <h2 className="text-lg font-bold text-white tracking-tight capitalize">
+              <h2 className="text-lg font-bold text-zinc-900 tracking-tight capitalize">
                 {activeTab === "dashboard" ? "Dashboard Overview" : activeTab}
               </h2>
-              <span className="text-xs bg-zinc-900 text-zinc-400 px-2 py-0.5 rounded font-mono border border-zinc-850/40">
+              <span className="text-xs bg-white text-zinc-600 px-2 py-0.5 rounded font-mono border border-zinc-200">
                 {kolkataOffsetStr}
               </span>
             </div>
 
-            <div className="flex items-center gap-4 text-xs font-mono text-zinc-400">
+            <div className="flex items-center gap-4 text-xs font-mono text-zinc-500">
               <span>Timezone: Asia/Kolkata</span>
-              <span className="text-zinc-700">|</span>
+              <span className="text-zinc-300">|</span>
               <span>Local System Time: {SYSTEM_TIME_STR}</span>
             </div>
           </header>
@@ -1521,30 +1521,30 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             {/* System Warnings Panel */}
             <div className="mb-6 space-y-3">
               {(isConfigured === false || !facebookAppId) && (
-                <div className="bg-rose-950/40 border border-rose-900/50 rounded-xl p-4 text-xs text-rose-400 font-medium leading-relaxed flex items-start gap-3 shadow-md animate-pulse">
-                  <svg className="h-5 w-5 text-rose-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-xs text-rose-800 font-medium leading-relaxed flex items-start gap-3 shadow-sm">
+                  <svg className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                   </svg>
                   <div>
-                    <span className="font-bold">Meta Configuration Incomplete:</span> The Meta Configuration is missing or incomplete{facebookAppId ? ` (App ID: ${facebookAppId})` : ""}. Please go to <Link href="/settings/meta-configuration" className="underline text-rose-300 hover:text-rose-200">Meta Configuration</Link> settings to complete it.
+                    <span className="font-bold">Meta Configuration Incomplete:</span> The Meta Configuration is missing or incomplete{facebookAppId ? ` (App ID: ${facebookAppId})` : ""}. Please go to <Link href="/settings/meta-configuration" className="underline text-rose-750 hover:text-rose-800 font-semibold">Meta Configuration</Link> settings to complete it.
                   </div>
                 </div>
               )}
 
               {publicAppUrl && publicAppUrl.includes('trycloudflare.com') && (
-                <div className="bg-amber-950/40 border border-amber-900/50 rounded-xl p-4 text-xs text-amber-400 font-medium leading-relaxed flex items-start gap-3 shadow-md">
-                  <svg className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-800 font-medium leading-relaxed flex items-start gap-3 shadow-sm">
+                  <svg className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                   </svg>
                   <div>
-                    <span className="font-bold">Temporary Quick-Tunnel Warning:</span> The application is using a temporary <code className="bg-zinc-950 px-1 py-0.5 rounded text-[10px]">trycloudflare.com</code> tunnel. Please update to a permanent custom domain under <Link href="/settings/meta-configuration" className="underline text-amber-300 hover:text-amber-200">Meta Configuration</Link> for production use.
+                    <span className="font-bold">Temporary Quick-Tunnel Warning:</span> The application is using a temporary <code className="bg-zinc-100 text-zinc-800 px-1 py-0.5 rounded text-[10px]">trycloudflare.com</code> tunnel. Please update to a permanent custom domain under <Link href="/settings/meta-configuration" className="underline text-amber-700 hover:text-amber-800 font-semibold">Meta Configuration</Link> for production use.
                   </div>
                 </div>
               )}
 
               {dashboardHostnameWarning && (
-                <div className="bg-amber-950/40 border border-amber-900/50 rounded-xl p-4 text-xs text-amber-400 font-medium leading-relaxed flex items-start gap-3 shadow-md">
-                  <svg className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-800 font-medium leading-relaxed flex items-start gap-3 shadow-sm">
+                  <svg className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                   </svg>
                   <div>
@@ -1556,28 +1556,28 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
             {/* STATS METRIC GRID */}
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-700 transition">
+              <div className="bg-white border border-zinc-200 rounded-xl p-5 hover:border-zinc-300 transition">
                 <span className="text-xs font-mono text-zinc-500">Connected Pages</span>
-                <h4 className="text-3xl font-extrabold text-white mt-1.5">{countPages}</h4>
+                <h4 className="text-3xl font-extrabold text-zinc-900 mt-1.5">{countPages}</h4>
               </div>
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-700 transition">
+              <div className="bg-white border border-zinc-200 rounded-xl p-5 hover:border-zinc-300 transition">
                 <span className="text-xs font-mono text-zinc-500">Scheduled Jobs</span>
-                <h4 className="text-3xl font-extrabold text-indigo-400 mt-1.5">{countScheduled}</h4>
+                <h4 className="text-3xl font-extrabold text-indigo-600 mt-1.5">{countScheduled}</h4>
               </div>
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-700 transition">
+              <div className="bg-white border border-zinc-200 rounded-xl p-5 hover:border-zinc-300 transition">
                 <span className="text-xs font-mono text-zinc-500">Publishing Jobs</span>
-                <h4 className="text-3xl font-extrabold text-amber-400 mt-1.5 flex items-center gap-2">
+                <h4 className="text-3xl font-extrabold text-amber-600 mt-1.5 flex items-center gap-2">
                   {countPublishing}
-                  {countPublishing > 0 && <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping"></span>}
+                  {countPublishing > 0 && <span className="h-2 w-2 rounded-full bg-amber-500 animate-ping"></span>}
                 </h4>
               </div>
-              <div className="bg-zinc-900 border border-zinc-800/80 rounded-xl p-5 hover:border-zinc-700 transition">
+              <div className="bg-white border border-zinc-200 rounded-xl p-5 hover:border-zinc-300 transition">
                 <span className="text-xs font-mono text-zinc-500">Published Jobs</span>
-                <h4 className="text-3xl font-extrabold text-emerald-400 mt-1.5">{countPublished}</h4>
+                <h4 className="text-3xl font-extrabold text-emerald-600 mt-1.5">{countPublished}</h4>
               </div>
-              <div className="bg-zinc-900 border border-zinc-800/80 rounded-xl p-5 hover:border-zinc-700 transition">
+              <div className="bg-white border border-zinc-200 rounded-xl p-5 hover:border-zinc-300 transition">
                 <span className="text-xs font-mono text-zinc-500">Failed Jobs</span>
-                <h4 className="text-3xl font-extrabold text-rose-500 mt-1.5">{countFailed}</h4>
+                <h4 className="text-3xl font-extrabold text-rose-600 mt-1.5">{countFailed}</h4>
               </div>
             </div>
 
@@ -1589,20 +1589,20 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                 {/* Active Publishing Queue */}
                 <div className="lg:col-span-2 flex flex-col gap-6">
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+                  <div className="bg-white border border-zinc-200 rounded-xl p-6">
                     <div className="flex items-center justify-between mb-5">
-                      <h3 className="text-base font-bold text-white">Active Scheduled Jobs</h3>
+                      <h3 className="text-base font-bold text-zinc-900">Active Scheduled Jobs</h3>
                       <span className="text-xs text-zinc-500 font-mono">Times displayed in Asia/Kolkata</span>
                     </div>
 
                     {jobs.length === 0 ? (
-                      <div className="text-center py-12 text-zinc-500 border border-dashed border-zinc-800 rounded-lg">
+                      <div className="text-center py-12 text-zinc-500 border border-dashed border-zinc-200 rounded-lg">
                         No videos loaded. Open the &quot;Bulk Video Publisher&quot; to schedule files.
                       </div>
                     ) : (
                       <div>
                         {/* Filters Toolbar */}
-                        <div className="bg-zinc-950/50 border border-zinc-850 rounded-xl p-4 mb-5 flex flex-wrap gap-4 items-end text-xs">
+                        <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-4 mb-5 flex flex-wrap gap-4 items-end text-xs">
                           <div className="flex-1 min-w-[180px]">
                             <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-1 font-bold">Search Filename/Title</label>
                             <input
@@ -1610,7 +1610,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                               value={filterFilename}
                               onChange={(e) => setFilterFilename(e.target.value)}
                               placeholder="Search..."
-                              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-1.5 px-3 text-xs text-white placeholder-zinc-700 focus:outline-none focus:border-indigo-650"
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-1.5 px-3 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-indigo-600"
                             />
                           </div>
                           <div className="w-full sm:w-44">
@@ -1618,7 +1618,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             <select
                               value={filterPageId}
                               onChange={(e) => setFilterPageId(e.target.value)}
-                              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-1.5 px-3.5 text-xs text-white focus:outline-none"
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-1.5 px-3.5 text-xs text-zinc-900 focus:outline-none"
                             >
                               <option value="all">All Pages</option>
                               {pages.map((p) => (
@@ -1631,7 +1631,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             <select
                               value={filterStatus}
                               onChange={(e) => setFilterStatus(e.target.value)}
-                              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-1.5 px-3.5 text-xs text-white focus:outline-none"
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-1.5 px-3.5 text-xs text-zinc-900 focus:outline-none"
                             >
                               <option value="all">All Statuses</option>
                               <option value="DRAFT">Draft</option>
@@ -1654,18 +1654,18 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                               type="date"
                               value={filterDate}
                               onChange={(e) => setFilterDate(e.target.value)}
-                              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-1.5 px-3 text-xs text-white focus:outline-none"
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-1.5 px-3 text-xs text-zinc-900 focus:outline-none"
                             />
                           </div>
                           {(filterPageId !== "all" || filterStatus !== "all" || filterFilename !== "" || filterDate !== "") && (
                             <button
                               onClick={() => {
-                                setFilterPageId("all");
-                                setFilterStatus("all");
-                                setFilterFilename("");
-                                setFilterDate("");
+                                  setFilterPageId("all");
+                                  setFilterStatus("all");
+                                  setFilterFilename("");
+                                  setFilterDate("");
                               }}
-                              className="bg-zinc-850 hover:bg-zinc-800 text-zinc-300 font-semibold py-1.5 px-3 rounded-lg text-xs transition border border-zinc-800"
+                              className="bg-white hover:bg-zinc-50 text-zinc-700 font-semibold py-1.5 px-3 rounded-lg text-xs transition border border-zinc-300"
                             >
                               Clear
                             </button>
@@ -1673,14 +1673,14 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         </div>
 
                         {filteredJobs.length === 0 ? (
-                          <div className="text-center py-10 text-zinc-650 bg-zinc-950/20 border border-dashed border-zinc-850 rounded-xl text-xs">
+                          <div className="text-center py-10 text-zinc-500 bg-zinc-50 border border-dashed border-zinc-200 rounded-xl text-xs">
                             No scheduled jobs match the active filters.
                           </div>
                         ) : (
                           <div className="overflow-x-auto">
                             <table className="w-full text-left text-sm border-collapse">
                               <thead>
-                                <tr className="border-b border-zinc-800 text-zinc-500 font-mono text-xs uppercase">
+                                <tr className="border-b border-zinc-200 text-zinc-500 font-mono text-xs uppercase">
                                   <th className="pb-3 pr-4">File / Content Type</th>
                                   <th className="pb-3 px-4">Target Page</th>
                                   <th className="pb-3 px-4">Publish Date/Time (Kolkata)</th>
@@ -1688,43 +1688,43 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   <th className="pb-3 pl-4 text-right">Actions</th>
                                 </tr>
                               </thead>
-                              <tbody className="divide-y divide-zinc-800/50">
+                              <tbody className="divide-y divide-zinc-200">
                                 {filteredJobs.map((job) => {
                                   const targetPage = pages.find((p) => p.id === job.pageId);
                                   return (
-                                    <tr key={job.id} className="hover:bg-zinc-850/30 transition">
+                                    <tr key={job.id} className="hover:bg-zinc-50/50 transition">
                                       <td className="py-4 pr-4">
-                                        <div className="font-medium text-white max-w-[180px] truncate">{job.fileName}</div>
+                                        <div className="font-medium text-zinc-900 max-w-[180px] truncate">{job.fileName}</div>
                                         <div className="flex items-center gap-1.5 mt-0.5">
                                           <span className="text-xs text-zinc-500">{job.fileSize}</span>
-                                          <span className="text-[10px] text-zinc-700">•</span>
-                                          <span className="text-[10px] font-semibold text-indigo-400 font-mono tracking-wider">
+                                          <span className="text-[10px] text-zinc-300">•</span>
+                                          <span className="text-[10px] font-semibold text-indigo-600 font-mono tracking-wider">
                                             {job.contentType === "REEL" ? "Facebook Reel" : "Facebook Video"}
                                           </span>
                                         </div>
                                       </td>
-                                      <td className="py-4 px-4 text-zinc-300 font-medium">
+                                      <td className="py-4 px-4 text-zinc-700 font-medium">
                                         {targetPage?.name || "Unassigned"}
                                       </td>
                                       <td className="py-4 px-4 font-mono text-xs">
-                                        <div className="text-zinc-300">{formatDateTime(job.scheduledTimeKolkata)}</div>
-                                        <div className="text-[10px] text-zinc-650 mt-0.5">UTC: {formatDateTime(job.scheduledTimeUTC)}Z</div>
+                                        <div className="text-zinc-700">{formatDateTime(job.scheduledTimeKolkata)}</div>
+                                        <div className="text-[10px] text-zinc-500 mt-0.5">UTC: {formatDateTime(job.scheduledTimeUTC)}Z</div>
                                       </td>
                                       <td className="py-4 px-4">
                                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getStatusBadge(job.status)}`}>
                                           {getStatusLabel(job.status)}
                                         </span>
                                         {countdownJobs[job.id] !== undefined && (
-                                          <div className="text-[10px] text-amber-500 font-mono mt-1 flex items-center gap-1">
-                                            <span className="h-1 w-1 rounded-full bg-amber-500 animate-ping"></span>
+                                          <div className="text-[10px] text-amber-600 font-mono mt-1 flex items-center gap-1">
+                                            <span className="h-1 w-1 rounded-full bg-amber-600 animate-ping"></span>
                                             Retrying in {countdownJobs[job.id]}s...
                                           </div>
                                         )}
                                       </td>
                                       <td className="py-4 pl-4 text-right">
                                         {simulatingJobId === job.id ? (
-                                          <div className="flex justify-end items-center gap-1.5 text-xs text-indigo-400 font-medium">
-                                            <span className="animate-spin h-3.5 w-3.5 border-2 border-indigo-400 border-t-transparent rounded-full"></span>
+                                          <div className="flex justify-end items-center gap-1.5 text-xs text-indigo-600 font-medium">
+                                            <span className="animate-spin h-3.5 w-3.5 border-2 border-indigo-600 border-t-transparent rounded-full"></span>
                                             Running...
                                           </div>
                                         ) : (
@@ -1733,7 +1733,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                               (job.status === "PREPARING" && !job.providerReference && !job.providerProcessingId)) && (
                                               <button
                                                 onClick={() => handleCancelJob(job.id)}
-                                                className="text-zinc-400 hover:text-amber-500 transition px-2 py-1 rounded hover:bg-amber-500/10 text-xs font-semibold"
+                                                className="text-zinc-600 hover:text-amber-800 transition px-2 py-1 rounded hover:bg-amber-50 text-xs font-semibold"
                                               >
                                                 Cancel
                                               </button>
@@ -1741,14 +1741,14 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                             {(job.status === "FAILED_RETRYABLE" || job.status === "FACEBOOK_RECONNECT_REQUIRED") && (
                                               <button
                                                 onClick={() => handleRetryJobManual(job.id)}
-                                                className="text-indigo-400 hover:text-indigo-300 transition px-2 py-1 rounded hover:bg-indigo-500/10 text-xs font-semibold"
+                                                className="text-indigo-600 hover:text-indigo-800 transition px-2 py-1 rounded hover:bg-indigo-50 text-xs font-semibold"
                                               >
                                                 Retry
                                               </button>
                                             )}
                                             <button
                                               onClick={() => setSelectedHistoryJob(job)}
-                                              className="text-zinc-400 hover:text-white transition px-2 py-1 rounded hover:bg-zinc-800 text-xs font-semibold"
+                                              className="text-zinc-600 hover:text-zinc-900 transition px-2 py-1 rounded hover:bg-zinc-100 text-xs font-semibold"
                                             >
                                               History
                                             </button>
@@ -1767,8 +1767,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   </div>
 
                   {/* Job Diagnostics Inspector */}
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-                    <h3 className="text-base font-bold text-white mb-4">Job Diagnostics Inspector</h3>
+                  <div className="bg-white border border-zinc-200 rounded-xl p-6">
+                    <h3 className="text-base font-bold text-zinc-900 mb-4">Job Diagnostics Inspector</h3>
                     <div className="space-y-4">
                       {jobs.map((job) => {
                         const isFinished = job.status === "PUBLISHED" || job.status === "FAILED_PERMANENT" || job.status === "FAILED_RETRYABLE" || job.status === "FACEBOOK_RECONNECT_REQUIRED" || job.status === "CANCELLED";
@@ -1776,21 +1776,21 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           const isFailed = job.status !== "PUBLISHED";
                           return (
                             <div key={job.id} className={`p-4 rounded-lg border text-xs font-mono ${
-                              isFailed ? "bg-rose-950/20 border-rose-900/40" : "bg-emerald-950/20 border-emerald-900/40"
+                              isFailed ? "bg-rose-50 border-rose-200 text-rose-800" : "bg-emerald-50 border-emerald-200 text-emerald-800"
                             }`}>
                               <div className="flex items-center justify-between mb-2">
-                                <span className={`font-bold uppercase ${isFailed ? "text-rose-400" : "text-emerald-400"}`}>
+                                <span className={`font-bold uppercase ${isFailed ? "text-rose-700" : "text-emerald-700"}`}>
                                   {getStatusLabel(job.status)} - ID: {job.id}
                                 </span>
                                 <span className="text-zinc-500">{job.fileName}</span>
                               </div>
                               {job.status === "PUBLISHED" && (
-                                <p className="text-zinc-300">
-                                  ✓ Meta Post ID Link: <a href="#" className="underline text-indigo-400" onClick={(e) => e.preventDefault()}>fb.com/{job.metaPostId}</a>
+                                <p className="text-zinc-700">
+                                  ✓ Meta Post ID Link: <a href="#" className="underline text-indigo-600" onClick={(e) => e.preventDefault()}>fb.com/{job.metaPostId}</a>
                                 </p>
                               )}
                               {isFailed && (
-                                <p className="text-rose-300 whitespace-pre-wrap">
+                                <p className="text-rose-700 whitespace-pre-wrap">
                                   ✗ Error Reason: {job.errorLog}
                                 </p>
                               )}
@@ -1810,15 +1810,15 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                 {/* Worker Simulation Monitor */}
                 <div className="flex flex-col gap-6">
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 flex flex-col flex-1 h-full">
-                    <h3 className="text-base font-bold text-white mb-2">Worker Simulation Log</h3>
+                  <div className="bg-white border border-zinc-200 rounded-xl p-6 flex flex-col flex-1 h-full">
+                    <h3 className="text-base font-bold text-zinc-900 mb-2">Worker Simulation Log</h3>
                     <p className="text-xs text-zinc-500 mb-4 leading-relaxed">
                       Watch background steps execute, including token decryption and mock video publishing chunk updates.
                     </p>
 
-                    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 font-mono text-[11px] leading-relaxed text-zinc-300 flex-1 min-h-[300px] overflow-y-auto max-h-[450px]">
+                    <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-4 font-mono text-[11px] leading-relaxed text-zinc-700 flex-1 min-h-[300px] overflow-y-auto max-h-[450px]">
                       {simulationLog.length === 0 ? (
-                        <div className="text-zinc-650 italic h-full flex items-center justify-center">
+                        <div className="text-zinc-500 italic h-full flex items-center justify-center">
                           Awaiting Worker triggering...
                         </div>
                       ) : (
@@ -1826,12 +1826,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           {simulationLog.map((logLine, idx) => (
                             <div key={idx} className={
                               logLine.includes("ERROR")
-                                ? "text-rose-400 font-semibold"
+                                ? "text-rose-600 font-semibold"
                                 : logLine.includes("SUCCESS") || logLine.includes("Success")
-                                ? "text-emerald-400 font-semibold"
+                                ? "text-emerald-600 font-semibold"
                                 : logLine.includes("WARNING")
-                                ? "text-amber-400"
-                                : "text-zinc-300"
+                                ? "text-amber-600"
+                                : "text-zinc-700"
                             }>
                               {logLine}
                             </div>
@@ -1852,9 +1852,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
                   {/* File Upload Dropzone (Local Drag & Drop / File Picker) */}
-                  <div className="lg:col-span-2 bg-zinc-900 border border-zinc-800 rounded-xl p-6 flex flex-col justify-between">
+                  <div className="lg:col-span-2 bg-white border border-zinc-200 rounded-xl p-6 flex flex-col justify-between">
                     <div>
-                      <h3 className="text-base font-bold text-white mb-2">Bulk Video Upload Workspace (Local Direct-to-App)</h3>
+                      <h3 className="text-base font-bold text-zinc-900 mb-2">Bulk Video Upload Workspace (Local Direct-to-App)</h3>
                       <p className="text-xs text-zinc-500 mb-5 leading-relaxed">
                         Select multiple **MP4** or **MOV** files from your machine. Max configured file size limits are verified on selection.
                       </p>
@@ -1862,7 +1862,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                       <div
                         onDragOver={handleDragOver}
                         onDrop={handleDrop}
-                        className="border-2 border-dashed border-zinc-800 hover:border-zinc-700/80 rounded-xl py-10 px-8 text-center bg-zinc-950/30 cursor-pointer relative group transition"
+                        className="border-2 border-dashed border-zinc-300 hover:border-zinc-400 rounded-xl py-10 px-8 text-center bg-zinc-50 cursor-pointer relative group transition"
                       >
                         <input
                           type="file"
@@ -1871,10 +1871,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           onChange={triggerPickerChange}
                           className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                         />
-                        <svg className="h-10 w-10 text-zinc-650 group-hover:text-zinc-500 mx-auto mb-3 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="h-10 w-10 text-zinc-400 group-hover:text-zinc-500 mx-auto mb-3 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                         </svg>
-                        <span className="block text-sm text-zinc-300 font-semibold mb-1 group-hover:text-white transition">
+                        <span className="block text-sm text-zinc-750 font-semibold mb-1 group-hover:text-zinc-900 transition">
                           Drag & Drop MP4/MOV Videos or Click to Browse
                         </span>
                         <span className="block text-xs text-zinc-500 font-mono">
@@ -1883,17 +1883,17 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                       </div>
 
                       {fileUploadError && (
-                        <div className="mt-3 text-xs text-rose-500 font-semibold bg-rose-950/15 border border-rose-900/35 rounded-lg p-2 flex items-center gap-2">
-                          <span className="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
+                        <div className="mt-3 text-xs text-rose-800 font-semibold bg-rose-50 border border-rose-200 rounded-lg p-2 flex items-center gap-2">
+                          <span className="h-1.5 w-1.5 rounded-full bg-rose-600"></span>
                           {fileUploadError}
                         </div>
                       )}
                     </div>
 
                     {/* Configuration settings block */}
-                    <div className="mt-6 pt-5 border-t border-zinc-800/80 flex items-center justify-between gap-4">
+                    <div className="mt-6 pt-5 border-t border-zinc-200 flex items-center justify-between gap-4">
                       <div>
-                        <h4 className="text-xs font-semibold text-white">Configure Max File Size Boundary</h4>
+                        <h4 className="text-xs font-semibold text-zinc-900">Configure Max File Size Boundary</h4>
                         <p className="text-[10px] text-zinc-500">Validation flag applies instantly to files exceeding this threshold.</p>
                       </div>
                       <div className="flex items-center gap-2.5">
@@ -1901,18 +1901,18 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           type="number"
                           value={maxFileSizeMB}
                           onChange={(e) => setMaxFileSizeMB(Number(e.target.value))}
-                          className="w-24 bg-zinc-950 border border-zinc-800 rounded-lg py-1.5 px-3 text-xs text-white text-center focus:outline-none focus:border-indigo-650 font-mono font-bold"
+                          className="w-24 bg-white border border-zinc-200 rounded-lg py-1.5 px-3 text-xs text-zinc-900 text-center focus:outline-none focus:border-indigo-600 font-mono font-bold"
                           min={1}
                         />
-                        <span className="text-xs font-mono text-zinc-400 font-bold">MB</span>
+                        <span className="text-xs font-mono text-zinc-500 font-bold">MB</span>
                       </div>
                     </div>
                   </div>
 
                   {/* CSV Metadata Importer */}
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 flex flex-col justify-between">
+                  <div className="bg-white border border-zinc-200 rounded-xl p-6 flex flex-col justify-between">
                     <div>
-                      <h3 className="text-base font-bold text-white mb-2">CSV Metadata Importer</h3>
+                      <h3 className="text-base font-bold text-zinc-900 mb-2">CSV Metadata Importer</h3>
                       <p className="text-xs text-zinc-500 mb-4 leading-relaxed">
                         Import a CSV metadata table matching video targets by filename. Shows row-level errors for broken formatting or invalid references.
                       </p>
@@ -1920,12 +1920,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                       <div className="flex flex-col gap-3">
                         <button
                           onClick={handleDownloadCsvTemplate}
-                          className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold py-2 px-3 border border-zinc-700 rounded-lg text-xs transition flex items-center justify-center gap-1.5"
+                          className="w-full bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-semibold py-2 px-3 border border-zinc-200 rounded-lg text-xs transition flex items-center justify-center gap-1.5"
                         >
                           Download CSV Template
                         </button>
 
-                        <div className="relative w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 rounded-lg p-2.5 text-center text-xs font-semibold text-white cursor-pointer transition">
+                        <div className="relative w-full bg-white border border-zinc-200 hover:border-zinc-300 rounded-lg p-2.5 text-center text-xs font-semibold text-zinc-700 cursor-pointer transition">
                           Upload Metadata CSV File
                           <input
                             type="file"
@@ -1939,16 +1939,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                     {/* CSV Parsing Status / Errors list */}
                     {(csvSuccessCount > 0 || csvErrors.length > 0) && (
-                      <div className="mt-4 pt-4 border-t border-zinc-800/80 text-xs max-h-[160px] overflow-y-auto">
-                        <div className="font-bold text-white mb-1.5 uppercase font-mono tracking-wider text-[10px]">Import Summary:</div>
+                      <div className="mt-4 pt-4 border-t border-zinc-200 text-xs max-h-[160px] overflow-y-auto">
+                        <div className="font-bold text-zinc-900 mb-1.5 uppercase font-mono tracking-wider text-[10px]">Import Summary:</div>
                         {csvSuccessCount > 0 && (
-                          <div className="text-emerald-400 font-medium mb-1 flex items-center gap-1.5">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                          <div className="text-emerald-600 font-medium mb-1 flex items-center gap-1.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-600"></span>
                             Successfully matched & updated {csvSuccessCount} videos.
                           </div>
                         )}
                         {csvErrors.map((err, idx) => (
-                          <div key={idx} className="text-rose-400/90 leading-relaxed pl-3 border-l border-rose-900/60 mb-1 font-mono text-[10px]">
+                          <div key={idx} className="text-rose-600 leading-relaxed pl-3 border-l border-rose-200 mb-1 font-mono text-[10px]">
                             {err}
                           </div>
                         ))}
@@ -1959,8 +1959,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                 {/* BULK ACTIONS TOOLBAR */}
                 {tempJobsQueue.length > 0 && (
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-                    <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-400 mb-4 font-bold">Bulk Action Controller</h3>
+                  <div className="bg-white border border-zinc-200 rounded-xl p-6">
+                    <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-900 mb-4 font-bold">Bulk Action Controller</h3>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end text-xs">
                       {/* Bulk Page Selector */}
@@ -1970,7 +1970,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           <select
                             value={bulkPageId}
                             onChange={(e) => setBulkPageId(e.target.value)}
-                            className="flex-1 bg-zinc-950 border border-zinc-850 rounded-lg py-2 px-2 text-xs text-white focus:outline-none"
+                            className="flex-1 bg-white border border-zinc-200 rounded-lg py-2 px-2 text-xs text-zinc-900 focus:outline-none"
                           >
                             {pages.map((p) => (
                               <option key={p.id} value={p.id}>{p.name}</option>
@@ -1978,7 +1978,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           </select>
                           <button
                             onClick={handleApplyPageToAll}
-                            className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold px-3 rounded transition text-[10px]"
+                            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 rounded transition text-[10px]"
                           >
                             Apply
                           </button>
@@ -1992,14 +1992,14 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           <select
                             value={bulkContentType}
                             onChange={(e) => setBulkContentType(e.target.value as "VIDEO" | "REEL")}
-                            className="flex-1 bg-zinc-950 border border-zinc-850 rounded-lg py-2 px-2 text-xs text-white focus:outline-none"
+                            className="flex-1 bg-white border border-zinc-200 rounded-lg py-2 px-2 text-xs text-zinc-900 focus:outline-none"
                           >
                             <option value="VIDEO">Facebook Video</option>
                             <option value="REEL">Facebook Reel</option>
                           </select>
                           <button
                             onClick={handleApplyContentTypeToAll}
-                            className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold px-3 rounded transition text-[10px]"
+                            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 rounded transition text-[10px]"
                           >
                             Apply
                           </button>
@@ -2014,12 +2014,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             type="text"
                             value={bulkCaption}
                             onChange={(e) => setBulkCaption(e.target.value)}
-                            className="flex-1 bg-zinc-950 border border-zinc-850 rounded-lg py-2 px-2.5 text-xs text-white focus:outline-none placeholder-zinc-700"
+                            className="flex-1 bg-white border border-zinc-200 rounded-lg py-2 px-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none"
                             placeholder="All caption text"
                           />
                           <button
                             onClick={handleApplyCaptionToAll}
-                            className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold px-3 rounded transition text-[10px]"
+                            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 rounded transition text-[10px]"
                           >
                             Apply
                           </button>
@@ -2034,18 +2034,18 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             type="text"
                             value={bulkHashtags}
                             onChange={(e) => setBulkHashtags(e.target.value)}
-                            className="flex-1 bg-zinc-950 border border-zinc-850 rounded-lg py-2 px-2.5 text-xs text-white focus:outline-none placeholder-zinc-700"
+                            className="flex-1 bg-white border border-zinc-200 rounded-lg py-2 px-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none"
                             placeholder="e.g. #NewPost #Meta"
                           />
                           <button
                             onClick={handleAppendHashtagsToAll}
-                            className="bg-zinc-800 hover:bg-zinc-750 text-white font-bold px-3.5 border border-zinc-700 rounded transition text-[10px]"
+                            className="bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-bold px-3.5 border border-zinc-200 rounded transition text-[10px]"
                           >
                             Append
                           </button>
                           <button
                             onClick={handleReplaceHashtagsToAll}
-                            className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold px-3.5 rounded transition text-[10px]"
+                            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3.5 rounded transition text-[10px]"
                           >
                             Replace
                           </button>
@@ -2057,14 +2057,14 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                 {/* BULK SCHEDULING MODE SWITCHER */}
                 {tempJobsQueue.length > 0 && (
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-                    <div className="flex items-center justify-between mb-4 border-b border-zinc-850 pb-3">
-                      <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-400 font-bold">Scheduling Options</h3>
+                  <div className="bg-white border border-zinc-200 rounded-xl p-6">
+                    <div className="flex items-center justify-between mb-4 border-b border-zinc-200 pb-3">
+                      <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-900 font-bold">Scheduling Options</h3>
                       <div className="flex gap-3 text-xs">
                         <button
                           onClick={() => setSchedulingMode("individual")}
                           className={`px-3 py-1 rounded-full font-semibold transition ${
-                            schedulingMode === "individual" ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300"
+                            schedulingMode === "individual" ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900"
                           }`}
                         >
                           Individual Settings
@@ -2072,7 +2072,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         <button
                           onClick={() => setSchedulingMode("interval")}
                           className={`px-3 py-1 rounded-full font-semibold transition ${
-                            schedulingMode === "interval" ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300"
+                            schedulingMode === "interval" ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900"
                           }`}
                         >
                           Fixed Intervals
@@ -2080,7 +2080,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         <button
                           onClick={() => setSchedulingMode("slots")}
                           className={`px-3 py-1 rounded-full font-semibold transition ${
-                            schedulingMode === "slots" ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300"
+                            schedulingMode === "slots" ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900"
                           }`}
                         >
                           Daily Time Slots
@@ -2103,7 +2103,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             type="datetime-local"
                             value={intervalStartKolkata}
                             onChange={(e) => setIntervalStartKolkata(e.target.value)}
-                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg py-2.5 px-3.5 text-xs text-white focus:outline-none focus:border-indigo-650"
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-2.5 px-3.5 text-xs text-zinc-900 focus:outline-none focus:border-indigo-600"
                           />
                         </div>
                         <div>
@@ -2111,7 +2111,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           <select
                             value={intervalHours}
                             onChange={(e) => setIntervalHours(parseInt(e.target.value))}
-                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg py-2.5 px-3.5 text-xs text-white focus:outline-none focus:border-indigo-650"
+                            className="w-full bg-white border border-zinc-200 rounded-lg py-2.5 px-3.5 text-xs text-zinc-900 focus:outline-none focus:border-indigo-600"
                           >
                             <option value={1}>Every 1 hour</option>
                             <option value={2}>Every 2 hours</option>
@@ -2123,7 +2123,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         </div>
                         <button
                           onClick={handleApplySchedulingMode}
-                          className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-lg text-xs transition"
+                          className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-lg text-xs transition"
                         >
                           Apply Sequential Intervals
                         </button>
@@ -2139,7 +2139,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                               type="date"
                               value={dailySlotsStartDate}
                               onChange={(e) => setDailySlotsStartDate(e.target.value)}
-                              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg py-2.5 px-3.5 text-xs text-white focus:outline-none focus:border-indigo-650"
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-2.5 px-3.5 text-xs text-zinc-900 focus:outline-none focus:border-indigo-600"
                             />
                           </div>
                           <div>
@@ -2149,12 +2149,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                 type="text"
                                 value={newSlotInput}
                                 onChange={(e) => setNewSlotInput(e.target.value)}
-                                className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg py-2.5 px-3.5 text-xs text-white placeholder-zinc-700"
+                                className="flex-1 bg-white border border-zinc-200 rounded-lg py-2.5 px-3.5 text-xs text-zinc-900 placeholder-zinc-400"
                                 placeholder="e.g. 14:30"
                               />
                               <button
                                 onClick={handleAddSlot}
-                                className="bg-zinc-800 hover:bg-zinc-750 text-white font-bold px-3 border border-zinc-700 rounded-lg transition"
+                                className="bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-bold px-3 border border-zinc-200 rounded-lg transition"
                               >
                                 Add
                               </button>
@@ -2162,7 +2162,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           </div>
                           <button
                             onClick={handleApplySchedulingMode}
-                            className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-lg text-xs transition"
+                            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-lg text-xs transition"
                           >
                             Distribute over Daily Slots
                           </button>
@@ -2173,12 +2173,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           {dailyTimeSlots.map((slot, idx) => (
                             <span
                               key={idx}
-                              className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-zinc-950 border border-zinc-850 font-mono text-xs font-bold text-zinc-200"
+                              className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-zinc-100 border border-zinc-200 font-mono text-xs font-bold text-zinc-800"
                             >
                               {slot}
                               <button
                                 onClick={() => handleRemoveSlot(idx)}
-                                className="text-zinc-650 hover:text-rose-500 font-bold ml-1.5"
+                                className="text-zinc-500 hover:text-rose-500 font-bold ml-1.5"
                               >
                                 ×
                               </button>
@@ -2194,16 +2194,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 )}
 
                 {/* EDIT QUEUED BULK CARDS LIST */}
-                <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-                  <div className="flex items-center justify-between mb-6 border-b border-zinc-800 pb-4">
+                <div className="bg-white border border-zinc-200 rounded-xl p-6">
+                  <div className="flex items-center justify-between mb-6 border-b border-zinc-200 pb-4">
                     <div>
-                      <h3 className="text-base font-bold text-white mb-0.5">Publisher Upload Cards</h3>
+                      <h3 className="text-base font-bold text-zinc-900 mb-0.5">Publisher Upload Cards</h3>
                       <p className="text-xs text-zinc-500">Configure parameters for local videos awaiting scheduling confirmation.</p>
                     </div>
                     {tempJobsQueue.length > 0 && (
                       <button
                         onClick={handleSaveTrigger}
-                        className="bg-emerald-650 hover:bg-emerald-600 text-white font-bold text-xs py-2 px-4 rounded-lg transition shadow-md shadow-emerald-600/10"
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-lg transition shadow-md shadow-emerald-600/10"
                       >
                         Confirm Scheduled Queue
                       </button>
@@ -2216,8 +2216,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                       return (
                         <div
                           key={job.id}
-                          className={`bg-zinc-950 border rounded-xl p-6 relative transition ${
-                            errors.length > 0 ? "border-rose-900/60" : "border-zinc-850"
+                          className={`bg-zinc-50 border rounded-xl p-6 relative transition ${
+                            errors.length > 0 ? "border-rose-200" : "border-zinc-200"
                           }`}
                         >
                           <button
@@ -2231,7 +2231,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           {errors.length > 0 && (
                             <div className="mb-4 space-y-1.5">
                               {errors.map((err, idx) => (
-                                <div key={idx} className="text-[10px] text-rose-400 font-semibold font-mono bg-rose-950/15 border border-rose-900/30 px-2 py-1 rounded">
+                                <div key={idx} className="text-[10px] text-rose-800 font-semibold font-mono bg-rose-50 border border-rose-200 px-2 py-1 rounded">
                                   ⚠ Validation Error: {err}
                                 </div>
                               ))}
@@ -2260,7 +2260,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                 <>
                                   {/* Native video preview */}
                                   {job.localVideoUrl ? (
-                                    <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-850 relative flex items-center justify-center">
+                                    <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-200 relative flex items-center justify-center">
                                       <video
                                         src={job.localVideoUrl}
                                         className="h-full w-full object-contain"
@@ -2268,29 +2268,29 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                       />
                                     </div>
                                   ) : (
-                                    <div className="aspect-video bg-zinc-900 rounded-lg flex items-center justify-center border border-zinc-850 text-zinc-600 text-xs">
+                                    <div className="aspect-video bg-zinc-100 rounded-lg flex items-center justify-center border border-zinc-200 text-zinc-500 text-xs">
                                       Video Preview Unavailable
                                     </div>
                                   )}
 
-                                  <div className="text-xs space-y-1.5 text-zinc-400 font-mono">
-                                    <div className="truncate max-w-[280px]">Original Name: <span className="text-zinc-200">{job.fileName}</span></div>
-                                    <div>Size: <span className="text-zinc-200">{job.fileSize}</span></div>
-                                    <div>Duration: <span className="text-zinc-200">{job.durationSeconds ? `${job.durationSeconds}s` : "Scanning..."}</span></div>
-                                    <div>Language: <span className="text-indigo-400 font-semibold">English (Fixed)</span></div>
+                                  <div className="text-xs space-y-1.5 text-zinc-500 font-mono">
+                                    <div className="truncate max-w-[280px]">Original Name: <span className="text-zinc-800">{job.fileName}</span></div>
+                                    <div>Size: <span className="text-zinc-800">{job.fileSize}</span></div>
+                                    <div>Duration: <span className="text-zinc-800">{job.durationSeconds ? `${job.durationSeconds}s` : "Scanning..."}</span></div>
+                                    <div>Language: <span className="text-indigo-600 font-semibold">English (Fixed)</span></div>
                                   </div>
                                 </>
                               )}
 
                               {/* Thumbnail Settings */}
-                              <div className="border-t border-zinc-850/80 pt-3.5 space-y-2 text-xs">
+                              <div className="border-t border-zinc-200 pt-3.5 space-y-2 text-xs">
                                 <label className="block font-mono text-zinc-500 uppercase tracking-wider text-[10px]">Assign Thumbnail</label>
 
                                 <div className="flex gap-2">
                                   <button
                                     onClick={() => handleUpdateTempJobField(job.id, "thumbnailMode", "auto")}
                                     className={`flex-1 py-1 border rounded text-[10px] font-bold transition ${
-                                      job.thumbnailMode === "auto" ? "bg-zinc-800 border-zinc-700 text-white" : "border-zinc-850 text-zinc-500"
+                                      job.thumbnailMode === "auto" ? "bg-zinc-200 border-zinc-300 text-zinc-900" : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                                     }`}
                                   >
                                     Auto Meta
@@ -2298,7 +2298,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   <button
                                     onClick={() => handleOpenFrameCaptureModal(job)}
                                     className={`flex-1 py-1 border rounded text-[10px] font-bold transition ${
-                                      job.thumbnailMode === "captured" ? "bg-zinc-850 border-zinc-700 text-white" : "border-zinc-850 text-zinc-500"
+                                      job.thumbnailMode === "captured" ? "bg-zinc-200 border-zinc-300 text-zinc-900" : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                                     }`}
                                   >
                                     Capture Frame
@@ -2306,7 +2306,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   <div className="relative flex-1">
                                     <button
                                       className={`w-full py-1 border rounded text-[10px] font-bold transition ${
-                                        job.thumbnailMode === "custom" ? "bg-zinc-850 border-zinc-700 text-white" : "border-zinc-850 text-zinc-500"
+                                        job.thumbnailMode === "custom" ? "bg-zinc-200 border-zinc-300 text-zinc-900" : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                                       }`}
                                     >
                                       Custom JPG
@@ -2334,9 +2334,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                     <img
                                       src={job.capturedThumbnailUrl}
                                       alt="Captured Frame Preview"
-                                      className="aspect-video w-full rounded border border-zinc-800 object-cover"
+                                      className="aspect-video w-full rounded border border-zinc-200 object-cover"
                                     />
-                                    <span className="text-[9px] text-zinc-650 mt-1 block">Local video frame capture</span>
+                                    <span className="text-[9px] text-zinc-500 mt-1 block">Local video frame capture</span>
                                   </div>
                                 )}
                                 {job.thumbnailMode === "custom" && job.customThumbnailUrl && (
@@ -2345,13 +2345,13 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                     <img
                                       src={job.customThumbnailUrl}
                                       alt="Custom Thumbnail Preview"
-                                      className="aspect-video w-full rounded border border-zinc-800 object-cover"
+                                      className="aspect-video w-full rounded border border-zinc-200 object-cover"
                                     />
-                                    <span className="text-[9px] text-zinc-650 mt-1 block">Custom JPG preview</span>
+                                    <span className="text-[9px] text-zinc-500 mt-1 block">Custom JPG preview</span>
                                   </div>
                                 )}
                                 {job.thumbnailMode === "auto" && (
-                                  <div className="text-[9px] text-zinc-600 bg-zinc-900 border border-zinc-850 rounded p-2 text-center mt-2 italic">
+                                  <div className="text-[9px] text-zinc-500 bg-zinc-100 border border-zinc-200 rounded p-2 text-center mt-2 italic">
                                     Facebook will automatically generate the thumbnail.
                                   </div>
                                 )}
@@ -2368,7 +2368,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   type="text"
                                   value={job.englishTitle}
                                   onChange={(e) => handleUpdateTempJobField(job.id, "englishTitle", e.target.value)}
-                                  className="w-full bg-zinc-900 border border-zinc-850 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-indigo-650 transition placeholder-zinc-700"
+                                  className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition placeholder-zinc-400"
                                   placeholder="Video title in English"
                                 />
                               </div>
@@ -2380,7 +2380,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   value={job.englishCaption}
                                   rows={2}
                                   onChange={(e) => handleUpdateTempJobField(job.id, "englishCaption", e.target.value)}
-                                  className="w-full bg-zinc-900 border border-zinc-850 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-indigo-650 transition placeholder-zinc-700"
+                                  className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition placeholder-zinc-400"
                                   placeholder="Explain your video..."
                                 />
                               </div>
@@ -2393,7 +2393,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                     type="text"
                                     value={job.hashtags}
                                     onChange={(e) => handleUpdateTempJobField(job.id, "hashtags", e.target.value)}
-                                    className="w-full bg-zinc-900 border border-zinc-850 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-indigo-650 transition placeholder-zinc-700"
+                                    className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition placeholder-zinc-400"
                                     placeholder="#Vlog #Reels"
                                   />
                                 </div>
@@ -2404,7 +2404,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   <select
                                     value={job.pageId}
                                     onChange={(e) => handleUpdateTempJobField(job.id, "pageId", e.target.value)}
-                                    className="w-full bg-zinc-900 border border-zinc-850 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-indigo-650 transition"
+                                    className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition"
                                   >
                                     {pages.map((p) => (
                                       <option key={p.id} value={p.id}>
@@ -2420,7 +2420,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   <select
                                     value={job.contentType}
                                     onChange={(e) => handleUpdateTempJobField(job.id, "contentType", e.target.value as "VIDEO" | "REEL")}
-                                    className="w-full bg-zinc-900 border border-zinc-850 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-indigo-650 transition"
+                                    className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition"
                                   >
                                     <option value="VIDEO">Facebook Video</option>
                                     <option value="REEL">Facebook Reel</option>
@@ -2438,14 +2438,14 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                     type="datetime-local"
                                     value={job.scheduledTimeKolkata}
                                     onChange={(e) => handleUpdateTempJobField(job.id, "scheduledTimeKolkata", e.target.value)}
-                                    className="w-full bg-zinc-900 border border-zinc-850 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-indigo-650 transition"
+                                    className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition"
                                   />
                                 </div>
                                 <div>
                                   <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-1">
                                     Internal UTC ISO (Prisma Storage)
                                   </label>
-                                  <div className="w-full bg-zinc-900 border border-zinc-900 rounded-lg py-2.5 px-3 font-mono text-zinc-500 break-all select-all">
+                                  <div className="w-full bg-zinc-100 border border-zinc-200 rounded-lg py-2.5 px-3 font-mono text-zinc-500 break-all select-all">
                                     {job.scheduledTimeUTC ? `${formatDateTime(job.scheduledTimeUTC)}Z` : "Awaiting local selection..."}
                                   </div>
                                 </div>
@@ -2457,7 +2457,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                       );
                     })}
                     {tempJobsQueue.length === 0 && (
-                      <div className="text-center py-10 text-zinc-650 bg-zinc-950/20 border border-dashed border-zinc-800 rounded-xl">
+                      <div className="text-center py-10 text-zinc-500 bg-zinc-50 border border-dashed border-zinc-200 rounded-xl">
                         Awaiting video uploads to display publishing configuration forms.
                       </div>
                     )}
@@ -2468,10 +2468,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
             {/* 3. SYNCED PAGES TAB */}
             {activeTab === "pages" && (
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6 border-b border-zinc-800/80 pb-5">
+              <div className="bg-white border border-zinc-200 rounded-xl p-6">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6 border-b border-zinc-200 pb-5">
                   <div>
-                    <h3 className="text-base font-bold text-white mb-1">Connected Pages ({countPages})</h3>
+                    <h3 className="text-base font-bold text-zinc-900 mb-1">Connected Pages ({countPages})</h3>
                     <p className="text-xs text-zinc-500">
                       Manage connected credentials and monitor authorization token statuses.
                     </p>
@@ -2487,31 +2487,31 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 </div>
 
                 {accounts.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-16 text-center bg-zinc-950/20 rounded-xl border border-dashed border-zinc-800">
-                    <p className="text-sm text-zinc-400 font-semibold">No Facebook Accounts Connected</p>
-                    <p className="text-xs text-zinc-600 mt-1 max-w-sm">
+                  <div className="flex flex-col items-center justify-center py-16 text-center bg-zinc-50 rounded-xl border border-dashed border-zinc-200">
+                    <p className="text-sm text-zinc-700 font-semibold">No Facebook Accounts Connected</p>
+                    <p className="text-xs text-zinc-500 mt-1 max-w-sm">
                       Please connect a Facebook account using the button above to synchronize your managed pages.
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-8">
                     {accounts.map((account) => (
-                      <div key={account.id} className="bg-zinc-950/40 border border-zinc-800 rounded-xl p-6 space-y-6">
+                      <div key={account.id} className="bg-zinc-50 border border-zinc-200 rounded-xl p-6 space-y-6">
                         {/* Account Header */}
-                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-800/60 pb-4">
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-200 pb-4">
                           <div className="flex items-center gap-3">
-                            <div className="h-10 w-10 rounded-full bg-blue-950/50 flex items-center justify-center text-blue-400 border border-blue-900/30">
+                            <div className="h-10 w-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 border border-blue-200">
                               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                               </svg>
                             </div>
                             <div>
                               <div className="flex items-center gap-2">
-                                <h4 className="font-bold text-sm text-white">{account.name}</h4>
+                                <h4 className="font-bold text-sm text-zinc-900">{account.name}</h4>
                                 <span className={`text-[10px] border px-2 py-0.5 rounded font-mono font-semibold ${
-                                  account.connectionState === 'Connected' ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
-                                  account.connectionState === 'Token Expiring' ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
-                                  "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                                  account.connectionState === 'Connected' ? "bg-emerald-50 text-emerald-800 border-emerald-200" :
+                                  account.connectionState === 'Token Expiring' ? "bg-amber-50 text-amber-800 border-amber-200" :
+                                  "bg-rose-50 text-rose-800 border-rose-200"
                                 }`}>
                                   {account.connectionState.toUpperCase()}
                                 </span>
@@ -2523,7 +2523,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             <button
                               onClick={() => handleSyncPages(account.id)}
                               disabled={isSyncingPages}
-                              className="bg-indigo-650 hover:bg-indigo-700 disabled:bg-zinc-850 disabled:text-zinc-500 font-semibold text-xs text-white py-2 px-4 rounded-lg transition"
+                              className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-200 disabled:text-zinc-400 font-semibold text-xs text-white py-2 px-4 rounded-lg transition"
                             >
                               Refresh Pages
                             </button>
@@ -2535,13 +2535,13 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             </button>
                             <button
                               onClick={() => handleDisconnect(account.id)}
-                              className="bg-rose-950/80 hover:bg-rose-900 border border-rose-900/30 text-rose-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
+                              className="bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 font-semibold text-xs py-2 px-4 rounded-lg transition"
                             >
                               Disconnect
                             </button>
                             <button
                               onClick={() => handleSimulateTokenExpiry(account.connectionState !== 'Reconnection Required', account.id)}
-                              className="bg-amber-600/10 hover:bg-amber-600/25 border border-amber-500/20 hover:border-amber-500/40 text-amber-400 font-semibold text-xs py-2 px-4 rounded-lg transition"
+                              className="bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-semibold text-xs py-2 px-4 rounded-lg transition"
                             >
                               {account.connectionState === 'Reconnection Required' ? "Restore Token" : "Expire Token"}
                             </button>
@@ -2550,7 +2550,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                         {/* Account Warning/Error Banners */}
                         {account.connectionState === "Reconnection Required" && (
-                          <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-lg p-3.5 flex items-start gap-2.5 text-xs">
+                          <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-lg p-3.5 flex items-start gap-2.5 text-xs">
                             <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
                             </svg>
@@ -2562,19 +2562,19 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         )}
 
                         {account.connectionState === "Permission Missing" && (
-                          <div className="bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-lg p-3.5 flex items-start gap-2.5 text-xs">
+                          <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-lg p-3.5 flex items-start gap-2.5 text-xs">
                             <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                             </svg>
                             <div>
                               <span className="font-bold block">Missing Required Permissions</span>
-                              <span>The application is missing the required <code className="bg-rose-950/50 px-1 py-0.5 rounded font-mono text-[10px]">pages_manage_posts</code> permission. Video publishing and scheduled uploads will be blocked.</span>
+                              <span>The application is missing the required <code className="bg-rose-100 text-rose-900 px-1 py-0.5 rounded font-mono text-[10px]">pages_manage_posts</code> permission. Video publishing and scheduled uploads will be blocked.</span>
                             </div>
                           </div>
                         )}
 
                         {account.connectionState === "Token Expiring" && (
-                          <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-lg p-3.5 flex items-start gap-2.5 text-xs">
+                          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3.5 flex items-start gap-2.5 text-xs">
                             <svg className="h-5 w-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                             </svg>
@@ -2587,7 +2587,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                         {/* Account Pages List */}
                         {account.pages.length === 0 ? (
-                          <div className="text-center py-8 text-zinc-500 text-xs bg-zinc-950/20 border border-dashed border-zinc-800 rounded-xl">
+                          <div className="text-center py-8 text-zinc-500 text-xs bg-zinc-100/50 border border-dashed border-zinc-200 rounded-xl">
                             No synced pages found for this account.
                           </div>
                         ) : (
@@ -2595,8 +2595,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             {account.pages.map((page) => (
                               <div
                                 key={page.id}
-                                className={`bg-zinc-950 border rounded-xl p-5 hover:border-zinc-750 transition flex flex-col justify-between min-h-[160px] ${
-                                  page.tokenStatus === "Expired" ? "border-rose-900/60" : "border-zinc-800"
+                                className={`bg-white border rounded-xl p-5 hover:border-zinc-300 transition flex flex-col justify-between min-h-[160px] ${
+                                  page.tokenStatus === "Expired" ? "border-rose-300 bg-rose-50/20" : "border-zinc-200"
                                 }`}
                               >
                                 <div className="flex items-start gap-4">
@@ -2604,22 +2604,22 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   <img
                                     src={page.pictureUrl}
                                     alt={page.name}
-                                    className="h-11 w-11 rounded-lg bg-zinc-800 object-cover flex-shrink-0"
+                                    className="h-11 w-11 rounded-lg bg-zinc-100 object-cover flex-shrink-0"
                                   />
                                   <div className="min-w-0 flex-1">
-                                    <h4 className="font-semibold text-sm text-white truncate">{page.name}</h4>
+                                    <h4 className="font-semibold text-sm text-zinc-900 truncate">{page.name}</h4>
                                     <span className="block text-[10px] text-zinc-500 mt-0.5">{page.category}</span>
                                     <span className="block text-[10px] font-mono text-zinc-500 mt-0.5">ID: {page.id}</span>
                                   </div>
                                 </div>
 
-                                <div className="mt-5 pt-4 border-t border-zinc-900 flex items-center justify-between text-xs">
+                                <div className="mt-5 pt-4 border-t border-zinc-200 flex items-center justify-between text-xs">
                                   <div className="flex items-center gap-1.5">
                                     <span className={`h-2 w-2 rounded-full ${
-                                      page.tokenStatus === "Expired" ? "bg-rose-500" : "bg-emerald-400"
+                                      page.tokenStatus === "Expired" ? "bg-rose-500" : "bg-emerald-500"
                                     }`}></span>
                                     <span className={`font-mono text-[11px] ${
-                                      page.tokenStatus === "Expired" ? "text-rose-400 font-semibold" : "text-emerald-400"
+                                      page.tokenStatus === "Expired" ? "text-rose-700 font-semibold" : "text-emerald-700"
                                     }`}>
                                       Token: {page.tokenStatus}
                                     </span>
@@ -2628,7 +2628,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   {page.tokenStatus === "Expired" ? (
                                     <button
                                       onClick={() => handleReconnectAccount(page.id)}
-                                      className="bg-rose-650 hover:bg-rose-600 text-white font-bold text-[10px] px-3 py-1 rounded transition"
+                                      className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] px-3 py-1 rounded transition"
                                     >
                                       Reconnect
                                     </button>
@@ -2651,17 +2651,17 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
             {/* 4. SECURITY LOGS TAB */}
             {activeTab === "logs" && (
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-                <div className="flex items-center justify-between mb-4 border-b border-zinc-800 pb-4">
+              <div className="bg-white border border-zinc-200 rounded-xl p-6">
+                <div className="flex items-center justify-between mb-4 border-b border-zinc-200 pb-4">
                   <div>
-                    <h3 className="text-base font-bold text-white mb-1">Security Audit Log Console</h3>
+                    <h3 className="text-base font-bold text-zinc-900 mb-1">Security Audit Log Console</h3>
                     <p className="text-xs text-zinc-500">
                       Real-time mock operations output. Observe token encryption tags and parameter sanitization.
                     </p>
                   </div>
                   <button
                     onClick={() => setSecurityLogs([])}
-                    className="text-xs text-zinc-400 hover:text-white transition px-2.5 py-1 rounded border border-zinc-850 hover:bg-zinc-800"
+                    className="text-xs text-zinc-600 hover:text-zinc-900 transition px-2.5 py-1 rounded border border-zinc-200 hover:bg-zinc-50 bg-white"
                   >
                     Clear Logs
                   </button>
@@ -2669,7 +2669,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                 <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-5 font-mono text-xs text-zinc-300 min-h-[400px] overflow-y-auto space-y-2">
                   {securityLogs.length === 0 ? (
-                    <p className="text-zinc-650 italic text-center py-10">No logs generated.</p>
+                    <p className="text-zinc-500 italic text-center py-10">No logs generated.</p>
                   ) : (
                     securityLogs.map((log, idx) => (
                       <div key={idx} className="flex items-start gap-4">
@@ -2697,19 +2697,19 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
       {/* Local Frame Capture Modal Drawer */}
       {activeFrameCaptureJobId && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl p-6 space-y-5">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-              <h4 className="font-bold text-white text-sm uppercase font-mono tracking-wide">Capture Thumbnail Frame</h4>
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-zinc-200 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl p-6 space-y-5">
+            <div className="flex items-center justify-between border-b border-zinc-200 pb-3">
+              <h4 className="font-bold text-zinc-900 text-sm uppercase font-mono tracking-wide">Capture Thumbnail Frame</h4>
               <button
                 onClick={() => setActiveFrameCaptureJobId(null)}
-                className="text-zinc-400 hover:text-white font-bold text-lg"
+                className="text-zinc-500 hover:text-zinc-800 font-bold text-lg"
               >
                 ×
               </button>
             </div>
 
-            <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-800 relative flex items-center justify-center">
+            <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-200 relative flex items-center justify-center">
               {/* Capture video target element */}
               <video
                 ref={videoCaptureRef}
@@ -2721,7 +2721,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
             {/* Slider control */}
             <div className="space-y-2">
-              <div className="flex justify-between items-center text-xs font-mono text-zinc-400">
+              <div className="flex justify-between items-center text-xs font-mono text-zinc-500">
                 <span>Capture Position: {frameCaptureTime.toFixed(1)}s</span>
                 <span>Total Length: {frameCaptureDuration}s</span>
               </div>
@@ -2732,20 +2732,20 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 step={0.1}
                 value={frameCaptureTime}
                 onChange={(e) => setFrameCaptureTime(Number(e.target.value))}
-                className="w-full accent-indigo-650 h-1.5 bg-zinc-850 rounded-lg cursor-pointer"
+                className="w-full accent-indigo-600 h-1.5 bg-zinc-200 rounded-lg cursor-pointer"
               />
             </div>
 
-            <div className="flex justify-end gap-3 pt-3 border-t border-zinc-800 text-xs">
+            <div className="flex justify-end gap-3 pt-3 border-t border-zinc-200 text-xs">
               <button
                 onClick={() => setActiveFrameCaptureJobId(null)}
-                className="px-4 py-2 border border-zinc-800 text-zinc-300 font-semibold rounded-lg hover:bg-zinc-800 transition"
+                className="px-4 py-2 border border-zinc-250 bg-white text-zinc-700 hover:bg-zinc-50 font-semibold rounded-lg transition"
               >
                 Cancel
               </button>
               <button
                 onClick={handleCaptureFrameAction}
-                className="px-4 py-2 bg-indigo-650 hover:bg-indigo-700 text-white font-semibold rounded-lg transition"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition"
               >
                 Confirm & Snapshot Frame
               </button>
@@ -2757,26 +2757,26 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       {/* Confirmation Modal before Scheduling saves to State */}
       {isConfirmationOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl p-6 flex flex-col gap-5">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-              <h4 className="font-bold text-white text-base uppercase font-mono tracking-wide">Confirm Scheduling Batch</h4>
+          <div className="bg-white border border-zinc-200 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl p-6 flex flex-col gap-5">
+            <div className="flex items-center justify-between border-b border-zinc-200 pb-3">
+              <h4 className="font-bold text-zinc-900 text-base uppercase font-mono tracking-wide">Confirm Scheduling Batch</h4>
               <button
                 onClick={() => setIsConfirmationOpen(false)}
-                className="text-zinc-400 hover:text-white font-bold text-lg"
+                className="text-zinc-500 hover:text-zinc-800 font-bold text-lg"
               >
                 ×
               </button>
             </div>
 
-            <p className="text-xs text-zinc-400 leading-relaxed">
+            <p className="text-xs text-zinc-500 leading-relaxed">
               Verify the local schedule conversions below. Confirming will create the corresponding scheduled tasks.
             </p>
 
             {/* Queue Summary list table */}
-            <div className="border border-zinc-800 rounded-xl overflow-hidden text-xs">
+            <div className="border border-zinc-200 rounded-xl overflow-x-auto text-xs">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-zinc-950 border-b border-zinc-800 text-zinc-500 font-mono text-[10px] uppercase">
+                  <tr className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-mono text-[10px] uppercase">
                     <th className="p-3.5">Filename</th>
                     <th className="p-3.5">Content Type</th>
                     <th className="p-3.5">Target Page</th>
@@ -2784,36 +2784,35 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                     <th className="p-3.5">UTC Time</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800 bg-zinc-950/20 font-mono">
+                <tbody className="divide-y divide-zinc-200 bg-white font-mono">
                   {tempJobsQueue.map((job) => {
                     const targetPage = pages.find((p) => p.id === job.pageId);
                     return (
-                      <tr key={job.id} className="hover:bg-zinc-900/40">
-                        <td className="p-3.5 text-white font-sans font-medium truncate max-w-[150px]">{job.fileName}</td>
-                        <td className="p-3.5 font-bold text-indigo-400 text-[10px]">{job.contentType === "REEL" ? "Facebook Reel" : "Facebook Video"}</td>
-                        <td className="p-3.5 text-zinc-300 font-sans font-medium">{targetPage?.name || "Unassigned"}</td>
-                        <td className="p-3.5 text-zinc-300">{formatDateTime(job.scheduledTimeKolkata)}</td>
+                      <tr key={job.id} className="hover:bg-zinc-50/50">
+                        <td className="p-3.5 text-zinc-900 font-sans font-medium truncate max-w-[150px]">{job.fileName}</td>
+                        <td className="p-3.5 font-bold text-indigo-600 text-[10px]">{job.contentType === "REEL" ? "Facebook Reel" : "Facebook Video"}</td>
+                        <td className="p-3.5 text-zinc-700 font-sans font-medium">{targetPage?.name || "Unassigned"}</td>
+                        <td className="p-3.5 text-zinc-700">{formatDateTime(job.scheduledTimeKolkata)}</td>
                         <td className="p-3.5 text-zinc-500 break-all">{formatDateTime(job.scheduledTimeUTC)}Z</td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-            </div>
-
-            <div className="flex justify-end gap-3 pt-3 border-t border-zinc-800 text-xs">
-              <button
-                onClick={() => setIsConfirmationOpen(false)}
-                className="px-4 py-2 border border-zinc-800 text-zinc-300 font-semibold rounded-lg hover:bg-zinc-800 transition"
-              >
-                Go Back (Edit Details)
-              </button>
-              <button
-                onClick={handleConfirmSave}
-                className="px-5 py-2.5 bg-emerald-650 hover:bg-emerald-600 text-white font-semibold rounded-lg transition shadow-md shadow-emerald-650/15"
-              >
-                Confirm Batch Scheduling
-              </button>
+              <div className="flex justify-end gap-3 pt-3 border-t border-zinc-200 text-xs">
+                <button
+                  onClick={() => setIsConfirmationOpen(false)}
+                  className="px-4 py-2 border border-zinc-250 bg-white text-zinc-700 hover:bg-zinc-50 font-semibold rounded-lg transition"
+                >
+                  Go Back (Edit Details)
+                </button>
+                <button
+                  onClick={handleConfirmSave}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition shadow-md shadow-emerald-600/15"
+                >
+                  Confirm Batch Scheduling
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2822,30 +2821,30 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       {/* History & Audit Logs Modal */}
       {selectedHistoryJob && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow-2xl p-6 flex flex-col gap-4">
+          <div className="bg-white border border-zinc-200 rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow-2xl p-6 flex flex-col gap-4">
 
             {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+            <div className="flex items-center justify-between border-b border-zinc-200 pb-3">
               <div>
-                <h4 className="font-bold text-white text-base">Job History & Logs</h4>
+                <h4 className="font-bold text-zinc-900 text-base">Job History & Logs</h4>
                 <p className="text-xs text-zinc-500 font-mono mt-0.5">{selectedHistoryJob.fileName} ({selectedHistoryJob.id})</p>
               </div>
               <button
                 onClick={() => setSelectedHistoryJob(null)}
-                className="text-zinc-400 hover:text-white font-bold text-xl transition"
+                className="text-zinc-500 hover:text-zinc-800 font-bold text-xl transition"
               >
                 &times;
               </button>
             </div>
 
             {/* Modal Tabs */}
-            <div className="flex border-b border-zinc-800 text-xs">
+            <div className="flex border-b border-zinc-200 text-xs">
               <button
                 onClick={() => setHistoryModalTab("attempts")}
                 className={`px-4 py-2 border-b-2 font-bold transition ${
                   historyModalTab === "attempts"
-                    ? "border-indigo-500 text-white"
-                    : "border-transparent text-zinc-500 hover:text-zinc-300"
+                    ? "border-indigo-600 text-indigo-600"
+                    : "border-transparent text-zinc-500 hover:text-zinc-800"
                 }`}
               >
                 Publish Attempts
@@ -2854,8 +2853,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 onClick={() => setHistoryModalTab("audit")}
                 className={`px-4 py-2 border-b-2 font-bold transition ${
                   historyModalTab === "audit"
-                    ? "border-indigo-500 text-white"
-                    : "border-transparent text-zinc-500 hover:text-zinc-300"
+                    ? "border-indigo-600 text-indigo-600"
+                    : "border-transparent text-zinc-500 hover:text-zinc-800"
                 }`}
               >
                 Audit Transitions Log
@@ -2867,14 +2866,14 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               {historyModalTab === "attempts" ? (
                 <div className="space-y-4">
                   {(!selectedHistoryJob.attempts || selectedHistoryJob.attempts.length === 0) ? (
-                    <div className="text-center py-10 text-zinc-500 italic bg-zinc-950/20 border border-dashed border-zinc-800 rounded-lg">
+                    <div className="text-center py-10 text-zinc-500 italic bg-zinc-50 border border-dashed border-zinc-200 rounded-lg">
                       No publish attempts recorded yet. Process this job in the worker to see results.
                     </div>
                   ) : (
-                    <div className="border border-zinc-800 rounded-xl overflow-hidden">
+                    <div className="border border-zinc-200 rounded-xl overflow-x-auto">
                       <table className="w-full text-left border-collapse">
                         <thead>
-                          <tr className="bg-zinc-950 border-b border-zinc-800 text-zinc-500 font-mono text-[10px] uppercase">
+                          <tr className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-mono text-[10px] uppercase">
                             <th className="p-3">Attempt</th>
                             <th className="p-3">Start (UTC)</th>
                             <th className="p-3">Completed (UTC)</th>
@@ -2883,19 +2882,19 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             <th className="p-3">Explanation</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-zinc-800 bg-zinc-950/10 font-mono text-[11px]">
+                        <tbody className="divide-y divide-zinc-200 bg-white font-mono text-[11px]">
                           {selectedHistoryJob.attempts.map((attempt, index) => (
-                            <tr key={index} className="hover:bg-zinc-900/40">
-                              <td className="p-3 text-white font-bold">#{attempt.attemptNumber}</td>
-                              <td className="p-3 text-zinc-400">{formatDateTime(attempt.startTime)}</td>
-                              <td className="p-3 text-zinc-400">{formatDateTime(attempt.completionTime)}</td>
+                            <tr key={index} className="hover:bg-zinc-50/50">
+                              <td className="p-3 text-zinc-900 font-bold">#{attempt.attemptNumber}</td>
+                              <td className="p-3 text-zinc-500">{formatDateTime(attempt.startTime)}</td>
+                              <td className="p-3 text-zinc-500">{formatDateTime(attempt.completionTime)}</td>
                               <td className="p-3">
                                 <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${getStatusBadge(attempt.resultingState)}`}>
                                   {getStatusLabel(attempt.resultingState)}
                                 </span>
                               </td>
-                              <td className="p-3 text-rose-400 font-bold">{attempt.errorCode || "-"}</td>
-                              <td className="p-3 text-zinc-300 font-sans">{attempt.explanation}</td>
+                              <td className="p-3 text-rose-600 font-bold">{attempt.errorCode || "-"}</td>
+                              <td className="p-3 text-zinc-700 font-sans">{attempt.explanation}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -2908,7 +2907,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   {(() => {
                     const jobLogs = securityLogs.filter(log => log.jobId === selectedHistoryJob.id);
                     if (jobLogs.length === 0) {
-                      return <p className="text-zinc-650 italic text-center py-6">No audit records found for this specific job.</p>;
+                      return <p className="text-zinc-500 italic text-center py-6">No audit records found for this specific job.</p>;
                     }
                     return jobLogs.map((log, idx) => (
                       <div key={idx} className="flex items-start gap-4">
@@ -2927,10 +2926,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             </div>
 
             {/* Modal Footer */}
-            <div className="flex justify-end pt-3 border-t border-zinc-800">
+            <div className="flex justify-end pt-3 border-t border-zinc-200">
               <button
                 onClick={() => setSelectedHistoryJob(null)}
-                className="px-4 py-2 bg-zinc-800 text-white font-semibold rounded-lg hover:bg-zinc-700 transition"
+                className="px-4 py-2 bg-zinc-100 text-zinc-700 font-semibold rounded-lg hover:bg-zinc-200 transition"
               >
                 Close Window
               </button>

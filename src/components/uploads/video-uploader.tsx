@@ -205,64 +205,64 @@ export default function VideoUploader({
         return <span className="text-amber-400 text-xs animate-pulse">Probing and validating media metadata...</span>;
       case 'validated':
         return (
-          <div className="bg-emerald-950/20 border border-emerald-900/40 rounded-lg p-3 text-xs text-emerald-400 space-y-1 w-full">
-            <div className="font-bold flex items-center gap-1.5 mb-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-xs text-emerald-800 space-y-2 w-full shadow-sm">
+            <div className="font-bold flex items-center gap-1.5 mb-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-600"></span>
               ✓ Video Verified & Validated
             </div>
             {metadata && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono text-[10px] text-zinc-300">
-                <div>Duration: <span className="text-white font-semibold">{Math.round((metadata.durationMs || 0) / 1000)}s</span></div>
-                <div>Format: <span className="text-white font-semibold">{metadata.containerFormat}</span></div>
-                <div>Video Codec: <span className="text-white font-semibold">{metadata.videoCodec}</span></div>
-                {metadata.audioCodec && <div>Audio Codec: <span className="text-white font-semibold">{metadata.audioCodec}</span></div>}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2 font-mono text-[10.5px] text-zinc-600 border-t border-emerald-100 pt-2 break-words">
+                <div><span className="font-semibold text-zinc-500">Duration:</span> <span className="text-emerald-900 font-bold">{Math.round((metadata.durationMs || 0) / 1000)}s</span></div>
+                <div><span className="font-semibold text-zinc-500">Format:</span> <span className="text-emerald-900 font-bold">{metadata.containerFormat}</span></div>
+                <div><span className="font-semibold text-zinc-500">Video Codec:</span> <span className="text-emerald-900 font-bold">{metadata.videoCodec}</span></div>
+                {metadata.audioCodec && <div><span className="font-semibold text-zinc-500">Audio Codec:</span> <span className="text-emerald-900 font-bold">{metadata.audioCodec}</span></div>}
                 {metadata.width && metadata.height && (
-                  <div>Resolution: <span className="text-white font-semibold">{metadata.width}x{metadata.height}</span></div>
+                  <div><span className="font-semibold text-zinc-500">Resolution:</span> <span className="text-emerald-900 font-bold">{metadata.width}×{metadata.height}</span></div>
                 )}
-                {metadata.frameRate && <div>Frame Rate: <span className="text-white font-semibold">{metadata.frameRate}fps</span></div>}
+                {metadata.frameRate && <div><span className="font-semibold text-zinc-500">Frame Rate:</span> <span className="text-emerald-900 font-bold">{metadata.frameRate} fps</span></div>}
               </div>
             )}
           </div>
         );
       case 'failed':
         return (
-          <div className="bg-rose-950/20 border border-rose-900/40 rounded-lg p-3 text-xs text-rose-400 font-medium w-full space-y-2">
-            <span className="font-bold block text-rose-500">✗ Upload Failed</span>
+          <div className="bg-rose-50 border border-rose-200 rounded-lg p-4 text-xs text-rose-800 font-medium w-full space-y-2">
+            <span className="font-bold block text-rose-700">✗ Upload Failed</span>
             {error === 'RECOVERY_FILE_MISMATCH' ? (
               <div>
-                <p className="font-semibold text-rose-400">File metadata mismatch.</p>
-                <p className="text-[11px] text-zinc-400 mt-1">
+                <p className="font-semibold text-rose-600">File metadata mismatch.</p>
+                <p className="text-[11px] text-zinc-600 mt-1">
                   The selected file name, size, or MIME type does not match the active recovery session.
                   Please select the correct file to resume, or cancel/clear this recovery session.
                 </p>
               </div>
             ) : (
-              error || 'An unexpected error occurred during upload or validation.'
+              <p className="text-[11px] text-rose-600">{error || 'An unexpected error occurred during upload or validation.'}</p>
             )}
           </div>
         );
       case 'aborting':
-        return <span className="text-rose-400 text-xs animate-pulse">Aborting multipart session...</span>;
+        return <span className="text-rose-600 text-xs animate-pulse">Aborting multipart session...</span>;
       case 'aborted':
-        return <span className="text-rose-500 text-xs font-semibold">Upload aborted by user.</span>;
+        return <span className="text-rose-600 text-xs font-semibold">Upload aborted by user.</span>;
       default:
         return null;
     }
   };
 
   return (
-    <div className="bg-zinc-900/60 backdrop-blur-md border border-zinc-800 rounded-xl p-5 hover:border-zinc-700 transition flex flex-col gap-4 shadow-lg w-full">
+    <div className="bg-white border border-zinc-200 rounded-xl p-5 hover:border-zinc-300 transition flex flex-col gap-4 shadow-sm w-full">
       {/* File Info */}
       <div className="flex justify-between items-start">
         <div className="flex-1 min-w-0 pr-4">
-          <h4 className="font-bold text-sm text-white truncate" title={file.name}>
+          <h4 className="font-bold text-sm text-zinc-900 truncate" title={file.name}>
             {file.name}
           </h4>
           <p className="text-xs text-zinc-500 font-mono mt-0.5">{formatBytes(file.size)}</p>
         </div>
         <button
           onClick={onRemove}
-          className="text-xs text-zinc-500 hover:text-rose-500 hover:underline transition ml-auto"
+          className="text-xs text-zinc-500 hover:text-rose-600 hover:underline transition ml-auto"
         >
           Remove Card
         </button>
@@ -274,7 +274,7 @@ export default function VideoUploader({
 
         {/* Progress Bar Container */}
         {['uploading', 'paused', 'retrying', 'completing', 'validating', 'validated'].includes(status.state) && (
-          <div className="w-full bg-zinc-950 rounded-full h-2 overflow-hidden border border-zinc-800">
+          <div className="w-full bg-zinc-200 rounded-full h-2 overflow-hidden border border-zinc-300">
             <div
               className={`h-full rounded-full transition-all duration-300 ${
                 status.state === 'validated'
@@ -294,11 +294,11 @@ export default function VideoUploader({
       </div>
 
       {/* Action Controls */}
-      <div className="flex flex-wrap gap-2 pt-2 border-t border-zinc-800/60 justify-end">
+      <div className="flex flex-wrap gap-2 pt-2 border-t border-zinc-200 justify-end">
         {status.state === 'selected' && (
           <button
             onClick={handleStart}
-            className="bg-indigo-650 hover:bg-indigo-600 text-white font-semibold py-1.5 px-4 rounded-lg text-xs transition shadow-md shadow-indigo-650/20"
+            className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-1.5 px-4 rounded-lg text-xs transition shadow-md shadow-indigo-600/20"
           >
             Start Upload
           </button>
@@ -308,13 +308,13 @@ export default function VideoUploader({
           <>
             <button
               onClick={handlePause}
-              className="bg-zinc-800 hover:bg-zinc-750 text-amber-500 border border-zinc-700 font-semibold py-1.5 px-3.5 rounded-lg text-xs transition"
+              className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold py-1.5 px-3.5 rounded-lg text-xs transition"
             >
               Pause
             </button>
             <button
               onClick={handleCancel}
-              className="bg-rose-950/30 hover:bg-rose-950/50 text-rose-400 border border-rose-900/40 font-semibold py-1.5 px-3.5 rounded-lg text-xs transition"
+              className="bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-semibold py-1.5 px-3.5 rounded-lg text-xs transition"
             >
               Cancel
             </button>
@@ -325,13 +325,13 @@ export default function VideoUploader({
           <>
             <button
               onClick={handleResume}
-              className="bg-indigo-650 hover:bg-indigo-600 text-white font-semibold py-1.5 px-4 rounded-lg text-xs transition"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-1.5 px-4 rounded-lg text-xs transition"
             >
               Resume
             </button>
             <button
               onClick={handleCancel}
-              className="bg-rose-950/30 hover:bg-rose-950/50 text-rose-400 border border-rose-900/40 font-semibold py-1.5 px-3.5 rounded-lg text-xs transition"
+              className="bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-semibold py-1.5 px-3.5 rounded-lg text-xs transition"
             >
               Cancel
             </button>
@@ -342,13 +342,13 @@ export default function VideoUploader({
           <>
             <button
               onClick={handleRetry}
-              className="bg-indigo-650 hover:bg-indigo-600 text-white font-semibold py-1.5 px-4 rounded-lg text-xs transition"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-1.5 px-4 rounded-lg text-xs transition"
             >
               Retry
             </button>
             <button
               onClick={handleCancel}
-              className="bg-rose-950/30 hover:bg-rose-950/50 text-rose-400 border border-rose-900/40 font-semibold py-1.5 px-3.5 rounded-lg text-xs transition"
+              className="bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-semibold py-1.5 px-3.5 rounded-lg text-xs transition"
             >
               Cancel
             </button>
@@ -358,7 +358,7 @@ export default function VideoUploader({
         {status.state === 'aborted' && (
           <button
             onClick={onRemove}
-            className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold py-1.5 px-4 rounded-lg text-xs transition"
+            className="bg-zinc-100 hover:bg-zinc-200 text-zinc-700 border border-zinc-200 font-semibold py-1.5 px-4 rounded-lg text-xs transition"
           >
             Remove Item
           </button>

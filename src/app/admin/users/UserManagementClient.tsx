@@ -230,24 +230,24 @@ export default function UserManagementClient({
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-950 font-sans text-zinc-100">
-      <div className="flex min-h-10 w-full items-center justify-center gap-2 bg-amber-500 px-4 py-2 text-center text-xs font-bold tracking-wide text-zinc-950 shadow-md md:text-sm">
+    <div className="flex min-h-screen flex-col bg-zinc-50 font-sans text-zinc-900">
+      <div className="flex min-h-10 w-full items-center justify-center gap-2 bg-amber-50 text-amber-800 border-b border-amber-200 px-4 py-2 text-center text-xs font-bold tracking-wide shadow-sm md:text-sm">
         <span>ADMINISTRATOR PORTAL</span>
 
-        <span className="hidden border-l border-zinc-900 pl-2 font-normal sm:inline">
+        <span className="hidden border-l border-amber-300 pl-2 font-normal sm:inline">
           Manage approvals, roles and account access.
         </span>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col md:flex-row">
-        <aside className="flex w-full flex-col border-b border-zinc-800 bg-zinc-900 p-5 md:min-h-[calc(100vh-40px)] md:w-60 md:flex-shrink-0 md:border-b-0 md:border-r">
+        <aside className="flex w-full flex-col border-b border-zinc-200 bg-white p-5 md:min-h-[calc(100vh-40px)] md:w-60 md:flex-shrink-0 md:border-b-0 md:border-r lg:border-zinc-200">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-600/30">
               F
             </div>
 
             <div className="min-w-0">
-              <h1 className="text-sm font-semibold leading-tight text-white">
+              <h1 className="text-sm font-semibold leading-tight text-zinc-900">
                 FB Multi-Page
               </h1>
 
@@ -260,36 +260,36 @@ export default function UserManagementClient({
           <nav className="mt-6 grid grid-cols-2 gap-2 md:flex md:flex-col md:gap-1.5">
             <Link
               href="/"
-              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 md:text-left md:text-sm"
+              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 md:text-left md:text-sm"
             >
               Overview
             </Link>
 
             <Link
               href="/settings/meta-configuration"
-              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 md:text-left md:text-sm"
+              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 md:text-left md:text-sm"
             >
               Meta Settings
             </Link>
 
             <Link
               href="/settings/storage"
-              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 md:text-left md:text-sm"
+              className="rounded-lg px-3 py-2.5 text-center text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 md:text-left md:text-sm"
             >
               Storage Settings
             </Link>
 
             <Link
               href="/admin/users"
-              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-center text-xs font-medium text-white shadow-inner md:text-left md:text-sm"
+              className="rounded-lg border border-indigo-700 bg-indigo-600 px-3 py-2.5 text-center text-xs font-semibold text-white shadow-sm md:text-left md:text-sm"
             >
               Users
             </Link>
           </nav>
 
-          <div className="mt-5 flex items-center justify-between gap-3 border-t border-zinc-800 pt-4 md:mt-auto md:block">
+          <div className="mt-5 flex items-center justify-between gap-3 border-t border-zinc-200 pt-4 md:mt-auto md:block">
             <div className="min-w-0">
-              <span className="block truncate text-xs font-semibold text-zinc-200">
+              <span className="block truncate text-xs font-semibold text-zinc-800">
                 {currentUser.name}
               </span>
 
@@ -297,7 +297,7 @@ export default function UserManagementClient({
                 {currentUser.email}
               </span>
 
-              <span className="mt-1 inline-flex rounded border border-indigo-900/40 bg-indigo-950/50 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-indigo-400">
+              <span className="mt-1 inline-flex rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-indigo-700">
                 {currentUser.role}
               </span>
             </div>
@@ -305,7 +305,7 @@ export default function UserManagementClient({
             <button
               type="button"
               onClick={handleLogout}
-              className="flex-shrink-0 rounded-lg border border-rose-900/30 bg-rose-950/20 px-4 py-2 text-xs font-semibold text-rose-400 transition hover:border-rose-800 hover:bg-rose-950/40 md:mt-4 md:w-full"
+              className="flex-shrink-0 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-800 transition hover:bg-rose-100 md:mt-4 md:w-full"
             >
               Logout
             </button>
@@ -316,18 +316,18 @@ export default function UserManagementClient({
           <div className="mx-auto w-full max-w-7xl">
             <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
               <div>
-                <h2 className="text-2xl font-bold tracking-tight text-white">
+                <h2 className="text-2xl font-bold tracking-tight text-zinc-900">
                   User Management
                 </h2>
 
-                <p className="mt-1 text-sm text-zinc-400">
+                <p className="mt-1 text-sm text-zinc-500">
                   Review registrations and control publisher access.
                 </p>
               </div>
 
               <Link
                 href="/register"
-                className="w-fit rounded-lg border border-indigo-500/30 bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow shadow-indigo-600/20 transition hover:bg-indigo-500"
+                className="w-fit rounded-lg border border-indigo-600 bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow shadow-indigo-600/20 transition hover:bg-indigo-500"
               >
                 Add New User
               </Link>
@@ -339,13 +339,13 @@ export default function UserManagementClient({
                 onClick={() => setApprovalFilter("ALL")}
                 className={`rounded-xl border p-4 text-left transition ${
                   approvalFilter === "ALL"
-                    ? "border-zinc-600 bg-zinc-800"
-                    : "border-zinc-800 bg-zinc-900/50 hover:border-zinc-700"
+                    ? "border-indigo-500 bg-indigo-50/50"
+                    : "border-zinc-200 bg-white hover:border-zinc-300"
                 }`}
               >
                 <p className="text-xs text-zinc-500">Total Users</p>
 
-                <p className="mt-1 text-2xl font-bold text-white">
+                <p className={`mt-1 text-2xl font-bold ${approvalFilter === "ALL" ? "text-indigo-600" : "text-zinc-900"}`}>
                   {counts.total}
                 </p>
               </button>
@@ -355,13 +355,13 @@ export default function UserManagementClient({
                 onClick={() => setApprovalFilter("PENDING")}
                 className={`rounded-xl border p-4 text-left transition ${
                   approvalFilter === "PENDING"
-                    ? "border-amber-700 bg-amber-950/50"
-                    : "border-amber-900/40 bg-amber-950/20 hover:border-amber-800"
+                    ? "border-amber-400 bg-amber-50"
+                    : "border-zinc-200 bg-white hover:border-amber-300"
                 }`}
               >
-                <p className="text-xs text-amber-500">Pending</p>
+                <p className="text-xs text-amber-800">Pending</p>
 
-                <p className="mt-1 text-2xl font-bold text-amber-400">
+                <p className="mt-1 text-2xl font-bold text-amber-600">
                   {counts.pending}
                 </p>
               </button>
@@ -371,13 +371,13 @@ export default function UserManagementClient({
                 onClick={() => setApprovalFilter("APPROVED")}
                 className={`rounded-xl border p-4 text-left transition ${
                   approvalFilter === "APPROVED"
-                    ? "border-emerald-700 bg-emerald-950/50"
-                    : "border-emerald-900/40 bg-emerald-950/20 hover:border-emerald-800"
+                    ? "border-emerald-400 bg-emerald-50"
+                    : "border-zinc-200 bg-white hover:border-emerald-300"
                 }`}
               >
-                <p className="text-xs text-emerald-500">Approved</p>
+                <p className="text-xs text-emerald-800">Approved</p>
 
-                <p className="mt-1 text-2xl font-bold text-emerald-400">
+                <p className="mt-1 text-2xl font-bold text-emerald-600">
                   {counts.approved}
                 </p>
               </button>
@@ -387,19 +387,19 @@ export default function UserManagementClient({
                 onClick={() => setApprovalFilter("REJECTED")}
                 className={`rounded-xl border p-4 text-left transition ${
                   approvalFilter === "REJECTED"
-                    ? "border-rose-700 bg-rose-950/50"
-                    : "border-rose-900/40 bg-rose-950/20 hover:border-rose-800"
+                    ? "border-rose-400 bg-rose-50"
+                    : "border-zinc-200 bg-white hover:border-rose-300"
                 }`}
               >
-                <p className="text-xs text-rose-500">Rejected</p>
+                <p className="text-xs text-rose-800">Rejected</p>
 
-                <p className="mt-1 text-2xl font-bold text-rose-400">
+                <p className="mt-1 text-2xl font-bold text-rose-600">
                   {counts.rejected}
                 </p>
               </button>
             </div>
 
-            <div className="mb-5 flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 sm:flex-row sm:items-center">
+            <div className="mb-5 flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-3 sm:flex-row sm:items-center">
               <input
                 type="search"
                 value={searchTerm}
@@ -407,7 +407,7 @@ export default function UserManagementClient({
                   setSearchTerm(event.target.value)
                 }
                 placeholder="Search by name or email..."
-                className="min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-indigo-600"
+                className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition placeholder:text-zinc-400 focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600"
               />
 
               <select
@@ -417,7 +417,7 @@ export default function UserManagementClient({
                     event.target.value as ApprovalFilter
                   )
                 }
-                className="rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-zinc-300 outline-none transition focus:border-indigo-600"
+                className="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition focus:border-indigo-600"
               >
                 <option value="ALL">All approvals</option>
                 <option value="PENDING">Pending</option>
@@ -427,13 +427,13 @@ export default function UserManagementClient({
             </div>
 
             {error && (
-              <div className="mb-5 rounded-lg border border-rose-900/60 bg-rose-950/40 p-3 text-xs font-semibold text-rose-400">
+              <div className="mb-5 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-800">
                 {error}
               </div>
             )}
 
             {success && (
-              <div className="mb-5 rounded-lg border border-emerald-900/60 bg-emerald-950/40 p-3 text-xs font-semibold text-emerald-400">
+              <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800">
                 {success}
               </div>
             )}
@@ -446,17 +446,17 @@ export default function UserManagementClient({
                 return (
                   <article
                     key={user.id}
-                    className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/50 shadow-lg transition hover:border-zinc-700"
+                    className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm transition hover:border-zinc-300"
                   >
-                    <div className="flex flex-col gap-4 border-b border-zinc-800/80 p-4 sm:p-5 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="flex flex-col gap-4 border-b border-zinc-200 p-4 sm:p-5 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="break-words text-base font-bold text-white">
+                          <h3 className="break-words text-base font-bold text-zinc-900">
                             {user.name}
                           </h3>
 
                           {isSelf && (
-                            <span className="rounded border border-indigo-900/40 bg-indigo-950/50 px-1.5 py-0.5 font-mono text-[10px] text-indigo-400">
+                            <span className="rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 font-mono text-[10px] text-indigo-700">
                               You
                             </span>
                           )}
@@ -494,43 +494,43 @@ export default function UserManagementClient({
                       </div>
                     </div>
 
-                    <div className="grid gap-px bg-zinc-800/60 sm:grid-cols-2 lg:grid-cols-4">
-                      <div className="bg-zinc-900/90 p-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+                    <div className="grid gap-px bg-zinc-200 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="bg-zinc-50 p-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
                           Registered
                         </p>
 
-                        <p className="mt-1.5 text-xs text-zinc-300">
+                        <p className="mt-1.5 text-xs text-zinc-800">
                           {formatDateTime(user.createdAt)}
                         </p>
                       </div>
 
-                      <div className="bg-zinc-900/90 p-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+                      <div className="bg-zinc-50 p-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
                           Last Login
                         </p>
 
-                        <p className="mt-1.5 text-xs text-zinc-300">
+                        <p className="mt-1.5 text-xs text-zinc-800">
                           {formatDateTime(user.lastLoginAt)}
                         </p>
                       </div>
 
-                      <div className="bg-zinc-900/90 p-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+                      <div className="bg-zinc-50 p-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
                           Registration IP
                         </p>
 
-                        <p className="mt-1.5 break-all font-mono text-xs text-zinc-300">
+                        <p className="mt-1.5 break-all font-mono text-xs text-zinc-800">
                           {user.registrationIp || "Not recorded"}
                         </p>
                       </div>
 
-                      <div className="bg-zinc-900/90 p-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+                      <div className="bg-zinc-50 p-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
                           Approval Activity
                         </p>
 
-                        <p className="mt-1.5 text-xs text-zinc-300">
+                        <p className="mt-1.5 text-xs text-zinc-800">
                           {user.approvedAt
                             ? `Approved ${formatDateTime(
                                 user.approvedAt
@@ -545,24 +545,24 @@ export default function UserManagementClient({
                     </div>
 
                     {user.rejectionReason && (
-                      <div className="border-t border-rose-900/30 bg-rose-950/20 px-4 py-3 sm:px-5">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-500">
+                      <div className="border-t border-rose-200 bg-rose-50 px-4 py-3 sm:px-5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-800">
                           Rejection Reason
                         </p>
 
-                        <p className="mt-1 break-words text-xs leading-5 text-rose-300">
+                        <p className="mt-1 break-words text-xs leading-5 text-rose-700">
                           {user.rejectionReason}
                         </p>
                       </div>
                     )}
 
-                    <div className="flex flex-wrap items-center justify-end gap-2 border-t border-zinc-800/80 bg-zinc-950/30 p-4 sm:px-5">
+                    <div className="flex flex-wrap items-center justify-end gap-2 border-t border-zinc-200 bg-zinc-50 p-4 sm:px-5">
                       {user.approvalStatus !== "APPROVED" && (
                         <button
                           type="button"
                           disabled={isSelf || isUpdating}
                           onClick={() => handleApprove(user)}
-                          className="rounded-lg border border-emerald-900/50 bg-emerald-950/30 px-3 py-2 text-xs font-semibold text-emerald-400 transition hover:border-emerald-700 hover:bg-emerald-950/60 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-transparent disabled:text-zinc-600"
+                          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:border-zinc-300 disabled:text-zinc-400"
                         >
                           {isUpdating ? "Updating..." : "Approve"}
                         </button>
@@ -573,7 +573,7 @@ export default function UserManagementClient({
                           type="button"
                           disabled={isSelf || isUpdating}
                           onClick={() => handleReject(user)}
-                          className="rounded-lg border border-rose-900/50 bg-rose-950/30 px-3 py-2 text-xs font-semibold text-rose-400 transition hover:border-rose-700 hover:bg-rose-950/60 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-transparent disabled:text-zinc-600"
+                          className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:border-zinc-300 disabled:text-zinc-400"
                         >
                           Reject
                         </button>
@@ -590,7 +590,7 @@ export default function UserManagementClient({
                                 : "ADMIN"
                           })
                         }
-                        className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-white disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-transparent disabled:text-zinc-600"
+                        className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:border-zinc-300 disabled:text-zinc-400"
                       >
                         {user.role === "ADMIN"
                           ? "Make User"
@@ -608,10 +608,10 @@ export default function UserManagementClient({
                                 : "ACTIVE"
                           })
                         }
-                        className={`rounded-lg border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-transparent disabled:text-zinc-600 ${
+                        className={`rounded-lg border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:border-zinc-300 disabled:text-zinc-400 ${
                           user.status === "ACTIVE"
-                            ? "border-rose-900/40 bg-rose-950/20 text-rose-400 hover:border-rose-700"
-                            : "border-emerald-900/40 bg-emerald-950/20 text-emerald-400 hover:border-emerald-700"
+                            ? "border-rose-200 bg-rose-50 text-rose-800 hover:border-rose-300"
+                            : "border-emerald-200 bg-emerald-50 text-emerald-800 hover:border-emerald-300"
                         }`}
                       >
                         {user.status === "ACTIVE"
@@ -624,12 +624,12 @@ export default function UserManagementClient({
               })}
 
               {filteredUsers.length === 0 && (
-                <div className="rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/30 px-6 py-14 text-center">
-                  <p className="text-sm font-semibold text-zinc-400">
+                <div className="rounded-2xl border border-dashed border-zinc-200 bg-white px-6 py-14 text-center">
+                  <p className="text-sm font-semibold text-zinc-500">
                     No matching users found
                   </p>
 
-                  <p className="mt-1 text-xs text-zinc-600">
+                  <p className="mt-1 text-xs text-zinc-500">
                     Change the search term or approval filter.
                   </p>
                 </div>

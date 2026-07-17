@@ -13,7 +13,7 @@ export default async function Page() {
   }
 
   return (
-    <Suspense fallback={<div className="min-h-screen bg-zinc-950 text-zinc-500 flex items-center justify-center font-mono text-xs">Loading storage settings...</div>}>
+    <Suspense fallback={<div className="min-h-screen bg-zinc-50 text-zinc-500 flex items-center justify-center font-mono text-xs">Loading storage settings...</div>}>
       <StorageSettingsClient />
     </Suspense>
   );

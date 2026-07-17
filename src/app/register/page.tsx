@@ -99,19 +99,19 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-zinc-950 px-4 font-sans text-white">
-      <div className="absolute left-1/4 top-1/4 h-96 w-96 animate-pulse rounded-full bg-indigo-900/10 blur-3xl" />
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-zinc-50 px-4 font-sans text-zinc-900">
+      <div className="absolute left-1/4 top-1/4 h-96 w-96 animate-pulse rounded-full bg-indigo-900/5 blur-3xl" />
 
-      <div className="absolute bottom-1/4 right-1/4 h-96 w-96 animate-pulse rounded-full bg-purple-900/10 blur-3xl" />
+      <div className="absolute bottom-1/4 right-1/4 h-96 w-96 animate-pulse rounded-full bg-purple-900/5 blur-3xl" />
 
-      <div className="relative z-10 flex w-full max-w-md flex-col rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-8 shadow-2xl backdrop-blur-md">
+      <div className="relative z-10 flex w-full max-w-md flex-col rounded-2xl border border-zinc-200 bg-white p-8 shadow-xl">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 font-bold text-white shadow-lg shadow-indigo-600/30">
             F
           </div>
 
           <div>
-            <h1 className="text-sm font-semibold leading-tight text-white">
+            <h1 className="text-sm font-semibold leading-tight text-zinc-900">
               FB Multi-Page
             </h1>
 
@@ -121,21 +121,21 @@ export default function RegisterPage() {
           </div>
         </div>
 
-        <h2 className="mb-2 text-xl font-bold text-white">
+        <h2 className="mb-2 text-xl font-bold text-zinc-900">
           Create Publisher Account
         </h2>
 
-        <p className="mb-3 text-xs text-zinc-400">
+        <p className="mb-3 text-xs text-zinc-500">
           Register your personal workspace for Facebook publishing.
         </p>
 
-        <div className="mb-6 rounded-lg border border-amber-900/40 bg-amber-950/20 p-3 text-xs leading-5 text-amber-300">
+        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
           New accounts require administrator approval before they can
           log in and use the publisher.
         </div>
 
         {error && (
-          <div className="mb-5 flex items-center gap-2 rounded-lg border border-rose-900/60 bg-rose-950/40 p-3 text-xs font-semibold text-rose-400">
+          <div className="mb-5 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-800">
             <svg
               className="h-4 w-4 flex-shrink-0"
               fill="none"
@@ -155,10 +155,10 @@ export default function RegisterPage() {
         )}
 
         {success && (
-          <div className="mb-5 rounded-lg border border-emerald-900/60 bg-emerald-950/40 p-4 text-xs font-semibold leading-5 text-emerald-400">
+          <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-xs font-semibold leading-5 text-emerald-800">
             <p>{success}</p>
 
-            <p className="mt-2 font-normal text-emerald-300">
+            <p className="mt-2 font-normal text-emerald-600">
               Redirecting to the login page...
             </p>
           </div>
@@ -169,7 +169,7 @@ export default function RegisterPage() {
           className="space-y-4"
         >
           <div>
-            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-400">
+            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-500">
               Full Name
             </label>
 
@@ -181,13 +181,13 @@ export default function RegisterPage() {
               onChange={(event) =>
                 setName(event.target.value)
               }
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-white transition focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 transition placeholder-zinc-400 focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400"
               placeholder="e.g. John Doe"
             />
           </div>
 
           <div>
-            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-400">
+            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-500">
               Email Address
             </label>
 
@@ -199,13 +199,13 @@ export default function RegisterPage() {
               onChange={(event) =>
                 setEmail(event.target.value)
               }
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-white transition focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 transition placeholder-zinc-400 focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400"
               placeholder="e.g. user@domain.com"
             />
           </div>
 
           <div>
-            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-400">
+            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-500">
               Password
             </label>
 
@@ -217,13 +217,13 @@ export default function RegisterPage() {
               onChange={(event) =>
                 setPassword(event.target.value)
               }
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-white transition focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 transition placeholder-zinc-400 focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400"
               placeholder="Minimum 12 characters"
             />
           </div>
 
           <div>
-            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-400">
+            <label className="mb-1.5 block font-mono text-xs uppercase text-zinc-500">
               Confirm Password
             </label>
 
@@ -235,7 +235,7 @@ export default function RegisterPage() {
               onChange={(event) =>
                 setConfirmPassword(event.target.value)
               }
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-white transition focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 transition placeholder-zinc-400 focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400"
               placeholder="Re-enter password"
             />
           </div>
@@ -243,7 +243,7 @@ export default function RegisterPage() {
           <button
             type="submit"
             disabled={isRegistering || Boolean(success)}
-            className="w-full rounded-lg bg-indigo-600 py-3 text-sm font-bold text-white shadow-md shadow-indigo-600/20 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+            className="w-full rounded-lg bg-indigo-600 py-3 text-sm font-bold text-white shadow-md shadow-indigo-600/20 transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-400"
           >
             {isRegistering
               ? "Submitting Registration..."
@@ -253,12 +253,12 @@ export default function RegisterPage() {
           </button>
         </form>
 
-        <div className="mt-6 border-t border-zinc-800 pt-4 text-center text-xs text-zinc-500">
+        <div className="mt-6 border-t border-zinc-200 pt-4 text-center text-xs text-zinc-500">
           Already have an approved account?{" "}
 
           <Link
             href="/login"
-            className="font-semibold text-indigo-400 transition hover:text-indigo-300"
+            className="font-semibold text-indigo-600 transition hover:text-indigo-500"
           >
             Log In Here
           </Link>
