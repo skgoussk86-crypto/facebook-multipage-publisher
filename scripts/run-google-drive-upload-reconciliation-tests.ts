@@ -929,7 +929,7 @@ async function runTests() {
 
     assert(threw, "Uploader should throw when reconciliation reports UPLOADING");
     assert(uploader.getStatus().state === "failed", `Uploader state should be failed, got ${uploader.getStatus().state}`);
-    assert(reconcileCalls === 1, `Expected exactly 1 reconcile call, got ${reconcileCalls}`);
+    assert(reconcileCalls === 2, `Expected exactly 2 reconcile calls, got ${reconcileCalls}`);
     console.log("Test 24 Passed: server UPLOADING does not cause infinite loop [✓]");
     passedCount++;
   } catch (err) {

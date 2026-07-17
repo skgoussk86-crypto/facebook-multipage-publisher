@@ -375,6 +375,7 @@ export class GoogleDriveResumableUploader {
   private state: BrowserUploadState = 'idle';
   private uploadedBytes = 0;
   private unchangedOffsetCount = 0;
+  private metadata?: VideoMetadata;
 
   private activeController: AbortController | null = null;
   private activeTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -382,7 +383,8 @@ export class GoogleDriveResumableUploader {
   private isPaused = false;
   private isAborted = false;
   private isReconciling = false;
-  private reconciliationAttempted = false;
+  private immediateReconOffset: number | null = null;
+  private terminalReconciliationAttempted = false;
 
   private readonly CHUNK_SIZE = 10 * 1024 * 1024; // 10 MiB
 
@@ -409,10 +411,12 @@ export class GoogleDriveResumableUploader {
       totalBytes: this.file.size,
       assetId: this.assetId,
       provider: 'GOOGLE_DRIVE',
+      metadata: this.metadata,
     };
   }
 
   private emit(updates: Partial<BrowserUploaderStatus>) {
+    if (updates.metadata) this.metadata = updates.metadata;
     const currentStatus = this.getStatus();
     const newStatus = { ...currentStatus, ...updates };
 
@@ -435,13 +439,32 @@ export class GoogleDriveResumableUploader {
     if (this.state !== 'idle' && this.state !== 'selected' && this.state !== 'paused') return;
     this.isPaused = false;
     this.isAborted = false;
-    this.reconciliationAttempted = false;
+    this.immediateReconOffset = null;
+    this.terminalReconciliationAttempted = false;
 
     try {
       this.emit({ state: 'initiating' });
 
-      // 1. Fetch server state first if this is a retry or resume/recovery attempt
+      // Write Google Drive recovery record (version 2)
+      try {
+        const record: RecoveryRecord = {
+          version: 2,
+          provider: 'GOOGLE_DRIVE',
+          assetId: this.assetId,
+          sessionUri: this.sessionUri,
+          filename: this.file.name,
+          mimeType: this.file.type || 'video/mp4',
+          totalBytes: this.file.size.toString(),
+          lastModified: this.file.lastModified,
+        };
+        localStorage.setItem(`upload_recovery_${this.recoveryKey}`, JSON.stringify(record));
+      } catch {
+        // Ignore quota exceptions
+      }
+
+      let startOffset = 0;
       if (options?.isRetryOrResume) {
+        // 1. Fetch server state first if this is a retry or resume/recovery attempt
         try {
           this.activeController = new AbortController();
           const serverCheckResponse = await fetch(`/api/uploads/${this.assetId}`, {
@@ -452,8 +475,7 @@ export class GoogleDriveResumableUploader {
             const checkData: unknown = await serverCheckResponse.json();
             const parsedStatus = parseValidationStatus(checkData);
             if (parsedStatus.status === 'VALIDATING') {
-              this.emit({ state: 'validating' });
-              this.startValidationPolling();
+              await this.triggerValidateAndPoll();
               return;
             } else if (parsedStatus.status === 'VALIDATED') {
               const metadata: VideoMetadata = {
@@ -477,35 +499,21 @@ export class GoogleDriveResumableUploader {
           }
           // Ignore server check errors and proceed with normal resume/retry flow
         }
+
+        startOffset = await this.querySessionStatusWithRetry();
+        this.uploadedBytes = startOffset;
       }
 
-      // Write Google Drive recovery record (version 2)
-      try {
-        const record: RecoveryRecord = {
-          version: 2,
-          provider: 'GOOGLE_DRIVE',
-          assetId: this.assetId,
-          sessionUri: this.sessionUri,
-          filename: this.file.name,
-          mimeType: this.file.type || 'video/mp4',
-          totalBytes: this.file.size.toString(),
-          lastModified: this.file.lastModified,
-        };
-        localStorage.setItem(`upload_recovery_${this.recoveryKey}`, JSON.stringify(record));
-      } catch {
-        // Ignore quota exceptions
+      if (startOffset < this.file.size) {
+        this.emit({ state: 'uploading' });
+        await this.uploadLoop(startOffset);
       }
-
-      const startOffset = await this.querySessionStatusWithRetry();
-      this.uploadedBytes = startOffset;
-      this.emit({ state: 'uploading' });
-
-      await this.uploadLoop(startOffset);
     } catch (err: unknown) {
+      if (this.isPaused || this.isAborted) return;
       if (err instanceof DOMException && err.name === 'AbortError') return;
 
-      if (!this.isPaused && !this.isAborted && !this.reconciliationAttempted && this.isNetworkOrStatus0Error(err)) {
-        this.reconciliationAttempted = true;
+      if (!this.isPaused && !this.isAborted && !this.terminalReconciliationAttempted && this.isNetworkOrStatus0Error(err)) {
+        this.terminalReconciliationAttempted = true;
         try {
           const reconciled = await this.attemptServerReconciliation();
           if (reconciled) {
@@ -538,6 +546,9 @@ export class GoogleDriveResumableUploader {
         msg.includes('HTTP 0') ||
         msg.includes('code 0')
       );
+    }
+    if (err && typeof err === 'object' && 'status' in err && (err as Record<string, unknown>).status === 0) {
+      return true;
     }
     return false;
   }
@@ -572,8 +583,7 @@ export class GoogleDriveResumableUploader {
 
       const serverStatus = data.status;
       if (serverStatus === 'VALIDATING') {
-        this.emit({ state: 'validating' });
-        this.startValidationPolling();
+        this.triggerValidateAndPoll();
         return true;
       } else if (serverStatus === 'VALIDATED') {
         const checkResponse = await fetch(`/api/uploads/${this.assetId}`, {
@@ -600,6 +610,12 @@ export class GoogleDriveResumableUploader {
           return true;
         }
         throw new Error('GOOGLE_DRIVE_UPLOAD_FAILED');
+      } else if (serverStatus === 'UPLOADING') {
+        const confirmedBytes = typeof data.confirmedBytes === 'number' ? data.confirmedBytes : 0;
+        if (confirmedBytes > this.uploadedBytes) {
+          this.uploadedBytes = confirmedBytes;
+        }
+        return false;
       }
     } finally {
       this.isReconciling = false;
@@ -643,9 +659,10 @@ export class GoogleDriveResumableUploader {
     throw new Error(`Session query status failed with code ${response.status}`);
   }
 
-  private async querySessionStatusWithRetry(): Promise<number> {
+  private async querySessionStatusWithRetry(skipRetry = false): Promise<number> {
     let attempt = 0;
-    while (attempt <= this.maxRetries) {
+    const effectiveMaxRetries = skipRetry ? 0 : this.maxRetries;
+    while (attempt <= effectiveMaxRetries) {
       if (this.isPaused || this.isAborted) {
         throw new DOMException('Aborted', 'AbortError');
       }
@@ -670,13 +687,31 @@ export class GoogleDriveResumableUploader {
 
         return await this.querySessionStatus();
       } catch (err: unknown) {
+        if (this.isPaused || this.isAborted) {
+          throw new DOMException('Aborted', 'AbortError');
+        }
+
+        if (!this.isPaused && !this.isAborted && (this.immediateReconOffset === null || this.immediateReconOffset !== this.uploadedBytes) && this.isNetworkOrStatus0Error(err)) {
+          this.immediateReconOffset = this.uploadedBytes;
+          try {
+            const reconciled = await this.attemptServerReconciliation();
+            if (reconciled) {
+              return this.file.size;
+            }
+          } catch (reconErr: unknown) {
+            if (reconErr instanceof DOMException && reconErr.name === 'AbortError') {
+              throw reconErr;
+            }
+          }
+        }
+
         if (err instanceof DOMException && err.name === 'AbortError') throw err;
         if (err instanceof Error && (err.message === 'UPLOAD_SESSION_EXPIRED' || err.message === 'UPLOAD_SESSION_RESTART_REQUIRED')) {
           throw err;
         }
 
         attempt++;
-        if (attempt > this.maxRetries) {
+        if (attempt > effectiveMaxRetries) {
           throw new Error('GOOGLE_DRIVE_UPLOAD_RETRY_EXHAUSTED');
         }
       }
@@ -722,7 +757,7 @@ export class GoogleDriveResumableUploader {
               }, backoffTime);
             });
 
-            const freshOffset = await this.querySessionStatusWithRetry();
+            const freshOffset = await this.querySessionStatusWithRetry(true);
             if (freshOffset >= this.file.size) {
               return;
             }
@@ -744,7 +779,24 @@ export class GoogleDriveResumableUploader {
             success = true;
           }
         } catch (err: unknown) {
+          if (this.isPaused || this.isAborted) return;
           if (err instanceof DOMException && err.name === 'AbortError') return;
+
+          if (!this.isPaused && !this.isAborted && (this.immediateReconOffset === null || this.immediateReconOffset !== offset) && this.isNetworkOrStatus0Error(err)) {
+            this.immediateReconOffset = offset;
+            try {
+              const reconciled = await this.attemptServerReconciliation();
+              if (reconciled) {
+                return;
+              }
+              offset = this.uploadedBytes;
+            } catch (reconErr: unknown) {
+              if (reconErr instanceof DOMException && reconErr.name === 'AbortError') {
+                return;
+              }
+            }
+          }
+
           attempt++;
           if (attempt > this.maxRetries) {
             throw err;
@@ -825,6 +877,49 @@ export class GoogleDriveResumableUploader {
     throw new Error(`Upload request failed with HTTP ${response.status}`);
   }
 
+  private async triggerValidateAndPoll() {
+    this.emit({ state: 'validating' });
+
+    try {
+      this.activeController = new AbortController();
+      const response = await fetch(`/api/uploads/${this.assetId}/validate`, {
+        method: 'POST',
+        signal: this.activeController.signal,
+      });
+
+      if (this.isPaused || this.isAborted) return;
+
+      if (response.ok) {
+        const data: unknown = await response.json();
+        const parsed = parseValidationStatus(data);
+        if (parsed.status === 'VALIDATED') {
+          this.clearStorage();
+          const metadata: VideoMetadata = {
+            durationMs: parsed.durationMs,
+            width: parsed.width,
+            height: parsed.height,
+            frameRate: parsed.frameRate,
+            videoCodec: parsed.videoCodec,
+            audioCodec: parsed.audioCodec,
+            containerFormat: parsed.containerFormat,
+            detectedMimeType: parsed.detectedMimeType,
+          };
+          this.emit({ state: 'validated', metadata });
+          return;
+        } else if (parsed.status === 'FAILED') {
+          const errorMsg = parsed.failureMessage || 'GOOGLE_DRIVE_UPLOAD_FAILED';
+          this.emit({ state: 'failed', error: errorMsg });
+          return;
+        }
+      }
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      // temporary failure, fallback to polling
+    }
+
+    this.startValidationPolling();
+  }
+
   private async triggerCompleteAPI(driveFileId: string) {
     try {
       this.emit({ state: 'completing' });
@@ -843,8 +938,7 @@ export class GoogleDriveResumableUploader {
         throw new Error('GOOGLE_DRIVE_UPLOAD_FAILED');
       }
 
-      this.emit({ state: 'validating' });
-      this.startValidationPolling();
+      await this.triggerValidateAndPoll();
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       const cleanErr = redactError(err);
@@ -915,7 +1009,7 @@ export class GoogleDriveResumableUploader {
   }
 
   public pause() {
-    if (this.state !== 'uploading' && this.state !== 'retrying' && this.state !== 'initiating') return;
+    if (this.state !== 'uploading' && this.state !== 'retrying' && this.state !== 'initiating' && this.state !== 'validating' && this.state !== 'completing') return;
     this.isPaused = true;
 
     if (this.activeController) this.activeController.abort();

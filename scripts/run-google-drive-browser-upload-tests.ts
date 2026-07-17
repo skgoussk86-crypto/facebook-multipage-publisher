@@ -328,9 +328,8 @@ async function runTests() {
     });
 
     await uploader.start();
-    if (putCount !== 2) {
-      // 1 status query + 1 chunk PUT
-      throw new Error(`Test 3 failed: expected 2 PUT requests, got ${putCount}`);
+    if (putCount !== 1) {
+      throw new Error(`Test 3 failed: expected 1 PUT request, got ${putCount}`);
     }
     console.log('✓ Test 3: uploads a single-chunk file ending with HTTP 201 passed');
     testCount++;
@@ -387,9 +386,8 @@ async function runTests() {
     });
 
     await uploader.start();
-    if (putCount !== 4) {
-      // 1 status query + 3 chunk PUTs
-      throw new Error(`Test 4 failed: expected 4 PUT requests, got ${putCount}`);
+    if (putCount !== 3) {
+      throw new Error(`Test 4 failed: expected 3 PUT requests, got ${putCount}`);
     }
     console.log('✓ Test 4: uploads multiple chunks using intermediate HTTP 308 passed');
     testCount++;
@@ -737,12 +735,14 @@ async function runTests() {
   {
     reset();
     const transport = new MockTransport();
+    let completed = false;
     fetchHandler = async (url) => {
       if (url === '/api/uploads/gd-asset-id/complete') {
+        completed = true;
         return createMockResponse(200, { status: 'VALIDATING' });
       }
       if (url === '/api/uploads/gd-asset-id') {
-        return createMockResponse(200, { status: 'VALIDATED' });
+        return createMockResponse(200, { status: completed ? 'VALIDATED' : 'UPLOADING' });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     };
@@ -791,7 +791,7 @@ async function runTests() {
       transport,
     });
 
-    await uploader.start();
+    await uploader.start({ isRetryOrResume: true });
     
     // Initial status query (fails 502) -> status query retry (succeeds 308) -> chunk upload (fails network) -> status query (succeeds 308) -> chunk upload (succeeds 200)
     // Total transport queries should be 5
@@ -846,8 +846,8 @@ async function runTests() {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Verify it queried Google Drive status again upon resume
-    if (queryStatusCount !== 2) {
-      throw new Error(`Test 16 failed: expected 2 query status calls, got ${queryStatusCount}`);
+    if (queryStatusCount !== 1) {
+      throw new Error(`Test 16 failed: expected 1 query status call, got ${queryStatusCount}`);
     }
 
     console.log('✓ Test 16: pause aborts the in-flight request and resume queries status passed');

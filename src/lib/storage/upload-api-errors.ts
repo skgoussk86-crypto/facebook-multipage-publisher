@@ -12,7 +12,47 @@ import { FinalizationOperationConflictError, FinalizationInProgressError } from 
 import { MultipartUploadNotFoundError } from './storage-adapter';
 
 export function handleUploadApiError(error: unknown) {
-  console.error('Upload API Error:', error);
+  let classification = 'INTERNAL_ERROR';
+
+  if (error instanceof NotFoundError || error instanceof ForbiddenOwnershipError) {
+    classification = 'UPLOAD_NOT_FOUND';
+  } else if (error instanceof InvalidStateTransitionError) {
+    classification = 'INVALID_UPLOAD_STATE';
+  } else if (error instanceof ExpiredSessionError) {
+    classification = 'UPLOAD_SESSION_EXPIRED';
+  } else if (error instanceof IdempotencyConflictError) {
+    classification = 'IDEMPOTENCY_CONFLICT';
+  } else if (error instanceof FinalizationOperationConflictError) {
+    classification = 'FINALIZATION_OPERATION_CONFLICT';
+  } else if (error instanceof FinalizationInProgressError) {
+    classification = 'FINALIZATION_IN_PROGRESS';
+  } else if (error instanceof MultipartUploadNotFoundError) {
+    classification = 'MULTIPART_NOT_FOUND';
+  } else if (error instanceof ConfigurationError) {
+    classification = 'STORAGE_UNAVAILABLE';
+  } else if (error instanceof Error) {
+    if (error.message === 'INVALID_PROVIDER') {
+      classification = 'INVALID_PROVIDER';
+    } else if (error.message === 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE') {
+      classification = 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE';
+    } else if (error.message === 'UPLOAD_SESSION_RESTART_REQUIRED') {
+      classification = 'UPLOAD_SESSION_RESTART_REQUIRED';
+    } else if (error.message === 'GOOGLE_DRIVE_UPLOAD_FAILED') {
+      classification = 'GOOGLE_DRIVE_UPLOAD_FAILED';
+    } else if (error.message === 'INVALID_IDEMPOTENCY_KEY') {
+      classification = 'INVALID_IDEMPOTENCY_KEY';
+    } else if (error.message === 'INVALID_FILENAME') {
+      classification = 'INVALID_REQUEST';
+    } else if (error.message === 'FILE_TOO_LARGE') {
+      classification = 'FILE_TOO_LARGE';
+    } else if (error.message === 'UNSUPPORTED_MEDIA_TYPE' || error.message === 'MIME_MISMATCH') {
+      classification = 'UNSUPPORTED_MEDIA_TYPE';
+    } else if (error.message === 'INVALID_PART_COUNT') {
+      classification = 'INVALID_REQUEST';
+    }
+  }
+
+  console.error('[Upload API Error]', { classification });
 
   if (error instanceof Error) {
     if (error.message === 'INVALID_PROVIDER') {

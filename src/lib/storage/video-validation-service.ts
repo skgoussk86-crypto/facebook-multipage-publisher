@@ -8,6 +8,7 @@ import { getStorageConfig } from './index';
 import { MediaProbe, MediaMetadata, MediaValidationError } from './media-probe';
 import { FfprobeMediaProbe } from './ffprobe-media-probe';
 import { prepareValidationSource } from './validation-source-resolver';
+import { NotFoundError, InvalidStateTransitionError } from './upload-session-encryption';
 
 export interface ValidationClaim {
   assetId: string;
@@ -23,6 +24,14 @@ export interface ValidationResult {
   status: UploadStatus;
   failureCode?: string;
   failureMessage?: string;
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
+  frameRate?: number | null;
+  videoCodec?: string | null;
+  audioCodec?: string | null;
+  containerFormat?: string | null;
+  detectedMimeType?: string | null;
 }
 
 // 5 minutes lease duration for validation worker lock
@@ -106,7 +115,10 @@ export class VideoValidationService {
   /**
    * Run validation orchestrator on a claimed asset
    */
-  static async validateAsset(claim: ValidationClaim): Promise<ValidationResult> {
+  static async validateAsset(
+    claim: ValidationClaim,
+    deps?: { prepareValidationSource?: typeof prepareValidationSource }
+  ): Promise<ValidationResult> {
     const asset = await prisma.uploadAsset.findUnique({
       where: { id: claim.assetId }
     });
@@ -120,7 +132,8 @@ export class VideoValidationService {
 
     try {
       // 1. Fetch validation source
-      const source = await prepareValidationSource(asset);
+      const prepareFn = deps?.prepareValidationSource || prepareValidationSource;
+      const source = await prepareFn(asset);
       if (!source) {
         return await this.transitionToFailure(claim, 'OBJECT_MISSING', 'The uploaded file does not exist in persistent storage.');
       }
@@ -265,7 +278,7 @@ export class VideoValidationService {
       }
 
       // Ambiguous infrastructure/probing error: handle retry recovery
-      return await this.handleTransientFailure(claim, errorObj);
+      return await this.handleTransientFailure(claim);
     } finally {
       // Always cleanup temp file on exit
       await this.safeUnlink(tempFilePath);
@@ -281,6 +294,113 @@ export class VideoValidationService {
       return null;
     }
     return await this.validateAsset(claim);
+  }
+
+  /**
+   * Run validation on a specific asset by ID, verifying ownership and idempotency
+   */
+  static async validateAssetById(
+    userId: string,
+    assetId: string,
+    deps?: {
+      validateAsset?: typeof VideoValidationService.validateAsset;
+      prepareValidationSource?: typeof prepareValidationSource;
+    }
+  ): Promise<ValidationResult> {
+    const now = new Date();
+    const asset = await prisma.uploadAsset.findUnique({
+      where: { id: assetId }
+    });
+
+    if (!asset || asset.userId !== userId) {
+      throw new NotFoundError('Upload asset not found.');
+    }
+
+    if (asset.status === UploadStatus.VALIDATED) {
+      return {
+        assetId,
+        success: true,
+        status: UploadStatus.VALIDATED,
+        durationMs: asset.durationMs !== null ? Number(asset.durationMs) : null,
+        width: asset.width,
+        height: asset.height,
+        frameRate: asset.frameRate !== null ? Number(asset.frameRate) : null,
+        videoCodec: asset.videoCodec,
+        audioCodec: asset.audioCodec,
+        containerFormat: asset.containerFormat,
+        detectedMimeType: asset.detectedMimeType,
+      };
+    }
+
+    if (asset.status !== UploadStatus.VALIDATING) {
+      throw new InvalidStateTransitionError('Upload is not in VALIDATING state.');
+    }
+
+    // Check if it already exceeded max attempts
+    if (asset.validationAttemptCount >= asset.validationMaxAttempts) {
+      await this.handleMaxAttemptsExceeded(asset.userId, asset.id);
+      return {
+        assetId,
+        success: false,
+        status: UploadStatus.FAILED,
+        failureCode: 'VALIDATION_MAX_ATTEMPTS_EXCEEDED',
+        failureMessage: 'Validation failed: Maximum retry attempts exceeded.'
+      };
+    }
+
+    if (asset.validationLockToken !== null && asset.validationLockExpiresAt !== null && asset.validationLockExpiresAt >= now) {
+      return {
+        assetId,
+        success: false,
+        status: UploadStatus.VALIDATING,
+      };
+    }
+
+    // Try to atomically claim the validation lock for this specific asset
+    const lockToken = randomUUID();
+    const lockExpiresAt = new Date(Date.now() + VALIDATION_LEASE_DURATION_MS);
+
+    const updateCount = await prisma.uploadAsset.updateMany({
+      where: {
+        id: assetId,
+        userId,
+        status: UploadStatus.VALIDATING,
+        validationAttemptCount: { lt: asset.validationMaxAttempts },
+        OR: [
+          { validationLockToken: null },
+          { validationLockExpiresAt: { lt: now } }
+        ]
+      },
+      data: {
+        validationLockToken: lockToken,
+        validationLockedAt: now,
+        validationLockExpiresAt: lockExpiresAt,
+        validationAttemptCount: { increment: 1 },
+        validationStartedAt: now
+      }
+    });
+
+    if (updateCount.count === 0) {
+      // Lock is currently held by another worker/process. Prevent concurrent duplicate validation.
+      return {
+        assetId,
+        success: false,
+        status: UploadStatus.VALIDATING,
+      };
+    }
+
+    const claim: ValidationClaim = {
+      assetId,
+      userId,
+      lockToken,
+      lockedAt: now,
+      lockExpiresAt
+    };
+
+    if (deps?.validateAsset) {
+      return await deps.validateAsset(claim, { prepareValidationSource: deps?.prepareValidationSource });
+    }
+    return await VideoValidationService.validateAsset(claim, { prepareValidationSource: deps?.prepareValidationSource });
   }
 
   private static async transitionToSuccess(claim: ValidationClaim, meta: MediaMetadata): Promise<ValidationResult> {
@@ -335,11 +455,25 @@ export class VideoValidationService {
     return {
       assetId: claim.assetId,
       success: true,
-      status: UploadStatus.VALIDATED
+      status: UploadStatus.VALIDATED,
+      durationMs: meta.durationMs,
+      width: meta.width,
+      height: meta.height,
+      frameRate: meta.frameRate,
+      videoCodec: meta.videoCodec,
+      audioCodec: meta.audioCodec,
+      containerFormat: meta.containerFormat,
+      detectedMimeType: meta.detectedMimeType,
     };
   }
 
   private static async transitionToFailure(claim: ValidationClaim, failureCode: string, failureMessage: string): Promise<ValidationResult> {
+    console.error('[Validation Error]', {
+      classification: 'VALIDATION_FAILED',
+      assetId: claim.assetId,
+      userId: claim.userId,
+      failureCode,
+    });
     const now = new Date();
     const retentionUntil = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24-hour policy
 
@@ -431,7 +565,7 @@ export class VideoValidationService {
     });
   }
 
-  private static async handleTransientFailure(claim: ValidationClaim, error: Error): Promise<ValidationResult> {
+  private static async handleTransientFailure(claim: ValidationClaim): Promise<ValidationResult> {
     const now = new Date();
     const asset = await prisma.uploadAsset.findUnique({
       where: { id: claim.assetId }
@@ -442,7 +576,11 @@ export class VideoValidationService {
     }
 
     const safeErrorMessage = 'Transient infrastructure failure occurred during validation probing or storage access.';
-    console.error('Transient validation failure details:', error);
+    console.error('[Validation Error]', {
+      classification: 'VALIDATION_TRANSIENT_FAILURE',
+      assetId: claim.assetId,
+      userId: claim.userId,
+    });
 
     if (asset.validationAttemptCount >= asset.validationMaxAttempts) {
       // Terminal Failure due to max retries
