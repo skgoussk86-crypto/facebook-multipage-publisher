@@ -27,27 +27,45 @@ export function parseIntegerEnv(
 
 export async function executeWorkerCycle(
   workerId: string,
-  startedAt: Date = new Date()
+  startedAt: Date = new Date(),
+  options?: {
+    updateFinalHeartbeat?: boolean;
+    runQueueWorker?: (workerId: string) => Promise<string[]>;
+    validateOneAsset?: () => Promise<{ assetId: string; success: boolean; status: string } | null>;
+    updateWorkerHeartbeat?: (params: {
+      workerId: string;
+      startedAt: Date;
+      currentStatus: string;
+      success?: boolean;
+      jobsProcessed?: number;
+      nextPollEstimate?: Date | null;
+      lastError?: string | null;
+    }) => Promise<void>;
+  }
 ): Promise<{ logs: string[]; processedCount: number }> {
   const logs: string[] = [];
   let processedCount = 0;
 
+  const fnRunQueueWorker = options?.runQueueWorker ?? runQueueWorker;
+  const fnValidateOneAsset = options?.validateOneAsset ?? VideoValidationService.validateOneAsset;
+  const fnUpdateWorkerHeartbeat = options?.updateWorkerHeartbeat ?? updateWorkerHeartbeat;
+
   try {
     // 1. Update heartbeat to RUNNING
-    await updateWorkerHeartbeat({
+    await fnUpdateWorkerHeartbeat({
       workerId,
       startedAt,
       currentStatus: 'RUNNING',
     });
 
     // 2. Process Video Jobs queue
-    const workerLogs = await runQueueWorker(workerId);
+    const workerLogs = await fnRunQueueWorker(workerId);
     logs.push(...workerLogs);
     processedCount += countProcessedJobs(workerLogs);
 
     // 3. Process video validations
     try {
-      const validationResult = await VideoValidationService.validateOneAsset();
+      const validationResult = await fnValidateOneAsset();
       if (validationResult) {
         logs.push(`[Asset Validation] Processed asset ${validationResult.assetId}. Success: ${validationResult.success}, Status: ${validationResult.status}`);
         processedCount++;
@@ -59,20 +77,32 @@ export async function executeWorkerCycle(
       logs.push(`[Asset Validation] [ERROR] Validation task failed: ${msg}`);
     }
 
-    // Heartbeat is updated to IDLE (Success) outside in the daemon loop if successful,
-    // but we can register success indicator here as well
+    if (options?.updateFinalHeartbeat !== false) {
+      // Update heartbeat to IDLE (Success)
+      await fnUpdateWorkerHeartbeat({
+        workerId,
+        startedAt,
+        currentStatus: 'IDLE',
+        success: true,
+        jobsProcessed: processedCount,
+        nextPollEstimate: null,
+      });
+    }
   } catch (error: unknown) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     logs.push(`[Worker Error] Cycle failed: ${errorMsg}`);
 
-    // Update heartbeat to FAILED
-    await updateWorkerHeartbeat({
-      workerId,
-      startedAt,
-      currentStatus: 'FAILED',
-      success: false,
-      lastError: errorMsg,
-    });
+    if (options?.updateFinalHeartbeat !== false) {
+      // Update heartbeat to FAILED
+      await fnUpdateWorkerHeartbeat({
+        workerId,
+        startedAt,
+        currentStatus: 'FAILED',
+        success: false,
+        lastError: errorMsg,
+        nextPollEstimate: null,
+      });
+    }
     throw error;
   }
 
@@ -174,7 +204,7 @@ export function startWorkerDaemon(params: {
       let hasError = false;
 
       // Update heartbeat to RUNNING is handled by executeWorkerCycle
-      activeCyclePromise = executeWorkerCycle(params.workerId, cycleStart)
+      activeCyclePromise = executeWorkerCycle(params.workerId, cycleStart, { updateFinalHeartbeat: false })
         .then((res) => {
           if (res.processedCount > 0) {
             console.log(`[Worker] Tick completed. Processed ${res.processedCount} items.`);
@@ -204,6 +234,7 @@ export function startWorkerDaemon(params: {
         currentStatus: statusAfterCycle,
         success: !hasError,
         nextPollEstimate,
+        lastError: hasError ? undefined : null,
       });
 
       // Sleep safely until next cycle or interrupted by shutdown
@@ -247,4 +278,32 @@ export function startWorkerDaemon(params: {
   }
 
   return controller;
+}
+
+export async function runWorkerOnce(
+  workerId: string,
+  options?: {
+    runQueueWorker?: (workerId: string) => Promise<string[]>;
+    validateOneAsset?: () => Promise<{ assetId: string; success: boolean; status: string } | null>;
+  }
+): Promise<void> {
+  const { prisma } = await import('./prisma-client');
+
+  console.log(`[Worker] Running one-cycle diagnostic for worker ${workerId}...`);
+  const start = new Date();
+  try {
+    const { logs, processedCount } = await executeWorkerCycle(workerId, start, {
+      updateFinalHeartbeat: true,
+      runQueueWorker: options?.runQueueWorker,
+      validateOneAsset: options?.validateOneAsset,
+    });
+    console.log('[Worker] One-cycle execution finished successfully.');
+    console.log(`[Worker] Processed Count: ${processedCount}`);
+    console.log('[Worker] Logs:');
+    console.log(logs.join('\n'));
+  } catch (error) {
+    throw error;
+  } finally {
+    await prisma.$disconnect();
+  }
 }

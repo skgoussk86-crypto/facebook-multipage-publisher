@@ -5,7 +5,7 @@ loadEnvConfig(process.cwd());
 
 import { JobStatus, MockScenario, User, UserRole, UserStatus, UserApprovalStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { executeWorkerCycle, startWorkerDaemon, parseIntegerEnv } from '../src/lib/worker-runtime';
 import { prisma } from '../src/lib/prisma-client';
 import { handleHealthGet } from '../src/app/api/admin/worker/health/route';
@@ -64,15 +64,96 @@ async function createTestAsset(userId: string) {
   });
 }
 
+function cleanEnvForChild(env: Record<string, string>): Record<string, string | undefined> {
+  const allowedKeys = [
+    'PATH', 'SystemRoot', 'SystemDrive', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT', 'WINDIR',
+    'USERNAME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
+    'DATABASE_URL', 'NODE_ENV'
+  ];
+  const childEnv: Record<string, string | undefined> = {};
+  for (const key of allowedKeys) {
+    if (process.env[key] !== undefined) {
+      childEnv[key] = process.env[key]!;
+    }
+  }
+
+  const targetDbUrl = env.DATABASE_URL || childEnv.DATABASE_URL || '';
+  let childDbName = '';
+  try {
+    const parsedUrl = new URL(targetDbUrl);
+    childDbName = decodeURIComponent(parsedUrl.pathname.slice(1));
+  } catch {
+    throw new Error('Refusing to run child process: Invalid or missing DATABASE_URL.');
+  }
+  if (childDbName !== 'fb_publisher_test') {
+    throw new Error(`Refusing to run child process: DATABASE_URL points to "${childDbName}", not "fb_publisher_test".`);
+  }
+
+  for (const [key, val] of Object.entries(env)) {
+    childEnv[key] = val;
+  }
+
+  delete childEnv.FORCE_MOCK_FAILURE;
+
+  return childEnv;
+}
+
 function runWorkerProcess(env: Record<string, string>, omitConditions = false): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const childEnv = { ...process.env, ...env };
-    // Remove database URL to test config-phase failures or keep it to allow successful exits
+    let childEnv: Record<string, string | undefined>;
+    try {
+      childEnv = cleanEnvForChild(env);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
     const command = omitConditions
       ? 'node --import tsx scripts/run-production-worker.ts'
       : 'node --conditions=react-server --import tsx scripts/run-production-worker.ts';
 
-    exec(command, { env: childEnv }, (error, stdout, stderr) => {
+    exec(command, { env: childEnv as NodeJS.ProcessEnv }, (error, stdout, stderr) => {
+      resolve({
+        code: error ? (error.code || 1) : 0,
+        stdout,
+        stderr
+      });
+    });
+  });
+}
+
+function runWorkerOnceProcess(env: Record<string, string>): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    let childEnv: Record<string, string | undefined>;
+    try {
+      childEnv = cleanEnvForChild(env);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+    const command = 'node --conditions=react-server --import tsx scripts/run-worker-once.ts';
+
+    exec(command, { env: childEnv as NodeJS.ProcessEnv }, (error, stdout, stderr) => {
+      resolve({
+        code: error ? (error.code || 1) : 0,
+        stdout,
+        stderr
+      });
+    });
+  });
+}
+
+function runWorkerOnceFailedProcess(env: Record<string, string>): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    let childEnv: Record<string, string | undefined>;
+    try {
+      childEnv = cleanEnvForChild(env);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+    const command = 'node --conditions=react-server --import tsx scripts/run-test-worker-once-failed.ts';
+
+    exec(command, { env: childEnv as NodeJS.ProcessEnv }, (error, stdout, stderr) => {
       resolve({
         code: error ? (error.code || 1) : 0,
         stdout,
@@ -446,40 +527,106 @@ async function runTests() {
 
   // D. Valid configuration matches boundary (fails database connection if URL is missing or reaches database and starts)
   const validWorkerId = randomUUID();
-  // To avoid hanging in tests, we can kill the child process after 2 seconds!
-  console.log('Awaiting quick boot check for valid daemon configuration...');
-  const bootCtrl = new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-    const child = exec('node --conditions=react-server --import tsx scripts/run-production-worker.ts', {
-      env: {
-        ...process.env,
+  console.log('Awaiting quick boot check for valid daemon configuration (using spawn)...');
+
+  const bootRes = await new Promise<{ startupConfirmed: boolean; childExited: boolean; childExitCode: number | null; stdout: string; stderr: string }>(async (resolve) => {
+    let stdoutStr = '';
+    let stderrStr = '';
+    let childExited = false;
+    let childExitCode: number | null = null;
+    let startupConfirmed = false;
+
+    let childEnv: Record<string, string | undefined>;
+    try {
+      childEnv = cleanEnvForChild({
         WORKER_ENABLED: 'true',
         WORKER_ID: validWorkerId,
         WORKER_POLL_INTERVAL_MS: '1000',
         WORKER_ERROR_BACKOFF_MS: '5000'
-      }
-    }, (error, stdout, stderr) => {
-      resolve({
-        code: error ? (error.code || 1) : 0,
-        stdout,
-        stderr
       });
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        '--conditions=react-server',
+        '--import',
+        'tsx',
+        'scripts/run-production-worker.ts'
+      ],
+      {
+        shell: false,
+        windowsHide: true,
+        env: childEnv as NodeJS.ProcessEnv
+      }
+    );
+
+    child.stdout?.on('data', (data) => {
+      stdoutStr += data.toString();
+    });
+    child.stderr?.on('data', (data) => {
+      stderrStr += data.toString();
     });
 
-    // Terminate after 2.5 seconds (enough to run at least one tick)
-    setTimeout(() => {
-      child.kill('SIGINT');
-    }, 2500);
+    child.on('exit', (code) => {
+      childExited = true;
+      childExitCode = code;
+    });
+
+    // Poll for database heartbeat presence or log indicators
+    const startTime = Date.now();
+    while (Date.now() - startTime < 3500) {
+      if (childExited) {
+        break;
+      }
+
+      const childHeartbeat = await prisma.workerHeartbeat.findUnique({
+        where: { workerId: validWorkerId }
+      });
+      if (childHeartbeat !== null) {
+        startupConfirmed = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // Forcefully clean up child process cleanly
+    child.kill('SIGINT');
+
+    // Wait for exit
+    await new Promise<void>((r) => {
+      if (childExited) r();
+      child.on('exit', () => r());
+      setTimeout(r, 1000);
+    });
+
+    resolve({
+      startupConfirmed,
+      childExited,
+      childExitCode,
+      stdout: stdoutStr,
+      stderr: stderrStr
+    });
   });
 
-  const bootRes = await bootCtrl;
-  assert(bootRes.code === 0 || bootRes.code === 130 || bootRes.code === null || bootRes.code === 1, 'Boot check exited gracefully or via signal');
+  console.log('Boot check completed. Startup Confirmed:', bootRes.startupConfirmed);
+  assert(bootRes.startupConfirmed, `Failed to confirm worker startup. Stdout: ${bootRes.stdout}. Stderr: ${bootRes.stderr}`);
+
+  // Assert stderr doesn't contain server-only client import warnings or unhandled rejections
+  assert(!bootRes.stderr.includes('Startup configuration error'), 'Stderr must not contain configuration error');
+  assert(!bootRes.stderr.includes('Fatal error'), 'Stderr must not contain Fatal error');
+  assert(!bootRes.stderr.includes('This module cannot be imported from a Client Component module'), 'Stderr must not contain client component import error');
+  assert(!bootRes.stderr.includes('unhandledRejection') && !bootRes.stderr.includes('UnhandledPromiseRejectionWarning'), 'Stderr must not contain unhandled rejection');
 
   // Check if heartbeat row was successfully created in the test database by the child process
   const childHeartbeat = await prisma.workerHeartbeat.findUnique({
     where: { workerId: validWorkerId }
   });
   assert(childHeartbeat !== null, 'Heartbeat record must be created by the booted daemon process');
-  assert(childHeartbeat!.currentStatus === 'STOPPED' || childHeartbeat!.currentStatus === 'IDLE' || childHeartbeat!.currentStatus === 'STOPPING', 'Heartbeat status was written successfully');
+  assert(childHeartbeat!.currentStatus === 'STOPPED' || childHeartbeat!.currentStatus === 'IDLE' || childHeartbeat!.currentStatus === 'STOPPING' || childHeartbeat!.currentStatus === 'RUNNING', 'Heartbeat status was written successfully');
 
   // ==========================================
   // Test 10: Import-Safety Test (Part 6)
@@ -491,6 +638,119 @@ async function runTests() {
   }, true); // pass omitConditions = true
   assert(resImportSafety.code === 0, 'Disabled startup must exit cleanly with code 0 even without react-server conditions');
   assert(!resImportSafety.stderr.includes('This module cannot be imported from a Client Component module'), 'Must not raise server-only client component import errors');
+
+  // ==========================================
+  // Test 11: Successful worker:once process test (Part 4A)
+  // ==========================================
+  console.log('Test 11: Successful worker:once process test (creates no work)...');
+  const workerOnceId1 = randomUUID();
+  const resOnce1 = await runWorkerOnceProcess({
+    WORKER_ID: workerOnceId1
+  });
+  assert(resOnce1.code === 0, 'Successful one-cycle execution must exit with code 0');
+
+  const hbOnce1 = await prisma.workerHeartbeat.findUnique({ where: { workerId: workerOnceId1 } });
+  assert(hbOnce1 !== null, 'Heartbeat record must be created');
+  assert(hbOnce1!.currentStatus === 'IDLE', 'Final status must be IDLE');
+  assert(hbOnce1!.lastSuccessAt !== null, 'lastSuccessAt must be set');
+  assert(hbOnce1!.lastFailureAt === null, 'lastFailureAt must be null');
+  assert(hbOnce1!.lastError === null, 'lastError must be null');
+  assert(hbOnce1!.jobsProcessedLastCycle === 0, 'jobsProcessedLastCycle must be 0');
+  assert(hbOnce1!.nextPollEstimate === null, 'nextPollEstimate must be null');
+
+  // ==========================================
+  // Test 12: Successful worker:once with one mock eligible item (Part 4B)
+  // ==========================================
+  console.log('Test 12: Successful worker:once with one mock eligible item...');
+  const workerOnceId2 = randomUUID();
+  await prisma.videoJob.deleteMany({});
+
+  const dueJobIdOnce = randomUUID();
+  await prisma.videoJob.create({
+    data: {
+      id: dueJobIdOnce,
+      userId: testUserId,
+      pageId: testPageId,
+      uploadAssetId: asset.id,
+      englishTitle: 'Once Due Job',
+      englishCaption: 'This is due for once test',
+      scheduledTimeUTC: new Date(Date.now() - 10000),
+      status: JobStatus.SCHEDULED,
+      mockScenario: MockScenario.SUCCESS,
+    }
+  });
+
+  const resOnce2 = await runWorkerOnceProcess({
+    WORKER_ID: workerOnceId2
+  });
+  assert(resOnce2.code === 0, 'One-cycle execution must exit with code 0');
+
+  const hbOnce2 = await prisma.workerHeartbeat.findUnique({ where: { workerId: workerOnceId2 } });
+  assert(hbOnce2 !== null, 'Heartbeat must exist');
+  assert(hbOnce2!.currentStatus === 'IDLE', 'Final status must be IDLE');
+  assert(hbOnce2!.jobsProcessedLastCycle === 1, 'jobsProcessedLastCycle must be 1');
+
+  // ==========================================
+  // Test 13: Failed worker:once (Part 4C)
+  // ==========================================
+  console.log('Test 13: Failed worker:once...');
+  const workerOnceId3 = randomUUID();
+  const resOnce3 = await runWorkerOnceFailedProcess({
+    WORKER_ID: workerOnceId3
+  });
+  assert(resOnce3.code === 1, 'Failed one-cycle execution must exit with code 1');
+
+  const hbOnce3 = await prisma.workerHeartbeat.findUnique({ where: { workerId: workerOnceId3 } });
+  assert(hbOnce3 !== null, 'Heartbeat must exist');
+  assert(hbOnce3!.currentStatus === 'FAILED', 'Final status must be FAILED');
+  assert(hbOnce3!.lastFailureAt !== null, 'lastFailureAt must be set');
+  const errOnce3 = hbOnce3!.lastError || '';
+  assert(errOnce3.includes('[REDACTED]'), 'Error message must be sanitized');
+  assert(!errOnce3.includes('token_secret_xyz'), 'Token secret must be redacted');
+  assert(hbOnce3!.nextPollEstimate === null, 'nextPollEstimate must be null');
+
+  // ==========================================
+  // Test 14: Success overrides failure on same worker ID (Part 2 regression test)
+  // ==========================================
+  console.log('Test 14: Success overrides failure on same worker ID regression test...');
+  const regressionWorkerId = randomUUID();
+
+  // 1. Run failed execution
+  let regressionErrorCaught = false;
+  try {
+    await executeWorkerCycle(regressionWorkerId, new Date(), {
+      updateFinalHeartbeat: true,
+      runQueueWorker: async () => {
+        throw new Error('Forced regression test failure containing secret=bearer_token_123');
+      }
+    });
+  } catch {
+    regressionErrorCaught = true;
+  }
+  assert(regressionErrorCaught, 'Should propagate regression error');
+
+  const hbReg1 = await prisma.workerHeartbeat.findUnique({ where: { workerId: regressionWorkerId } });
+  assert(hbReg1 !== null, 'Heartbeat record must exist');
+  assert(hbReg1!.currentStatus === 'FAILED', 'Status must be FAILED');
+  const errReg1 = hbReg1!.lastError || '';
+  assert(errReg1.includes('[REDACTED]'), 'Error message must be sanitized');
+  assert(!errReg1.includes('bearer_token_123'), 'Secret must be redacted');
+
+  // 2. Run successful execution using same worker ID
+  await executeWorkerCycle(regressionWorkerId, new Date(), {
+    updateFinalHeartbeat: true,
+    runQueueWorker: async () => {
+      return ['[Worker] Claimed Job success'];
+    }
+  });
+
+  const hbReg2 = await prisma.workerHeartbeat.findUnique({ where: { workerId: regressionWorkerId } });
+  assert(hbReg2 !== null, 'Heartbeat record must exist');
+  assert(hbReg2!.currentStatus === 'IDLE', 'Status must be IDLE');
+  assert(hbReg2!.lastSuccessAt !== null, 'lastSuccessAt must be set');
+  assert(hbReg2!.lastError === null, 'lastError must be cleared to null');
+  assert(hbReg2!.nextPollEstimate === null, 'nextPollEstimate must be null');
+  assert(hbReg2!.jobsProcessedLastCycle === 1, 'jobsProcessedLastCycle must be updated to 1');
 
   console.log('All Expanded Background Worker Runtime and Observability Tests Passed successfully! 🎉');
 }

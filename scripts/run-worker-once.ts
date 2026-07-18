@@ -18,24 +18,10 @@ async function main() {
     workerId = randomUUID();
   }
 
-  // Import worker runtime and prisma client dynamically after validations
-  const { executeWorkerCycle } = await import('../src/lib/worker-runtime');
-  const { prisma } = await import('../src/lib/prisma-client');
+  // Import worker runtime dynamically after validations
+  const { runWorkerOnce } = await import('../src/lib/worker-runtime');
 
-  console.log(`[Worker] Running one-cycle diagnostic for worker ${workerId}...`);
-  const start = new Date();
-  try {
-    const { logs, processedCount } = await executeWorkerCycle(workerId, start);
-    console.log('[Worker] One-cycle execution finished successfully.');
-    console.log(`[Worker] Processed Count: ${processedCount}`);
-    console.log('[Worker] Logs:');
-    console.log(logs.join('\n'));
-  } catch (error) {
-    console.error('[Worker] One-cycle execution failed:', error);
-    process.exitCode = 1;
-  } finally {
-    await prisma.$disconnect();
-  }
+  await runWorkerOnce(workerId);
 }
 
 main().catch(err => {

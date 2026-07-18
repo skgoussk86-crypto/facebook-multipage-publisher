@@ -35,6 +35,7 @@ export async function updateWorkerHeartbeat(params: {
   if (params.success !== undefined) {
     if (params.success) {
       updateData.lastSuccessAt = now;
+      updateData.lastError = null;
     } else {
       updateData.lastFailureAt = now;
     }
