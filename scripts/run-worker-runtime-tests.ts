@@ -6,7 +6,7 @@ loadEnvConfig(process.cwd());
 import { JobStatus, MockScenario, User, UserRole, UserStatus, UserApprovalStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { exec, spawn } from 'child_process';
-import { executeWorkerCycle, startWorkerDaemon, parseIntegerEnv } from '../src/lib/worker-runtime';
+import { executeWorkerCycle, startWorkerDaemon, parseIntegerEnv, WorkerController } from '../src/lib/worker-runtime';
 import { prisma } from '../src/lib/prisma-client';
 import { handleHealthGet } from '../src/app/api/admin/worker/health/route';
 import { NextRequest } from 'next/server';
@@ -752,14 +752,258 @@ async function runTests() {
   assert(hbReg2!.nextPollEstimate === null, 'nextPollEstimate must be null');
   assert(hbReg2!.jobsProcessedLastCycle === 1, 'jobsProcessedLastCycle must be updated to 1');
 
+  // ==========================================
+  // Test A: No validating assets
+  // ==========================================
+  console.log('Test A: No validating assets (one-shot)...');
+  await cleanDatabase();
+  const testAWorkerId = randomUUID();
+  const resA = await runWorkerOnceProcess({
+    WORKER_ID: testAWorkerId
+  });
+  assert(resA.code === 0, 'Exit code must be 0 for no validating assets');
+  assert(!resA.stdout.includes('[Asset Validation] [ERROR]'), 'Should not have validation error log');
+  assert(resA.stdout.includes('[Asset Validation] No assets in VALIDATING state require validation.'), 'Should log no assets');
+  const hbA = await prisma.workerHeartbeat.findUnique({ where: { workerId: testAWorkerId } });
+  assert(hbA !== null, 'Heartbeat record must exist');
+  assert(hbA!.currentStatus === 'IDLE', 'Heartbeat status must be IDLE');
+  assert(hbA!.lastSuccessAt !== null, 'lastSuccessAt must be set');
+  assert(hbA!.lastError === null, 'lastError must be null');
+
+  // ==========================================
+  // Test B: One mock validating asset
+  // ==========================================
+  console.log('Test B: One mock validating asset (context binding)...');
+  await cleanDatabase();
+  const testBUserId = randomUUID();
+  await prisma.user.create({
+    data: {
+      id: testBUserId,
+      email: `testb-user-${testBUserId.slice(0, 8)}@example.com`,
+      passwordHash: 'dummy',
+      role: 'USER',
+      status: 'ACTIVE',
+      approvalStatus: 'APPROVED'
+    }
+  });
+  const testBAsset = await prisma.uploadAsset.create({
+    data: {
+      id: randomUUID(),
+      userId: testBUserId,
+      provider: 'R2',
+      bucket: 'test-bucket',
+      objectKey: 'testb-video.mp4',
+      originalName: 'testb-video.mp4',
+      expectedSize: BigInt(100),
+      actualSize: BigInt(100),
+      declaredMimeType: 'video/mp4',
+      status: 'VALIDATING',
+      idempotencyKey: `idem-testb-${randomUUID()}`,
+      requestFingerprint: `finger-testb-${randomUUID()}`,
+      uploadExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+    }
+  });
+
+  const { VideoValidationService } = await import('../src/lib/storage/video-validation-service');
+  const { getStorageAdapter } = await import('../src/lib/storage');
+  const adapterB = getStorageAdapter();
+  (adapterB as unknown as { storedObjects: Map<string, unknown> }).storedObjects = new Map();
+  (adapterB as unknown as { storedObjects: Map<string, unknown> }).storedObjects.set(`test-bucket/${testBAsset.objectKey}`, {
+    size: 100,
+    etag: '"etag-testb"',
+    contentType: 'video/mp4',
+    content: Buffer.alloc(100, 'v'),
+    lastModified: new Date()
+  });
+
+  const mockProbeB = {
+    probe: async () => ({
+      containerFormat: 'mp4',
+      durationMs: 5000,
+      videoCodec: 'h264',
+      audioCodec: 'aac',
+      width: 1920,
+      height: 1080,
+      frameRate: 30.0,
+      detectedMimeType: 'video/mp4'
+    })
+  };
+  VideoValidationService.setProbe(mockProbeB);
+
+  const testBWorkerId = randomUUID();
+  const resB = await executeWorkerCycle(testBWorkerId, new Date(), {
+    updateFinalHeartbeat: true,
+    validateOneAsset: () => VideoValidationService.validateOneAsset() // arrow wrapper!
+  });
+  assert(resB.processedCount === 1, 'Processed count must be 1');
+  assert(!resB.logs.some(l => l.includes('Cannot read properties of undefined')), 'Should not fail with undefined error');
+  assert(resB.logs.some(l => l.includes('Success: true, Status: VALIDATED')), 'Asset must be successfully validated');
+
+  // ==========================================
+  // Test C: Injected validation failure
+  // ==========================================
+  console.log('Test C: Injected validation failure (one-shot exit code 1)...');
+  await cleanDatabase();
+  const testCWorkerId = randomUUID();
+  // We run the script that we created
+  const resC = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
+    let childEnv: Record<string, string | undefined>;
+    try {
+      childEnv = cleanEnvForChild({
+        WORKER_ID: testCWorkerId
+      });
+    } catch (err) {
+      console.error((err as Error).message);
+      reject(err);
+      return;
+    }
+    const command = 'node --conditions=react-server --import tsx scripts/run-test-worker-once-validation-failed.ts';
+    exec(command, { env: childEnv as NodeJS.ProcessEnv }, (error, stdout, stderr) => {
+      resolve({
+        code: error ? (error.code || 1) : 0,
+        stdout,
+        stderr
+      });
+    });
+  });
+
+  assert(resC.code === 1, `One-shot with validation failure must exit with code 1, got code: ${resC.code}`);
+  const hbC = await prisma.workerHeartbeat.findUnique({ where: { workerId: testCWorkerId } });
+  assert(hbC !== null, 'Heartbeat record must exist');
+  assert(hbC!.currentStatus === 'FAILED', `Heartbeat status must be FAILED, got: ${hbC!.currentStatus}`);
+  assert(hbC!.lastFailureAt !== null, 'lastFailureAt must be set');
+  assert(hbC!.lastError !== null, 'lastError must be logged');
+  assert(hbC!.lastError!.includes('[REDACTED]'), 'Error message must be sanitized');
+  assert(!hbC!.lastError!.includes('bearer_12345'), 'Credentials must not leak');
+  assert(hbC!.nextPollEstimate === null, 'nextPollEstimate must be null');
+
+  // ==========================================
+  // Test D: Daemon injected validation failure
+  // ==========================================
+  console.log('Test D: Daemon injected validation failure (BACKING_OFF)...');
+  await cleanDatabase();
+  const testDWorkerId = randomUUID();
+
+  // Temporary mock of claimOneAsset and validateAsset on VideoValidationService
+  const originalClaim = VideoValidationService.claimOneAsset;
+  const originalValidate = VideoValidationService.validateAsset;
+
+  let controllerD: WorkerController | null = null;
+
+  try {
+    VideoValidationService.claimOneAsset = async () => ({
+      assetId: 'test-d-asset-id',
+      userId: 'test-d-user-id',
+      lockToken: 'lock-testd',
+      lockedAt: new Date(),
+      lockExpiresAt: new Date()
+    });
+
+    VideoValidationService.validateAsset = async () => {
+      throw new Error('Forced daemon validation failure with credential_key=bearer_54321');
+    };
+
+    controllerD = startWorkerDaemon({
+      workerId: testDWorkerId,
+      pollIntervalMs: 500,
+      errorBackoffMs: 2000,
+      registerSignals: false
+    });
+
+    // Poll the test heartbeat until it reaches BACKING_OFF (timeout after 5 seconds)
+    const startTime = Date.now();
+    let statusD = '';
+    let hbD: { currentStatus: string; lastFailureAt: Date | null; lastError: string | null } | null = null;
+    while (Date.now() - startTime < 5000) {
+      hbD = await prisma.workerHeartbeat.findUnique({ where: { workerId: testDWorkerId } });
+      if (hbD && hbD.currentStatus === 'BACKING_OFF') {
+        statusD = 'BACKING_OFF';
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    assert(statusD === 'BACKING_OFF', `Status must reach BACKING_OFF, got: ${hbD?.currentStatus}`);
+    assert(hbD!.lastFailureAt !== null, 'lastFailureAt must be set');
+    assert(hbD!.lastError !== null, 'lastError must be logged');
+    assert(hbD!.lastError!.includes('[REDACTED]'), 'Error must be sanitized');
+    assert(!hbD!.lastError!.includes('bearer_54321'), 'Credentials must not leak');
+
+  } finally {
+    // Shutdown daemon
+    if (controllerD) {
+      await controllerD.shutdown();
+      await controllerD.completionPromise;
+    }
+
+    // Restore VideoValidationService
+    VideoValidationService.claimOneAsset = originalClaim;
+    VideoValidationService.validateAsset = originalValidate;
+  }
+
+  // ==========================================
+  // Test E: Admin worker route validation
+  // ==========================================
+  console.log('Test E: Admin worker route validation...');
+  const { handleWorkerPost } = await import('../src/app/api/admin/worker/route');
+
+  // Test E1: Real service wrapper (successful null result returns HTTP 200)
+  console.log('Test E1: Real service wrapper (successful null result)...');
+  await cleanDatabase();
+  const mockReqE1 = mockRequest({ 'authorization': 'Bearer admin-token' });
+  const mockPublishingCalledE1 = { val: false };
+
+  const successDepsE1 = {
+    verifyAdminSession: async () => adminUser,
+    verifyAdminRole: () => true,
+    runQueueWorker: async () => {
+      mockPublishingCalledE1.val = true;
+      return ['Queue completed successfully.'];
+    },
+    validateOneAsset: () => VideoValidationService.validateOneAsset() // arrow wrapper!
+  };
+
+  const resE1 = await handleWorkerPost(mockReqE1, successDepsE1);
+  assert(resE1.status === 200, `Admin route status must be 200, got: ${resE1.status}`);
+  const bodyE1 = await resE1.json() as Record<string, unknown>;
+  assert(bodyE1.success === true, 'Response success must be true');
+  assert(mockPublishingCalledE1.val === true, 'Queue worker should have been called');
+  assert(!(bodyE1.logs as string[]).some((l: string) => l.includes('Cannot read properties of undefined')), 'No undefined context errors in logs');
+  assert((bodyE1.logs as string[]).some((l: string) => l.includes('No assets in VALIDATING state require validation.')), 'Expected "No assets" log in response');
+
+  // Test E2: Injected validation failure (returns HTTP 500, no success true, raw credentials redacted)
+  console.log('Test E2: Injected validation failure (returns HTTP 500)...');
+  const mockReqE2 = mockRequest({ 'authorization': 'Bearer admin-token' });
+  const mockPublishingCalledE2 = { val: false };
+
+  const failDepsE2 = {
+    verifyAdminSession: async () => adminUser,
+    verifyAdminRole: () => true,
+    runQueueWorker: async () => {
+      mockPublishingCalledE2.val = true;
+      return ['Queue completed successfully.'];
+    },
+    validateOneAsset: async () => {
+      throw new Error('Forced validation failure with credentials_secret=bearer_99999');
+    }
+  };
+
+  const resE2 = await handleWorkerPost(mockReqE2, failDepsE2);
+  assert(resE2.status === 500, `Admin route status must be 500, got: ${resE2.status}`);
+  const bodyE2 = await resE2.json() as Record<string, unknown>;
+  assert(bodyE2.success !== true, 'Response success must not be true');
+  const errE2 = (bodyE2.error as string) || '';
+  assert(errE2.includes('[REDACTED]'), 'Error message must be sanitized');
+  assert(!errE2.includes('bearer_99999'), 'Credentials must not leak');
+
   console.log('All Expanded Background Worker Runtime and Observability Tests Passed successfully! 🎉');
 }
 
 runTests()
   .then(() => {
-    process.exit(0);
+    // Let event loop flush naturally
   })
   .catch((e) => {
     console.error('Test execution failed:', e);
-    process.exit(1);
+    process.exitCode = 1;
   });

@@ -1,6 +1,6 @@
 import { runQueueWorker } from './job-worker';
 import { VideoValidationService } from './storage';
-import { updateWorkerHeartbeat } from './worker-health';
+import { updateWorkerHeartbeat, sanitizeErrorMessage } from './worker-health';
 import { prisma } from './prisma-client';
 
 export interface WorkerController {
@@ -47,7 +47,7 @@ export async function executeWorkerCycle(
   let processedCount = 0;
 
   const fnRunQueueWorker = options?.runQueueWorker ?? runQueueWorker;
-  const fnValidateOneAsset = options?.validateOneAsset ?? VideoValidationService.validateOneAsset;
+  const fnValidateOneAsset = options?.validateOneAsset ?? (() => VideoValidationService.validateOneAsset());
   const fnUpdateWorkerHeartbeat = options?.updateWorkerHeartbeat ?? updateWorkerHeartbeat;
 
   try {
@@ -74,7 +74,9 @@ export async function executeWorkerCycle(
       }
     } catch (validationError: unknown) {
       const msg = validationError instanceof Error ? validationError.message : String(validationError);
-      logs.push(`[Asset Validation] [ERROR] Validation task failed: ${msg}`);
+      const sanitizedMsg = sanitizeErrorMessage(msg) || '';
+      logs.push(`[Asset Validation] [ERROR] Validation task failed: ${sanitizedMsg}`);
+      throw new Error(`Asset validation failed: ${sanitizedMsg}`);
     }
 
     if (options?.updateFinalHeartbeat !== false) {
@@ -203,6 +205,7 @@ export function startWorkerDaemon(params: {
       loopIsProcessing = true;
       let hasError = false;
 
+      let cycleErrorMsg: string | null = null;
       // Update heartbeat to RUNNING is handled by executeWorkerCycle
       activeCyclePromise = executeWorkerCycle(params.workerId, cycleStart, { updateFinalHeartbeat: false })
         .then((res) => {
@@ -213,6 +216,7 @@ export function startWorkerDaemon(params: {
         .catch((err) => {
           console.error('[Worker] Cycle execution failed:', err);
           hasError = true;
+          cycleErrorMsg = err instanceof Error ? err.message : String(err);
         });
 
       await activeCyclePromise;
@@ -234,7 +238,7 @@ export function startWorkerDaemon(params: {
         currentStatus: statusAfterCycle,
         success: !hasError,
         nextPollEstimate,
-        lastError: hasError ? undefined : null,
+        lastError: hasError ? cycleErrorMsg : null,
       });
 
       // Sleep safely until next cycle or interrupted by shutdown

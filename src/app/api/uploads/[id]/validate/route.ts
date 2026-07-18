@@ -14,7 +14,7 @@ export async function handleValidateUpload(
   }
 ): Promise<NextResponse> {
   try {
-    const validateFn = deps?.validateAssetById || VideoValidationService.validateAssetById;
+    const validateFn = deps?.validateAssetById ?? ((userId, assetId, validationDeps) => VideoValidationService.validateAssetById(userId, assetId, validationDeps));
     const result = await validateFn(userId, id, { prepareValidationSource: deps?.prepareValidationSource });
     
     const responseBody = {

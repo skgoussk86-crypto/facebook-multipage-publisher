@@ -22,35 +22,17 @@ if (databaseName !== 'fb_publisher_test') {
 } else {
   // 3. Only then dynamically import worker-runtime and execute
   import('crypto').then(async ({ randomUUID }) => {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
     async function execute() {
-      let workerId = process.env.WORKER_ID || '';
-      if (workerId) {
-        if (!uuidRegex.test(workerId)) {
-          console.error(`CRITICAL: The supplied WORKER_ID is not a valid UUID: "${workerId}"`);
-          process.exitCode = 1;
-          return;
-        }
-      } else {
-        workerId = randomUUID();
-      }
+      const workerId = process.env.WORKER_ID || randomUUID();
 
       // Dynamic imports of dependent modules
       const { runWorkerOnce } = await import('../src/lib/worker-runtime');
-      const { prisma } = await import('../src/lib/prisma-client');
 
-      try {
-        await runWorkerOnce(workerId, {
-          runQueueWorker: async () => {
-            throw new Error('Forced mocked cycle failure with bearer token_secret_xyz');
-          }
-        });
-      } catch (err) {
-        throw err;
-      } finally {
-        await prisma.$disconnect();
-      }
+      await runWorkerOnce(workerId, {
+        validateOneAsset: async () => {
+          throw new Error('Forced asset validation failure with secret_key=bearer_12345');
+        }
+      });
     }
 
     execute().catch(err => {

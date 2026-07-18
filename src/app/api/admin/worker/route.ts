@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAdminSession, verifyAdminRole } from '@/lib/auth';
 import { generateWorkerToken } from '@/lib/job-worker';
 import { executeWorkerCycle } from '@/lib/worker-runtime';
+import { sanitizeErrorMessage } from '@/lib/worker-health';
 
 export type WorkerRouteDependencies = {
   verifyAdminSession: typeof verifyAdminSession;
@@ -57,14 +58,18 @@ export async function handleWorkerPost(
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        logs.push(`[Asset Validation] [ERROR] Validation task failed: ${msg}`);
+        const sanitizedMsg = sanitizeErrorMessage(msg) || '';
+        logs.push(`[Asset Validation] [ERROR] Validation task failed: ${sanitizedMsg}`);
+        throw new Error(sanitizedMsg);
       }
     }
 
     return NextResponse.json({ success: true, logs });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Error in worker route:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    const sanitizedMsg = sanitizeErrorMessage(errorMsg) || 'Internal Server Error';
+    return NextResponse.json({ error: sanitizedMsg }, { status: 500 });
   }
 }
 
