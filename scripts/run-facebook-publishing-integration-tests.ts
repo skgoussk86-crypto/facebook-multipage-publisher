@@ -372,7 +372,7 @@ async function runTests() {
       const urlStr = String(url);
       if (urlStr.includes('/videos') && init?.method === 'POST') {
         const body = init.body ? (typeof init.body === 'string' ? JSON.parse(init.body) : init.body) : {};
-        
+
         if (body.upload_phase === 'start') {
           startCalled = true;
           return new Response(JSON.stringify({
@@ -380,7 +380,7 @@ async function runTests() {
             video_id: 'video-123'
           }), { status: 200 });
         }
-        
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (init.headers && (init.headers as any)['Content-Type']?.includes('multipart/form-data')) {
           uploadChunkCount++;
@@ -418,7 +418,7 @@ async function runTests() {
     const token = randomUUID();
     const logOutput = await runQueueWorker(token, job.id);
     console.log('Worker Logs Pass 1:', logOutput);
-    
+
     assert(startCalled, 'Start upload session should be invoked');
     assert(uploadChunkCount > 0, 'Upload chunk should be invoked');
     assert(finishCalled, 'Finish session should be invoked');
@@ -491,7 +491,7 @@ async function runTests() {
   // 11. Mock page synchronization, ownership and UUID contract tests
   {
     const { getFacebookConnections } = await import('../src/lib/db');
-    
+
     // Test pages API returns database UUIDs
     const mockUser1 = randomUUID();
     // Create mock user
@@ -534,7 +534,7 @@ async function runTests() {
     const fs = await import('fs');
     const path = await import('path');
     const MOCK_DB_PATH = path.join(process.cwd(), 'src/lib/mock_db.json');
-    
+
     let originalMockDb = '{}';
     if (fs.existsSync(MOCK_DB_PATH)) {
       originalMockDb = fs.readFileSync(MOCK_DB_PATH, 'utf8');
@@ -562,12 +562,12 @@ async function runTests() {
       const connections1 = await getFacebookConnections(mockUser1);
       assert(connections1.length === 1, 'Mock account should be returned');
       const page1 = connections1[0].pages[0];
-      
+
       // Page ID should be a valid UUID primary key
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[4][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       assert(uuidRegex.test(page1.id), `Page ID must be a UUID, found: ${page1.id}`);
       assert(page1.facebookPageId === '1029384756', 'facebookPageId should be external Meta page ID');
-      
+
       // Encryption and token secrets must be completely omitted/hidden from the returned list
       assert(!(page1 as unknown as Record<string, unknown>).encryptedPageToken, 'encryptedPageToken must be omitted from return value');
       assert(!(page1 as unknown as Record<string, unknown>).accessToken, 'accessToken must be omitted from return value');
@@ -582,7 +582,7 @@ async function runTests() {
       // Second call should be safe and not duplicate rows
       const connections2 = await getFacebookConnections(mockUser1);
       assert(connections2[0].pages[0].id === page1.id, 'Subsequent call should retain identical primary key UUID');
-      
+
       const dbPagesCount = await prisma.facebookPage.count({
         where: { userId: mockUser1 }
       });
@@ -590,7 +590,7 @@ async function runTests() {
 
       // Verify scheduling route POST validations
       const asset = await createTestAsset(mockUser1);
-      
+
       // Valid schedule request using internal page ID UUID
       const validPayload = {
         jobs: [
@@ -772,7 +772,7 @@ async function runTests() {
       });
       const res = await handleJobsPost(req, deps);
       assert(res.status === 200, `Canonical scenario ${scenario} should be accepted`);
-      
+
       // Verify job was created in DB with correct scenario
       const dbJob = await prisma.videoJob.findFirst({
         where: { englishTitle: `Test Job ${scenario}` }
@@ -969,7 +969,7 @@ async function runTests() {
       { id: 'job-meta', pageId: testPageId, englishTitle: 'Meta Proc', scheduledTimeUTC: new Date().toISOString(), status: 'META_PROCESSING' }
     ];
     const normPublishing = normalizeDashboardJobs(rawPublishing);
-    const countPublishing = normPublishing.filter(j => 
+    const countPublishing = normPublishing.filter(j =>
       ["PREPARING", "UPLOADING_TO_META", "META_PROCESSING", "PUBLISHING", "PROCESSING", "PENDING"].includes(j.status)
     ).length;
     assert(countPublishing === 3, 'Publishing count must include pending, processing, meta_processing');
@@ -988,7 +988,7 @@ async function runTests() {
       { id: 'job-failed-perm', pageId: testPageId, englishTitle: 'Failed Perm', scheduledTimeUTC: new Date().toISOString(), status: 'FAILED_PERMANENT' }
     ];
     const normFailed = normalizeDashboardJobs(rawFailed);
-    const countFailed = normFailed.filter(j => 
+    const countFailed = normFailed.filter(j =>
       ["FAILED", "FAILED_RETRYABLE", "FAILED_PERMANENT", "FACEBOOK_RECONNECT_REQUIRED"].includes(j.status)
     ).length;
     assert(countFailed === 2, 'Failed count must equal 2');
@@ -999,10 +999,10 @@ async function runTests() {
     ];
     const normCancelled = normalizeDashboardJobs(rawCancelled);
     const cancelledCountScheduled = normCancelled.filter(j => j.status === 'SCHEDULED').length;
-    const cancelledCountPublishing = normCancelled.filter(j => 
+    const cancelledCountPublishing = normCancelled.filter(j =>
       ["PREPARING", "UPLOADING_TO_META", "META_PROCESSING", "PUBLISHING", "PROCESSING", "PENDING"].includes(j.status)
     ).length;
-    const cancelledCountFailed = normCancelled.filter(j => 
+    const cancelledCountFailed = normCancelled.filter(j =>
       ["FAILED", "FAILED_RETRYABLE", "FAILED_PERMANENT", "FACEBOOK_RECONNECT_REQUIRED"].includes(j.status)
     ).length;
     assert(cancelledCountScheduled === 0, 'Cancelled is not scheduled');

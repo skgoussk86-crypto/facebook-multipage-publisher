@@ -215,7 +215,7 @@ async function runTests() {
     const results2 = res2.results[0];
     const status1 = results1.status;
     const status2 = results2.status;
-    
+
     assert(
       (status1 === 'SUCCESS' && status2 === 'DUPLICATE') ||
       (status1 === 'DUPLICATE' && status2 === 'SUCCESS'),
@@ -386,7 +386,7 @@ async function runTests() {
     assert(sessionCreatedCount === 1, `Expected startUploadSession to be executed exactly once, executed: ${sessionCreatedCount}`);
     assert(videoUploadedCount === 1, `Expected uploadChunk to be executed exactly once, executed: ${videoUploadedCount}`);
     assert(finishSessionCount === 0, `Expected finishUploadSession to have 0 successful completions due to crash, got: ${finishSessionCount}`);
-    
+
     // Verify job transitioned to PUBLISHED via reconciliation check
     const finalJobState = await prisma.videoJob.findUnique({ where: { id: job.id } });
     assert(finalJobState?.status === JobStatus.PUBLISHED, 'Should reconcile successfully to PUBLISHED');
@@ -492,7 +492,7 @@ async function runTests() {
 
     const response = await handleJobsPost(request, deps);
     assert(response.status === 400, 'Should reject cross-user upload asset scheduling');
-    
+
     const body = await response.json();
     assert(body.error === 'Validation failed', 'Expected validation error');
 

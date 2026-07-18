@@ -73,7 +73,7 @@ export class FacebookPublishingService {
   ): Promise<void> {
     const url = `${this.getBaseUrl()}/${pageId}/videos`;
     const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
-    
+
     const multipartHeader = Buffer.from(
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="upload_phase"\r\n\r\n` +
