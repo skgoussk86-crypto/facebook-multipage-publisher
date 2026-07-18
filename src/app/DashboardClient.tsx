@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import VideoUploader from "../components/uploads/video-uploader";
 import { UploadQueueController, QueueItem } from "../lib/uploads/upload-queue-controller";
+import { normalizeDashboardJobs } from "../lib/validation";
 
 // Types
 interface FacebookPage {
@@ -38,7 +39,10 @@ type JobStatus =
   | "FAILED_RETRYABLE"
   | "FAILED_PERMANENT"
   | "CANCELLED"
-  | "FACEBOOK_RECONNECT_REQUIRED";
+  | "FACEBOOK_RECONNECT_REQUIRED"
+  | "PENDING"
+  | "PROCESSING"
+  | "FAILED";
 
 interface PublishAttempt {
   attemptNumber: number;
@@ -57,6 +61,7 @@ interface VideoJob {
   durationSeconds?: number;
   uploadProgress: number; // 0 to 100
   pageId: string;
+  pageName?: string;
   contentType: "VIDEO" | "REEL";
   englishTitle: string;
   englishCaption: string;
@@ -115,6 +120,60 @@ const INITIAL_PAGES: FacebookPage[] = [
   },
 ];
 
+type MockScenario =
+  | 'SUCCESS'
+  | 'TEMPORARY_NETWORK_FAILURE'
+  | 'META_PROCESSING_DELAY'
+  | 'META_RATE_LIMIT'
+  | 'INVALID_MEDIA_FORMAT'
+  | 'REVOKED_FACEBOOK_TOKEN'
+  | 'MISSING_FACEBOOK_PERMISSION'
+  | 'PERMANENT_PUBLISHING_FAILURE';
+
+const normalizeClientScenario = (val: string | null | undefined): MockScenario => {
+  if (!val) return 'SUCCESS';
+  const clean = val.trim().toUpperCase();
+  const validScenarios: MockScenario[] = [
+    'SUCCESS',
+    'TEMPORARY_NETWORK_FAILURE',
+    'META_PROCESSING_DELAY',
+    'META_RATE_LIMIT',
+    'INVALID_MEDIA_FORMAT',
+    'REVOKED_FACEBOOK_TOKEN',
+    'MISSING_FACEBOOK_PERMISSION',
+    'PERMANENT_PUBLISHING_FAILURE'
+  ];
+  if (validScenarios.includes(clean as MockScenario)) {
+    return clean as MockScenario;
+  }
+  switch (val.trim().toLowerCase()) {
+    case 'success':
+      return 'SUCCESS';
+    case 'network_failure':
+    case 'temporary_network_failure':
+      return 'TEMPORARY_NETWORK_FAILURE';
+    case 'meta_processing_delay':
+      return 'META_PROCESSING_DELAY';
+    case 'rate_limit':
+    case 'meta_rate_limit':
+      return 'META_RATE_LIMIT';
+    case 'invalid_format':
+    case 'invalid_media_format':
+      return 'INVALID_MEDIA_FORMAT';
+    case 'revoked_token':
+    case 'revoked_facebook_token':
+      return 'REVOKED_FACEBOOK_TOKEN';
+    case 'missing_permission':
+    case 'missing_facebook_permission':
+      return 'MISSING_FACEBOOK_PERMISSION';
+    case 'permanent_publishing_failure':
+      return 'PERMANENT_PUBLISHING_FAILURE';
+    default:
+      return 'SUCCESS';
+  }
+};
+
+
 export default function DashboardClient({ currentUser }: { currentUser: { id: string, email: string, name: string, role: string } }) {
   // Navigation State
   const [activeTab, setActiveTab] = useState<"dashboard" | "publisher" | "pages" | "logs">("dashboard");
@@ -149,11 +208,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   const [simulateTokenExpiry, setSimulateTokenExpiry] = useState(false);
   const [simulatingPublish, setSimulatingPublish] = useState(false);
   const [simulationLog, setSimulationLog] = useState<string[]>([]);
-  const [simulationScenario, setSimulationScenario] = useState<"success" | "network_failure" | "meta_processing_delay" | "rate_limit" | "invalid_format" | "revoked_token" | "missing_permission">("success");
+  const [simulationScenario, setSimulationScenario] = useState<MockScenario>("SUCCESS");
   const [countdownJobs, setCountdownJobs] = useState<Record<string, number>>({});
   const [selectedHistoryJob, setSelectedHistoryJob] = useState<VideoJob | null>(null);
   const [historyModalTab, setHistoryModalTab] = useState<"attempts" | "audit">("attempts");
   const [simulatingJobId, setSimulatingJobId] = useState<string | null>(null);
+  const [isSavingJobs, setIsSavingJobs] = useState(false);
 
   // Filter States
   const [filterPageId, setFilterPageId] = useState<string>("all");
@@ -168,8 +228,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       case "MEDIA_UPLOADED":
         return "bg-blue-50 text-blue-800 border border-blue-200";
       case "SCHEDULED":
+      case "PENDING":
         return "bg-indigo-50 text-indigo-800 border border-indigo-200";
       case "PREPARING":
+      case "PROCESSING":
         return "bg-purple-50 text-purple-800 border border-purple-200 animate-pulse";
       case "UPLOADING_TO_META":
         return "bg-cyan-50 text-cyan-800 border border-cyan-200 animate-pulse";
@@ -182,6 +244,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       case "FAILED_RETRYABLE":
         return "bg-amber-50 text-amber-800 border border-amber-200";
       case "FAILED_PERMANENT":
+      case "FAILED":
         return "bg-rose-50 text-rose-800 border border-rose-200";
       case "CANCELLED":
         return "bg-zinc-100 text-zinc-500 border border-zinc-200";
@@ -197,13 +260,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       case "DRAFT": return "Draft";
       case "MEDIA_UPLOADED": return "Media Uploaded";
       case "SCHEDULED": return "Scheduled";
+      case "PENDING": return "Pending";
       case "PREPARING": return "Preparing";
+      case "PROCESSING": return "Processing";
       case "UPLOADING_TO_META": return "Uploading to Meta";
       case "META_PROCESSING": return "Meta Processing";
       case "PUBLISHING": return "Publishing";
       case "PUBLISHED": return "Published";
       case "FAILED_RETRYABLE": return "Failed (Retryable)";
       case "FAILED_PERMANENT": return "Failed (Permanent)";
+      case "FAILED": return "Failed";
       case "CANCELLED": return "Cancelled";
       case "FACEBOOK_RECONNECT_REQUIRED": return "Reconnect Required";
       default: return status;
@@ -241,6 +307,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
   const queueControllerRef = useRef<UploadQueueController | null>(null);
 
+  const pagesRef = useRef(pages);
+  useEffect(() => {
+    pagesRef.current = pages;
+  }, [pages]);
+
   useEffect(() => {
     const controller = new UploadQueueController({
       maxConcurrency: 2,
@@ -257,7 +328,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               fileSizeBytes: item.size,
               durationSeconds: item.durationSeconds || existing?.durationSeconds,
               uploadProgress: item.progressPercent,
-              pageId: item.pageId || existing?.pageId || "",
+              pageId: item.pageId || existing?.pageId || (pagesRef.current.find((p) => p.id === item.pageId)?.id || pagesRef.current[0]?.id || ""),
               contentType: item.contentType || existing?.contentType || "VIDEO",
               englishTitle: item.englishTitle || existing?.englishTitle || item.filename.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " "),
               englishCaption: item.englishCaption || existing?.englishCaption || "",
@@ -461,6 +532,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     // Persistent GCS/R2 validation
     if (!job.uploadValidated || !job.assetId) {
       errors.push("Video must be successfully uploaded and validated.");
+    }
+
+    // Page selection check
+    if (!job.pageId) {
+      errors.push("Destination Facebook Page is required.");
+    } else {
+      const pageExists = pages.some((p) => p.id === job.pageId);
+      if (!pageExists) {
+        errors.push("Invalid Facebook Page selection.");
+      }
     }
 
     return errors;
@@ -698,45 +779,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       const res = await fetch("/api/facebook/jobs");
       if (res.ok) {
         const data = await res.json();
-        const mapped = (data.jobs || []).map((j: {
-          id: string;
-          pageId: string;
-          contentType?: string;
-          englishTitle: string;
-          englishCaption: string;
-          hashtags?: string;
-          scheduledTimeUTC: string;
-          status: JobStatus;
-          metaPostId?: string;
-          attemptCount: number;
-          lastErrorMessage?: string;
-          attempts?: unknown[];
-          fileName?: string;
-        }) => {
-          const kolkataTimeStr = formatKolkataDatetimeLocal(new Date(j.scheduledTimeUTC));
-          return {
-            id: j.id,
-            fileName: j.fileName || 'video.mp4',
-            fileSize: "N/A",
-            fileSizeBytes: 0,
-            durationSeconds: 0,
-            uploadProgress: 100,
-            pageId: j.pageId,
-            contentType: j.contentType || "VIDEO",
-            englishTitle: j.englishTitle,
-            englishCaption: j.englishCaption,
-            hashtags: j.hashtags || "",
-            scheduledTimeKolkata: kolkataTimeStr,
-            scheduledTimeUTC: j.scheduledTimeUTC,
-            status: j.status,
-            metaPostId: j.metaPostId || undefined,
-            retryCount: j.attemptCount,
-            errorLog: j.lastErrorMessage || undefined,
-            thumbnailMode: "auto",
-            attempts: j.attempts || []
-          };
-        });
-        setJobs(mapped);
+        const mapped = normalizeDashboardJobs(data);
+        setJobs(mapped as unknown as VideoJob[]);
+      } else {
+        console.error("Failed to fetch jobs: status", res.status);
       }
     } catch (error) {
       console.error("Failed to fetch jobs:", error);
@@ -794,6 +840,27 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           });
         });
         setPages(allPages);
+
+        if (allPages.length > 0) {
+          setBulkPageId((prev) => {
+            if (!prev || !allPages.some((p) => p.id === prev)) {
+              return allPages[0].id;
+            }
+            return prev;
+          });
+
+          setTempJobsQueue((prev) =>
+            prev.map((job) => {
+              if (!job.pageId || !allPages.some((p) => p.id === job.pageId)) {
+                queueControllerRef.current?.updateJobFields(job.id, {
+                  pageId: allPages[0].id
+                } as Partial<QueueItem>);
+                return { ...job, pageId: allPages[0].id };
+              }
+              return job;
+            })
+          );
+        }
 
         // Compute overall reconnection required status from accounts list
         const isReconnectionRequired = (data.accounts || []).some(
@@ -1079,6 +1146,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   };
 
   const handleConfirmSave = async () => {
+    if (isSavingJobs) return;
+    setIsSavingJobs(true);
     try {
       const jobsToSave = tempJobsQueue.map((job) => {
         if (!job.assetId) {
@@ -1119,6 +1188,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     } catch (error) {
       console.error("Error saving scheduled jobs:", error);
       alert(error instanceof Error ? error.message : "Network error during job scheduling.");
+    } finally {
+      setIsSavingJobs(false);
     }
   };
 
@@ -1352,9 +1423,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   // Stat calculations
   const countPages = pages.length;
   const countScheduled = jobs.filter((j) => j.status === "SCHEDULED").length;
-  const countPublishing = jobs.filter((j) => ["PREPARING", "UPLOADING_TO_META", "META_PROCESSING", "PUBLISHING"].includes(j.status)).length;
+  const countPublishing = jobs.filter((j) => ["PREPARING", "UPLOADING_TO_META", "META_PROCESSING", "PUBLISHING", "PROCESSING", "PENDING"].includes(j.status)).length;
   const countPublished = jobs.filter((j) => j.status === "PUBLISHED").length;
-  const countFailed = jobs.filter((j) => ["FAILED_RETRYABLE", "FAILED_PERMANENT", "FACEBOOK_RECONNECT_REQUIRED"].includes(j.status)).length;
+  const countFailed = jobs.filter((j) => ["FAILED", "FAILED_RETRYABLE", "FAILED_PERMANENT", "FACEBOOK_RECONNECT_REQUIRED"].includes(j.status)).length;
   const hasExpiredTokens = pages.some((p) => p.tokenStatus === "Expired");
   const expiredPages = pages.filter((p) => p.tokenStatus === "Expired");
 
@@ -1509,16 +1580,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   <span className="text-zinc-500 font-medium">Scenario</span>
                   <select
                     value={simulationScenario}
-                    onChange={(e) => setSimulationScenario(e.target.value as "success" | "network_failure" | "meta_processing_delay" | "rate_limit" | "invalid_format" | "revoked_token" | "missing_permission")}
+                    onChange={(e) => setSimulationScenario(normalizeClientScenario(e.target.value))}
                     className="w-full bg-white border border-zinc-200 rounded px-2.5 py-1.5 text-[11px] text-zinc-700 focus:outline-none focus:border-indigo-600 font-sans"
                   >
-                    <option value="success">Success Scenario</option>
-                    <option value="network_failure">Network Failure (Retryable)</option>
-                    <option value="meta_processing_delay">Processing Delay (Retryable)</option>
-                    <option value="rate_limit">Rate Limit (Retryable)</option>
-                    <option value="invalid_format">Invalid Video Format (Perm)</option>
-                    <option value="revoked_token">Revoked OAuth Token (Reconnect)</option>
-                    <option value="missing_permission">Missing Page Permission (Perm)</option>
+                    <option value="SUCCESS">Success Scenario</option>
+                    <option value="TEMPORARY_NETWORK_FAILURE">Network Failure (Retryable)</option>
+                    <option value="META_PROCESSING_DELAY">Processing Delay (Retryable)</option>
+                    <option value="META_RATE_LIMIT">Rate Limit (Retryable)</option>
+                    <option value="INVALID_MEDIA_FORMAT">Invalid Video Format (Perm)</option>
+                    <option value="REVOKED_FACEBOOK_TOKEN">Revoked OAuth Token (Reconnect)</option>
+                    <option value="MISSING_FACEBOOK_PERMISSION">Missing Page Permission (Perm)</option>
                   </select>
                 </div>
                 <button
@@ -1765,7 +1836,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                         </div>
                                       </td>
                                       <td className="py-4 px-4 text-zinc-700 font-medium">
-                                        {targetPage?.name || "Unassigned"}
+                                        {job.pageName || targetPage?.name || "Unassigned"}
                                       </td>
                                       <td className="py-4 px-4 font-mono text-xs">
                                         <div className="text-zinc-700">{formatDateTime(job.scheduledTimeKolkata)}</div>
@@ -2065,10 +2136,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-2">Select Facebook Page</label>
                         <div className="flex gap-2">
                           <select
-                            value={bulkPageId}
+                            value={bulkPageId || ""}
                             onChange={(e) => setBulkPageId(e.target.value)}
                             className="flex-1 bg-white border border-zinc-200 rounded-lg py-2 px-2 text-xs text-zinc-900 focus:outline-none"
                           >
+                            <option value="">Select a page...</option>
                             {pages.map((p) => (
                               <option key={p.id} value={p.id}>{p.name}</option>
                             ))}
@@ -2513,10 +2585,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                 <div>
                                   <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-1">Target Page</label>
                                   <select
-                                    value={job.pageId}
+                                    value={job.pageId || ""}
                                     onChange={(e) => handleUpdateTempJobField(job.id, "pageId", e.target.value)}
                                     className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition"
                                   >
+                                    <option value="">Select a page...</option>
                                     {pages.map((p) => (
                                       <option key={p.id} value={p.id}>
                                         {p.name} {p.tokenStatus === "Expired" ? "(Expired!)" : ""}
@@ -2913,15 +2986,17 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               <div className="flex justify-end gap-3 pt-3 border-t border-zinc-200 text-xs">
                 <button
                   onClick={() => setIsConfirmationOpen(false)}
-                  className="px-4 py-2 border border-zinc-250 bg-white text-zinc-700 hover:bg-zinc-50 font-semibold rounded-lg transition"
+                  disabled={isSavingJobs}
+                  className="px-4 py-2 border border-zinc-250 bg-white text-zinc-700 hover:bg-zinc-50 font-semibold rounded-lg transition disabled:opacity-50"
                 >
                   Go Back (Edit Details)
                 </button>
                 <button
                   onClick={handleConfirmSave}
-                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition shadow-md shadow-emerald-600/15"
+                  disabled={isSavingJobs}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition shadow-md shadow-emerald-600/15 disabled:opacity-50"
                 >
-                  Confirm Batch Scheduling
+                  {isSavingJobs ? "Scheduling..." : "Confirm Batch Scheduling"}
                 </button>
               </div>
             </div>

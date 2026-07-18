@@ -19,7 +19,9 @@ export function canTransition(current: JobStatus, next: JobStatus): boolean {
       JobStatus.FAILED_RETRYABLE,
       JobStatus.FAILED_PERMANENT,
       JobStatus.FACEBOOK_RECONNECT_REQUIRED,
-      JobStatus.CANCELLED
+      JobStatus.CANCELLED,
+      JobStatus.META_PROCESSING,
+      JobStatus.PUBLISHED
     ],
     [JobStatus.UPLOADING_TO_META]: [
       JobStatus.META_PROCESSING,
@@ -305,6 +307,10 @@ export async function transitionJobState(
     updateData.lockedAt = null;
     updateData.lockExpiresAt = null;
     updateData.nextAttemptAt = null;
+  } else if (nextStatus === JobStatus.META_PROCESSING) {
+    updateData.lockToken = null;
+    updateData.lockedAt = null;
+    updateData.lockExpiresAt = null;
   }
 
   const updatedJob = await tx.videoJob.update({
@@ -638,10 +644,22 @@ export async function manualTriggerJob(
 }
 
 export interface BulkCreateScheduledJobsTx {
+  $executeRaw?: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
   facebookPage: {
     findMany(args: { where: { userId: string } }): Promise<Array<{ id: string; userId: string }>>;
   };
   videoJob: {
+    findFirst?(args: {
+      where: {
+        userId: string;
+        pageId: string;
+        uploadAssetId: string | null;
+        scheduledTimeUTC: Date;
+        status: {
+          notIn: JobStatus[];
+        };
+      };
+    }): Promise<VideoJob | null>;
     create(args: {
       data: {
         userId: string;
@@ -705,8 +723,44 @@ export async function bulkCreateScheduledJobs(
     }
   }
 
+  // Row-lock referenced UploadAsset records to serialize concurrent requests for the same asset
+  if (typeof tx.$executeRaw === 'function') {
+    const assetIds = Array.from(new Set(jobsData.map(j => j.uploadAssetId).filter(Boolean))) as string[];
+    if (assetIds.length > 0) {
+      assetIds.sort();
+      for (const assetId of assetIds) {
+        await tx.$executeRaw`
+          SELECT id FROM "UploadAsset" WHERE id = ${assetId}::uuid FOR UPDATE
+        `;
+      }
+    }
+  }
+
   const createdJobs: VideoJob[] = [];
   for (const job of jobsData) {
+    // Check if an identical job is already scheduled (not failed permanently or cancelled)
+    let existing = null;
+    if (typeof tx.videoJob.findFirst === 'function') {
+      existing = await tx.videoJob.findFirst({
+        where: {
+          userId,
+          pageId: job.pageId,
+          uploadAssetId: job.uploadAssetId ?? null,
+          scheduledTimeUTC: job.scheduledTimeUTC,
+          status: {
+            notIn: [JobStatus.FAILED_PERMANENT, JobStatus.CANCELLED]
+          }
+        }
+      });
+    }
+
+    if (existing) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (existing as any).isReused = true;
+      createdJobs.push(existing);
+      continue;
+    }
+
     const created = await tx.videoJob.create({
       data: {
         userId,

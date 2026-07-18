@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import { PrismaClient } from '@prisma/client';
 import http from 'http';
+import { randomUUID } from 'crypto';
 
 const prisma = new PrismaClient();
 const PORT = 3001;
@@ -53,11 +54,34 @@ async function runTests() {
   }
 
   console.log('Cleaning up existing test data...');
-  await prisma.user.deleteMany({
-    where: {
-      email: {
-        in: ['test-a@example.com', 'test-b@example.com']
-      }
+  try {
+    const userEmails = ['test-a@example.com', 'test-b@example.com', 'system-admin@example.com'];
+    const users = await prisma.user.findMany({
+      where: { email: { in: userEmails } },
+      select: { id: true }
+    });
+    const userIds = users.map(u => u.id);
+
+    if (userIds.length > 0) {
+      await prisma.appConfiguration.deleteMany({ where: { userId: { in: userIds } } });
+      await prisma.videoJob.deleteMany({ where: { userId: { in: userIds } } });
+      await prisma.facebookPage.deleteMany({ where: { userId: { in: userIds } } });
+      await prisma.facebookAccount.deleteMany({ where: { userId: { in: userIds } } });
+      await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+    }
+  } catch (cleanupErr) {
+    console.warn('Warning during initial cleanup:', cleanupErr);
+  }
+
+  // Create a dummy approved admin first to satisfy the /api/admin/login requirement
+  await prisma.user.create({
+    data: {
+      id: randomUUID(),
+      email: 'system-admin@example.com',
+      passwordHash: 'dummy',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      approvalStatus: 'APPROVED'
     }
   });
 
@@ -109,7 +133,11 @@ async function runTests() {
     if (resRegDup.status !== 400) {
       throw new Error(`Expected 400 for duplicate, got ${resRegDup.status}`);
     }
-
+    // Approve Test User A in DB so they can login successfully
+    await prisma.user.update({
+      where: { id: userIdA },
+      data: { approvalStatus: 'APPROVED' }
+    });
     // TEST 4: Correct Login
     console.log('\n--- TEST 4: Correct Login ---');
     const resLoginA = await fetch(`${BASE_URL}/api/admin/login`, {
@@ -166,6 +194,12 @@ async function runTests() {
     });
     const regDataB = await resRegB.json();
     userIdB = regDataB.user.id;
+
+    // Approve Test User B in DB so they can login successfully
+    await prisma.user.update({
+      where: { id: userIdB },
+      data: { approvalStatus: 'APPROVED' }
+    });
 
     // Login as B to get cookie B
     const resLoginB = await fetch(`${BASE_URL}/api/admin/login`, {
@@ -358,13 +392,24 @@ async function runTests() {
 
   } finally {
     console.log('Cleaning up test users...');
-    await prisma.user.deleteMany({
-      where: {
-        email: {
-          in: ['test-a@example.com', 'test-b@example.com']
-        }
+    try {
+      const userEmails = ['test-a@example.com', 'test-b@example.com', 'system-admin@example.com'];
+      const users = await prisma.user.findMany({
+        where: { email: { in: userEmails } },
+        select: { id: true }
+      });
+      const userIds = users.map(u => u.id);
+
+      if (userIds.length > 0) {
+        await prisma.appConfiguration.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.videoJob.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.facebookPage.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.facebookAccount.deleteMany({ where: { userId: { in: userIds } } });
+        await prisma.user.deleteMany({ where: { id: { in: userIds } } });
       }
-    });
+    } catch (cleanupErr) {
+      console.warn('Warning during test cleanup:', cleanupErr);
+    }
 
     if (serverProcess) {
       console.log('Stopping test server...');

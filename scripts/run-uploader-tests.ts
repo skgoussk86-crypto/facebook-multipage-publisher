@@ -1063,6 +1063,7 @@ async function runTests() {
     getSessionUser: async () => makeUserFixture({ id: 'mock-user-uuid', email: 'admin@example.com' }),
     verifyAdminSession: async () => makeUserFixture({ id: 'mock-user-uuid', email: 'admin@example.com' }),
     getVideoJobs: async () => [makeVideoJobFixture()],
+    findUserPages: async () => [{ id: '11111111-1111-1111-1111-111111111111' }],
     findUploadAsset: async (id) => {
       if (id === 'unknown-uuid') return null;
       if (id === 'asset-uuid') {

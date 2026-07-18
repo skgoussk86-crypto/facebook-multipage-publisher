@@ -9,12 +9,13 @@ const MOCK_DB_PATH = path.join(
 
 export interface MockFacebookPage {
   id: string;
+  facebookPageId?: string;
   name: string;
   category: string;
   pictureUrl: string;
   tokenStatus: 'Valid' | 'Expired';
   connectedAt: string;
-  encryptedPageToken: string;
+  encryptedPageToken?: string;
 }
 
 export interface MockFacebookAccount {
@@ -173,16 +174,15 @@ export async function getFacebookConnections(
 
         const pages: MockFacebookPage[] =
           account.pages.map((page) => ({
-            id: page.facebookPageId,
+            id: page.id,
+            facebookPageId: page.facebookPageId,
             name: page.pageName,
             category: page.pageCategory,
             pictureUrl: page.pagePictureUrl,
             tokenStatus: page.isSynced
               ? 'Valid'
               : 'Expired',
-            connectedAt: page.createdAt.toISOString(),
-            encryptedPageToken:
-              page.encryptedPageToken
+            connectedAt: page.createdAt.toISOString()
           }));
 
         return {
@@ -212,32 +212,81 @@ export async function getFacebookConnections(
     (account) => account.userId === userId
   );
 
-  return filteredAccounts.map((account) => {
-    let connectionState =
-      account.connectionState ??
-      database.connectionState;
+  const resultAccounts: FacebookAccountUI[] = [];
+  for (const account of filteredAccounts) {
+    const dbAccount = await prisma.facebookAccount.upsert({
+      where: {
+        userId_facebookUserId: {
+          userId: userId!,
+          facebookUserId: account.facebookUserId
+        }
+      },
+      update: {
+        name: account.name,
+        encryptedAccessToken: account.encryptedAccessToken,
+        tokenExpiresAt: new Date(account.tokenExpiresAt)
+      },
+      create: {
+        id: account.id,
+        userId: userId!,
+        facebookUserId: account.facebookUserId,
+        name: account.name,
+        encryptedAccessToken: account.encryptedAccessToken,
+        tokenExpiresAt: new Date(account.tokenExpiresAt)
+      }
+    });
 
-    if (connectionState === 'Not Connected') {
-      connectionState = 'Connected';
+    const dbPages: MockFacebookPage[] = [];
+    for (const page of account.pages) {
+      const dbPage = await prisma.facebookPage.upsert({
+        where: {
+          userId_facebookPageId: {
+            userId: userId!,
+            facebookPageId: page.id
+          }
+        },
+        update: {
+          accountId: dbAccount.id,
+          pageName: page.name,
+          pageCategory: page.category,
+          pagePictureUrl: page.pictureUrl,
+          encryptedPageToken: page.encryptedPageToken || "",
+          isSynced: page.tokenStatus === 'Valid'
+        },
+        create: {
+          accountId: dbAccount.id,
+          userId: userId!,
+          facebookPageId: page.id,
+          pageName: page.name,
+          pageCategory: page.category,
+          pagePictureUrl: page.pictureUrl,
+          encryptedPageToken: page.encryptedPageToken || "",
+          isSynced: page.tokenStatus === 'Valid'
+        }
+      });
+
+      dbPages.push({
+        id: dbPage.id,
+        facebookPageId: dbPage.facebookPageId,
+        name: dbPage.pageName,
+        category: dbPage.pageCategory,
+        pictureUrl: dbPage.pagePictureUrl,
+        tokenStatus: dbPage.isSynced ? 'Valid' : 'Expired',
+        connectedAt: dbPage.createdAt.toISOString()
+      });
     }
 
-    const hasExpiredPage = account.pages.some(
-      (page) => page.tokenStatus === 'Expired'
-    );
+    resultAccounts.push({
+      id: dbAccount.id,
+      facebookUserId: dbAccount.facebookUserId,
+      name: dbAccount.name,
+      tokenExpiresAt: dbAccount.tokenExpiresAt.toISOString(),
+      connectionState: (account.connectionState || 'Connected') as FacebookAccountUI['connectionState'],
+      pages: dbPages
+    });
+  }
 
-    if (hasExpiredPage) {
-      connectionState = 'Reconnection Required';
-    }
-
-    return {
-      id: account.id,
-      facebookUserId: account.facebookUserId,
-      name: account.name,
-      tokenExpiresAt: account.tokenExpiresAt,
-      connectionState,
-      pages: account.pages
-    };
-  });
+  return resultAccounts;
 }
 
 export async function getFacebookConnection(
@@ -337,7 +386,7 @@ export async function saveFacebookAccount(
                   pageCategory: page.category,
                   pagePictureUrl: page.pictureUrl,
                   encryptedPageToken:
-                    page.encryptedPageToken,
+                    page.encryptedPageToken || "",
                   isSynced:
                     page.tokenStatus === 'Valid'
                 },
@@ -349,7 +398,7 @@ export async function saveFacebookAccount(
                   pageCategory: page.category,
                   pagePictureUrl: page.pictureUrl,
                   encryptedPageToken:
-                    page.encryptedPageToken,
+                    page.encryptedPageToken || "",
                   isSynced:
                     page.tokenStatus === 'Valid'
                 }
@@ -729,6 +778,9 @@ export async function getVideoJobs(userId: string) {
     return await prisma.videoJob.findMany({
       where: {
         userId
+      },
+      include: {
+        facebookPage: true
       },
       orderBy: {
         createdAt: 'desc'

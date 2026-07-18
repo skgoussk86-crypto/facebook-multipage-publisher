@@ -60,6 +60,11 @@ export function resolveStorageReference(asset: { provider: string; bucket: strin
       gcsVideoUri: null,
       storageUri: `r2://${asset.bucket}/${asset.objectKey}`,
     };
+  } else if (asset.provider === 'GOOGLE_DRIVE') {
+    return {
+      gcsVideoUri: null,
+      storageUri: `gdrive://${asset.objectKey}`,
+    };
   } else if (asset.provider === 'GCS') {
     return {
       gcsVideoUri: `gcs://${asset.bucket}/${asset.objectKey}`,
