@@ -216,11 +216,10 @@ export class BrowserMultipartUploader {
       const stored = localStorage.getItem(`upload_recovery_${this.recoveryKey}`);
       if (stored) {
         const resolved = matchRecoveryRecord(stored, this.file, this.recoveryKey);
-        if (resolved && resolved.provider === 'GOOGLE_DRIVE' && resolved.sessionUri) {
+        if (resolved && resolved.provider === 'GOOGLE_DRIVE') {
           this.googleUploader = new GoogleDriveResumableUploader({
             file: this.file,
             assetId: resolved.assetId,
-            sessionUri: resolved.sessionUri,
             recoveryKey: this.recoveryKey,
             onStatusChange: this.onStatusChange,
             maxRetries: this.maxRetries,
@@ -300,25 +299,22 @@ export class BrowserMultipartUploader {
 
       let recoveredAssetId: string | null = null;
       let isGoogle = false;
-      let storedSessionUri = '';
 
       const stored = localStorage.getItem(`upload_recovery_${this.recoveryKey}`);
       if (stored) {
         const resolved = matchRecoveryRecord(stored, this.file, this.recoveryKey);
         if (resolved) {
           recoveredAssetId = resolved.assetId;
-          if (resolved.provider === 'GOOGLE_DRIVE' && resolved.sessionUri) {
+          if (resolved.provider === 'GOOGLE_DRIVE') {
             isGoogle = true;
-            storedSessionUri = resolved.sessionUri;
           }
         }
       }
 
-      if (isGoogle && recoveredAssetId && storedSessionUri) {
+      if (isGoogle && recoveredAssetId) {
         this.googleUploader = new GoogleDriveResumableUploader({
           file: this.file,
           assetId: recoveredAssetId,
-          sessionUri: storedSessionUri,
           recoveryKey: this.recoveryKey,
           onStatusChange: this.onStatusChange,
           maxRetries: this.maxRetries,
@@ -376,7 +372,7 @@ export class BrowserMultipartUploader {
           this.googleUploader = new GoogleDriveResumableUploader({
             file: this.file,
             assetId: googleData.assetId,
-            sessionUri: googleData.sessionUri,
+            sessionUri: (data as { sessionUri?: string }).sessionUri,
             recoveryKey: this.recoveryKey,
             onStatusChange: this.onStatusChange,
             maxRetries: this.maxRetries,
@@ -435,23 +431,9 @@ export class BrowserMultipartUploader {
     const statusData = parseSyncStatusResponse(data);
 
     if (statusData.provider === 'GOOGLE_DRIVE') {
-      let storedSessionUri = '';
-      const stored = localStorage.getItem(`upload_recovery_${this.recoveryKey}`);
-      if (stored) {
-        const resolved = matchRecoveryRecord(stored, this.file, this.recoveryKey);
-        if (resolved && resolved.provider === 'GOOGLE_DRIVE' && resolved.assetId === currentAssetId && resolved.sessionUri) {
-          storedSessionUri = resolved.sessionUri;
-        }
-      }
-
-      if (!storedSessionUri) {
-        throw new Error('UPLOAD_SESSION_RESTART_REQUIRED');
-      }
-
       this.googleUploader = new GoogleDriveResumableUploader({
         file: this.file,
         assetId: currentAssetId,
-        sessionUri: storedSessionUri,
         recoveryKey: this.recoveryKey,
         onStatusChange: this.onStatusChange,
         maxRetries: this.maxRetries,

@@ -60,7 +60,6 @@ export async function handleInitiateUpload(
       const safeResponse = {
         provider: 'GOOGLE_DRIVE',
         assetId: gdResult.assetId,
-        sessionUri: gdResult.sessionUri,
         filename: gdResult.filename,
         mimeType: gdResult.mimeType,
         totalBytes: gdResult.totalBytes.toString(),

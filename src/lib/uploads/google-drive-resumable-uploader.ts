@@ -1,7 +1,7 @@
 import { BrowserUploaderStatus, BrowserUploadState, VideoMetadata, UploadFileLike } from './upload-types';
 
 export interface GoogleUploadTransportRequest {
-  method: 'PUT';
+  method: 'PUT' | 'POST';
   url: string;
   headers: Record<string, string>;
   body: XMLHttpRequestBodyInit | null;
@@ -108,8 +108,8 @@ export class XmlHttpUploadTransport implements GoogleUploadTransport {
 export interface GoogleDriveResumableUploaderOptions {
   file: UploadFileLike;
   assetId: string;
-  sessionUri: string;
   recoveryKey: string;
+  sessionUri?: string;
   onStatusChange?: (status: BrowserUploaderStatus) => void;
   maxRetries?: number;
   retryBackoffMs?: number;
@@ -119,7 +119,6 @@ export interface GoogleDriveResumableUploaderOptions {
 export interface GoogleInitiationResponse {
   provider: 'GOOGLE_DRIVE';
   assetId: string;
-  sessionUri: string;
   filename: string;
   mimeType: string;
   totalBytes: string;
@@ -127,10 +126,9 @@ export interface GoogleInitiationResponse {
 }
 
 export interface RecoveryRecord {
-  version: 2;
+  version: 3;
   provider: 'GOOGLE_DRIVE';
   assetId: string;
-  sessionUri: string;
   filename: string;
   mimeType: string;
   totalBytes: string;
@@ -144,7 +142,6 @@ export interface LegacyR2RecoveryRecord {
 export interface ResolvedRecovery {
   provider: 'R2' | 'GOOGLE_DRIVE';
   assetId: string;
-  sessionUri?: string;
 }
 
 // -------------------------------------------------------------
@@ -161,7 +158,47 @@ export function parseRecoveryRecord(value: unknown): RecoveryRecord | null {
   const version = value.version;
   const provider = value.provider;
   const assetId = value.assetId;
-  const sessionUri = value.sessionUri;
+  const filename = value.filename;
+  const mimeType = value.mimeType;
+  const totalBytes = value.totalBytes;
+  const lastModified = value.lastModified;
+
+  if (
+    version === 3 &&
+    provider === 'GOOGLE_DRIVE' &&
+    typeof assetId === 'string' && assetId !== '' &&
+    typeof filename === 'string' &&
+    typeof mimeType === 'string' &&
+    typeof totalBytes === 'string' &&
+    typeof lastModified === 'number'
+  ) {
+    return {
+      version: 3,
+      provider: 'GOOGLE_DRIVE',
+      assetId,
+      filename,
+      mimeType,
+      totalBytes,
+      lastModified,
+    };
+  }
+  return null;
+}
+
+export function parseVersion2RecoveryRecord(value: unknown): {
+  version: 2;
+  provider: 'GOOGLE_DRIVE';
+  assetId: string;
+  filename: string;
+  mimeType: string;
+  totalBytes: string;
+  lastModified: number;
+} | null {
+  if (!isRecord(value)) return null;
+
+  const version = value.version;
+  const provider = value.provider;
+  const assetId = value.assetId;
   const filename = value.filename;
   const mimeType = value.mimeType;
   const totalBytes = value.totalBytes;
@@ -171,7 +208,6 @@ export function parseRecoveryRecord(value: unknown): RecoveryRecord | null {
     version === 2 &&
     provider === 'GOOGLE_DRIVE' &&
     typeof assetId === 'string' && assetId !== '' &&
-    typeof sessionUri === 'string' && sessionUri.startsWith('https://') &&
     typeof filename === 'string' &&
     typeof mimeType === 'string' &&
     typeof totalBytes === 'string' &&
@@ -181,7 +217,6 @@ export function parseRecoveryRecord(value: unknown): RecoveryRecord | null {
       version: 2,
       provider: 'GOOGLE_DRIVE',
       assetId,
-      sessionUri,
       filename,
       mimeType,
       totalBytes,
@@ -212,7 +247,43 @@ export function matchRecoveryRecord(
     const version = parsed.version;
     const provider = parsed.provider;
 
+    // Detect and scrub legacy version 2 records containing raw sessionUri
     if (version === 2 && provider === 'GOOGLE_DRIVE') {
+      const record = parseVersion2RecoveryRecord(parsed);
+      if (record) {
+        const sanitizedRecord = {
+          version: 3,
+          provider: 'GOOGLE_DRIVE',
+          assetId: record.assetId,
+          filename: record.filename,
+          mimeType: record.mimeType,
+          totalBytes: record.totalBytes,
+          lastModified: record.lastModified,
+        };
+        localStorage.setItem(`upload_recovery_${recoveryKey}`, JSON.stringify(sanitizedRecord));
+
+        const matches =
+          record.filename === file.name &&
+          record.totalBytes === file.size.toString() &&
+          record.mimeType === (file.type || 'video/mp4') &&
+          record.lastModified === file.lastModified;
+
+        if (matches) {
+          return {
+            provider: 'GOOGLE_DRIVE',
+            assetId: record.assetId,
+          };
+        } else {
+          localStorage.removeItem(`upload_recovery_${recoveryKey}`);
+          return null;
+        }
+      } else {
+        localStorage.removeItem(`upload_recovery_${recoveryKey}`);
+        return null;
+      }
+    }
+
+    if (version === 3 && provider === 'GOOGLE_DRIVE') {
       const record = parseRecoveryRecord(parsed);
       if (!record) {
         localStorage.removeItem(`upload_recovery_${recoveryKey}`);
@@ -229,7 +300,6 @@ export function matchRecoveryRecord(
         return {
           provider: 'GOOGLE_DRIVE',
           assetId: record.assetId,
-          sessionUri: record.sessionUri,
         };
       } else {
         localStorage.removeItem(`upload_recovery_${recoveryKey}`);
@@ -260,7 +330,6 @@ export function parseGoogleInitiationResponse(
 
   const provider = value.provider;
   const assetId = value.assetId;
-  const sessionUri = value.sessionUri;
   const filename = value.filename;
   const mimeType = value.mimeType;
   const totalBytes = value.totalBytes;
@@ -270,9 +339,6 @@ export function parseGoogleInitiationResponse(
     throw new Error('GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE');
   }
   if (typeof assetId !== 'string' || assetId === '') {
-    throw new Error('GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE');
-  }
-  if (typeof sessionUri !== 'string' || !sessionUri.startsWith('https://')) {
     throw new Error('GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE');
   }
   if (typeof filename !== 'string' || filename !== file.name) {
@@ -292,7 +358,6 @@ export function parseGoogleInitiationResponse(
   return {
     provider: 'GOOGLE_DRIVE',
     assetId,
-    sessionUri,
     filename,
     mimeType,
     totalBytes,
@@ -391,10 +456,14 @@ export class GoogleDriveUploadError extends Error {
 }
 
 export function redactError(err: unknown): Error {
-  if (err instanceof Error) {
-    if (SAFE_ERRORS.has(err.message)) {
-      return new Error(err.message);
+  if (err && typeof err === 'object') {
+    const msg = (err as Record<string, unknown>).message;
+    if (typeof msg === 'string' && SAFE_ERRORS.has(msg)) {
+      return new Error(msg);
     }
+  }
+  if (typeof err === 'string' && SAFE_ERRORS.has(err)) {
+    return new Error(err);
   }
   return new Error('GOOGLE_DRIVE_UPLOAD_FAILED');
 }
@@ -406,8 +475,8 @@ export function redactError(err: unknown): Error {
 export class GoogleDriveResumableUploader {
   private file: UploadFileLike;
   private assetId: string;
-  private sessionUri: string;
   private recoveryKey: string;
+  private sessionUri?: string;
   private onStatusChange?: (status: BrowserUploaderStatus) => void;
   private maxRetries: number;
   private retryBackoffMs: number;
@@ -433,8 +502,8 @@ export class GoogleDriveResumableUploader {
   constructor(options: GoogleDriveResumableUploaderOptions) {
     this.file = options.file;
     this.assetId = options.assetId;
-    this.sessionUri = options.sessionUri;
     this.recoveryKey = options.recoveryKey;
+    this.sessionUri = options.sessionUri;
     this.onStatusChange = options.onStatusChange;
     this.maxRetries = options.maxRetries ?? 5;
     this.retryBackoffMs = options.retryBackoffMs ?? 1000;
@@ -488,19 +557,32 @@ export class GoogleDriveResumableUploader {
     try {
       this.emit({ state: 'initiating' });
 
-      // Write Google Drive recovery record (version 2)
+      // Write Google Drive recovery record (version 2 if sessionUri is present for legacy compatibility, else version 3)
       try {
-        const record: RecoveryRecord = {
-          version: 2,
-          provider: 'GOOGLE_DRIVE',
-          assetId: this.assetId,
-          sessionUri: this.sessionUri,
-          filename: this.file.name,
-          mimeType: this.file.type || 'video/mp4',
-          totalBytes: this.file.size.toString(),
-          lastModified: this.file.lastModified,
-        };
-        localStorage.setItem(`upload_recovery_${this.recoveryKey}`, JSON.stringify(record));
+        if (this.sessionUri) {
+          const record = {
+            version: 2,
+            provider: 'GOOGLE_DRIVE',
+            assetId: this.assetId,
+            sessionUri: this.sessionUri,
+            filename: this.file.name,
+            mimeType: this.file.type || 'video/mp4',
+            totalBytes: this.file.size.toString(),
+            lastModified: this.file.lastModified,
+          };
+          localStorage.setItem(`upload_recovery_${this.recoveryKey}`, JSON.stringify(record));
+        } else {
+          const record: RecoveryRecord = {
+            version: 3,
+            provider: 'GOOGLE_DRIVE',
+            assetId: this.assetId,
+            filename: this.file.name,
+            mimeType: this.file.type || 'video/mp4',
+            totalBytes: this.file.size.toString(),
+            lastModified: this.file.lastModified,
+          };
+          localStorage.setItem(`upload_recovery_${this.recoveryKey}`, JSON.stringify(record));
+        }
       } catch {
         // Ignore quota exceptions
       }
@@ -585,8 +667,8 @@ export class GoogleDriveResumableUploader {
   }
 
   private isNetworkOrStatus0Error(err: unknown): boolean {
-    if (err instanceof Error) {
-      const msg = err.message;
+    if (err && typeof err === 'object' && 'message' in err) {
+      const msg = (err as { message: string }).message;
       return (
         msg === 'GOOGLE_DRIVE_UPLOAD_RETRY_EXHAUSTED' ||
         msg === 'Network request failed' ||
@@ -604,39 +686,38 @@ export class GoogleDriveResumableUploader {
     if (err instanceof DOMException && err.name === 'AbortError') {
       return false;
     }
-    if (err instanceof GoogleDriveUploadError) {
-      return err.isTerminal;
-    }
-    if (err && typeof err === 'object' && 'status' in err && (err as Record<string, unknown>).status === 0) {
-      return false;
-    }
-    if (err instanceof Error) {
-      const msg = err.message;
-      if (
-        msg === 'UPLOAD_SESSION_EXPIRED' ||
-        msg === 'UPLOAD_SESSION_RESTART_REQUIRED' ||
-        msg === 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE' ||
-        msg === 'GOOGLE_DRIVE_INVALID_RESUME_RANGE' ||
-        msg.includes('stalled') ||
-        msg.includes('progress stalled') ||
-        msg.includes('alignment') ||
-        msg.includes('chunk alignment') ||
-        err instanceof SyntaxError ||
-        err instanceof TypeError
-      ) {
-        return true;
+    if (err && typeof err === 'object') {
+      if ('isTerminal' in err) {
+        return !!(err as { isTerminal: boolean }).isTerminal;
       }
-      if (
-        msg === 'Network request failed' ||
-        msg === 'GOOGLE_DRIVE_UPLOAD_FAILED' ||
-        msg === 'GOOGLE_DRIVE_UPLOAD_RETRY_EXHAUSTED' ||
-        msg.includes('HTTP 0') ||
-        msg.includes('code 0')
-      ) {
-        return false;
+      if ('message' in err) {
+        const msg = (err as { message: string }).message;
+        if (
+          msg === 'UPLOAD_SESSION_EXPIRED' ||
+          msg === 'UPLOAD_SESSION_RESTART_REQUIRED' ||
+          msg === 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE' ||
+          msg === 'GOOGLE_DRIVE_INVALID_RESUME_RANGE' ||
+          msg.includes('stalled') ||
+          msg.includes('progress stalled') ||
+          msg.includes('alignment') ||
+          msg.includes('chunk alignment') ||
+          err instanceof SyntaxError ||
+          err instanceof TypeError
+        ) {
+          return true;
+        }
+        if (
+          msg === 'Network request failed' ||
+          msg === 'GOOGLE_DRIVE_UPLOAD_FAILED' ||
+          msg === 'GOOGLE_DRIVE_UPLOAD_RETRY_EXHAUSTED' ||
+          msg.includes('HTTP 0') ||
+          msg.includes('code 0')
+        ) {
+          return false;
+        }
       }
     }
-    return true;
+    return false;
   }
 
   private async attemptServerReconciliation(): Promise<boolean> {
@@ -770,44 +851,98 @@ export class GoogleDriveResumableUploader {
   }
 
   public async querySessionStatus(): Promise<number> {
+    if (this.sessionUri) {
+      const response = await this.transport.send({
+        method: 'PUT',
+        url: this.sessionUri,
+        headers: {
+          'Content-Length': '0',
+          'Content-Range': `bytes */${this.file.size}`,
+        },
+        body: null,
+        signal: this.activeController?.signal,
+      });
+
+      if (response.status === 308) {
+        try {
+          const range = response.headers.get('Range');
+          return parseRangeHeader(range, this.file.size);
+        } catch (err: unknown) {
+          throw new GoogleDriveUploadError(
+            err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'
+              ? (err as { message: string }).message
+              : 'GOOGLE_DRIVE_INVALID_RESUME_RANGE',
+            true
+          );
+        }
+      }
+      if (response.status === 200 || response.status === 201) {
+        try {
+          const parsed = JSON.parse(response.body);
+          const driveFileId = parseDriveFileId(parsed);
+          await this.triggerCompleteAPI(driveFileId);
+        } catch (err: unknown) {
+          if (err && typeof err === 'object' && 'isTerminal' in err) {
+            throw err;
+          }
+          throw new GoogleDriveUploadError(
+            err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string'
+              ? (err as { message: string }).message
+              : 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE',
+            true
+          );
+        }
+        return this.file.size;
+      }
+      if (response.status === 0) {
+        throw new GoogleDriveUploadError('Network request failed', false);
+      }
+      if (response.status === 404 || response.status === 410) {
+        throw new GoogleDriveUploadError('UPLOAD_SESSION_EXPIRED', true);
+      }
+      const isTransient = response.status === 429 ||
+                          response.status === 500 ||
+                          response.status === 502 ||
+                          response.status === 503 ||
+                          response.status === 504;
+      if (isTransient) {
+        this.lastRetryAfterMs = parseRetryAfterHeader(
+          response.headers.get('Retry-After')
+        );
+        throw new GoogleDriveUploadError('GOOGLE_DRIVE_UPLOAD_FAILED', false);
+      }
+      if (response.status >= 400 && response.status < 500) {
+        throw new GoogleDriveUploadError('UPLOAD_SESSION_RESTART_REQUIRED', true);
+      }
+      throw new GoogleDriveUploadError('GOOGLE_DRIVE_UPLOAD_FAILED', true);
+    }
+
     const response = await this.transport.send({
-      method: 'PUT',
-      url: this.sessionUri,
+      method: 'POST',
+      url: `/api/uploads/${this.assetId}/reconcile`,
       headers: {
         'Content-Length': '0',
-        'Content-Range': `bytes */${this.file.size}`,
       },
       body: null,
       signal: this.activeController?.signal,
     });
 
-    if (response.status === 308) {
-      try {
-        const range = response.headers.get('Range');
-        return parseRangeHeader(range, this.file.size);
-      } catch (err: unknown) {
-        throw new GoogleDriveUploadError(
-          err instanceof Error ? err.message : 'GOOGLE_DRIVE_INVALID_RESUME_RANGE',
-          true
-        );
-      }
-    }
-
-    if (response.status === 0) {
-      throw new GoogleDriveUploadError('Network request failed', false);
-    }
-
     if (response.status === 200 || response.status === 201) {
       try {
         const parsed: unknown = JSON.parse(response.body);
-        const driveFileId = parseDriveFileId(parsed);
-        await this.triggerCompleteAPI(driveFileId);
-        return this.file.size;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE');
+        }
+        const data = parsed as { status?: string; confirmedBytes?: number };
+        if (data.status === 'VALIDATED' || data.status === 'VALIDATING') {
+          return this.file.size;
+        }
+        const confirmedBytes = data.confirmedBytes;
+        if (typeof confirmedBytes === 'number') {
+          return confirmedBytes;
+        }
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
-          throw err;
-        }
-        if (err instanceof GoogleDriveUploadError) {
           throw err;
         }
         const isTerm = err instanceof SyntaxError || err instanceof TypeError || (err instanceof Error && err.message === 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE');
@@ -816,6 +951,10 @@ export class GoogleDriveResumableUploader {
           isTerm
         );
       }
+    }
+
+    if (response.status === 0) {
+      throw new GoogleDriveUploadError('Network request failed', false);
     }
 
     if (response.status === 404 || response.status === 410) {
@@ -1003,7 +1142,7 @@ export class GoogleDriveResumableUploader {
   private async sendPut(start: number, end: number, length: number, data: Blob) {
     const response = await this.transport.send({
       method: 'PUT',
-      url: this.sessionUri,
+      url: this.sessionUri || `/api/uploads/${this.assetId}/chunk`,
       headers: {
         'Content-Type': this.file.type || 'video/mp4',
         'Content-Length': length.toString(),
@@ -1041,22 +1180,40 @@ export class GoogleDriveResumableUploader {
       }
     }
 
-    if (response.status === 0) {
-      throw new GoogleDriveUploadError('Network request failed', false);
-    }
-
     if (response.status === 200 || response.status === 201) {
       try {
         const parsed: unknown = JSON.parse(response.body);
-        const driveFileId = parseDriveFileId(parsed);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE');
+        }
 
-        this.uploadedBytes = this.file.size;
+        const resData = parsed as { confirmedBytes?: number; completed?: boolean; status?: string; id?: unknown };
+        const confirmedBytes = resData.confirmedBytes ?? start;
+        this.uploadedBytes = confirmedBytes;
+
+        if (resData.completed) {
+          this.uploadedBytes = this.file.size;
+          this.emit({
+            state: 'uploading',
+            uploadedBytes: this.file.size,
+          });
+          await this.triggerValidateAndPoll();
+          return;
+        } else if (this.sessionUri) {
+          const driveFileId = parseDriveFileId(parsed);
+          this.uploadedBytes = this.file.size;
+          this.emit({
+            state: 'uploading',
+            uploadedBytes: this.file.size,
+          });
+          await this.triggerCompleteAPI(driveFileId);
+          return;
+        }
+
         this.emit({
           state: 'uploading',
-          uploadedBytes: this.file.size,
+          uploadedBytes: this.uploadedBytes,
         });
-
-        await this.triggerCompleteAPI(driveFileId);
         return;
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
@@ -1065,16 +1222,41 @@ export class GoogleDriveResumableUploader {
         if (err instanceof GoogleDriveUploadError) {
           throw err;
         }
-        const isTerm = err instanceof SyntaxError || err instanceof TypeError || (err instanceof Error && err.message === 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE');
+        const isTerm = !!(err instanceof SyntaxError || err instanceof TypeError || (err && typeof err === 'object' && 'message' in err && (err as { message: unknown }).message === 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE'));
+        const errMsg = (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string')
+          ? (err as { message: string }).message
+          : 'GOOGLE_DRIVE_UPLOAD_FAILED';
         throw new GoogleDriveUploadError(
-          err instanceof Error ? err.message : 'GOOGLE_DRIVE_UPLOAD_FAILED',
+          errMsg,
           isTerm
         );
       }
     }
 
+    if (response.status === 0) {
+      throw new GoogleDriveUploadError('Network request failed', false);
+    }
+
     if (response.status === 404 || response.status === 410) {
       throw new GoogleDriveUploadError('UPLOAD_SESSION_EXPIRED', true);
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(response.body);
+      if (parsed && typeof parsed === 'object') {
+        const data = parsed as { retryable?: boolean; error?: string };
+        if (data.error === 'UPLOAD_SESSION_EXPIRED') {
+          throw new GoogleDriveUploadError('UPLOAD_SESSION_EXPIRED', true);
+        }
+        if (data.error === 'UPLOAD_SESSION_RESTART_REQUIRED') {
+          throw new GoogleDriveUploadError('UPLOAD_SESSION_RESTART_REQUIRED', true);
+        }
+        if (data.retryable) {
+          throw new GoogleDriveUploadError('GOOGLE_DRIVE_UPLOAD_FAILED', false);
+        }
+      }
+    } catch {
+      // Ignore
     }
 
     const isTransient = response.status === 429 ||
@@ -1154,10 +1336,25 @@ export class GoogleDriveResumableUploader {
         signal: this.activeController.signal,
       });
     } catch (err: unknown) {
+      console.error('triggerCompleteAPI fetch error:', err);
       if (err instanceof DOMException && err.name === 'AbortError') {
         throw err;
       }
       throw new GoogleDriveUploadError('Network request failed', false);
+    }
+
+    if (!response.ok) {
+      try {
+        const data: unknown = await response.json();
+        if (data && typeof data === 'object') {
+          const errMsg = (data as { error?: unknown }).error;
+          if (typeof errMsg === 'string' && errMsg === 'GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE') {
+            throw new GoogleDriveUploadError('GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE', true);
+          }
+        }
+      } catch (err: unknown) {
+        if (err instanceof GoogleDriveUploadError) throw err;
+      }
     }
 
     if (response.status === 404 || response.status === 410) {
@@ -1182,6 +1379,8 @@ export class GoogleDriveResumableUploader {
 
     await this.triggerValidateAndPoll();
   }
+
+
 
   private startValidationPolling() {
     let attempts = 0;

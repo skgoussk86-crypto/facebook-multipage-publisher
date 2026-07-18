@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import VideoUploader from "../components/uploads/video-uploader";
+import { UploadQueueController, QueueItem } from "../lib/uploads/upload-queue-controller";
 
 // Types
 interface FacebookPage {
@@ -237,6 +238,103 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   // PHASE 2: WORKSPACE STATE
   // ==========================================
   const [tempJobsQueue, setTempJobsQueue] = useState<VideoJob[]>([]);
+  const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+  const queueControllerRef = useRef<UploadQueueController | null>(null);
+
+  useEffect(() => {
+    const controller = new UploadQueueController({
+      maxConcurrency: 2,
+      onChange: (items) => {
+        setQueueItems(items);
+        setTempJobsQueue((prev) => {
+          return items.map((item) => {
+            const existing = prev.find((j) => j.id === item.id);
+            const sizeMB = (item.size / (1024 * 1024)).toFixed(1) + " MB";
+            return {
+              id: item.id,
+              fileName: item.filename,
+              fileSize: sizeMB,
+              fileSizeBytes: item.size,
+              durationSeconds: item.durationSeconds || existing?.durationSeconds,
+              uploadProgress: item.progressPercent,
+              pageId: item.pageId || existing?.pageId || "",
+              contentType: item.contentType || existing?.contentType || "VIDEO",
+              englishTitle: item.englishTitle || existing?.englishTitle || item.filename.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " "),
+              englishCaption: item.englishCaption || existing?.englishCaption || "",
+              hashtags: item.hashtags || existing?.hashtags || "",
+              scheduledTimeKolkata: item.scheduledTimeKolkata || existing?.scheduledTimeKolkata || "",
+              scheduledTimeUTC: item.scheduledTimeUTC || existing?.scheduledTimeUTC || "",
+              status: "DRAFT",
+              retryCount: 0,
+              thumbnailMode: item.thumbnailMode || existing?.thumbnailMode || "auto",
+              customThumbnailUrl: item.customThumbnailUrl || existing?.customThumbnailUrl,
+              capturedThumbnailUrl: item.capturedThumbnailUrl || existing?.capturedThumbnailUrl,
+              localVideoUrl: item.localVideoUrl || existing?.localVideoUrl,
+              assetId: item.assetId,
+              uploadValidated: item.status === 'VALIDATED',
+              file: item.file,
+            };
+          });
+        });
+      },
+      onUploadValidated: (itemId, assetId, metadata) => {
+        const durationSeconds = Math.round((metadata.durationMs || 0) / 1000);
+        setTempJobsQueue((prev) =>
+          prev.map((j) =>
+            j.id === itemId
+              ? {
+                  ...j,
+                  assetId,
+                  durationSeconds,
+                  uploadValidated: true,
+                  uploadProgress: 100,
+                }
+              : j
+          )
+        );
+      },
+    });
+
+    queueControllerRef.current = controller;
+    Promise.resolve().then(() => {
+      setQueueItems(controller.getItems());
+    });
+
+    // Restore cards into tempJobsQueue
+    const restored = controller.getItems();
+    if (restored.length > 0) {
+      const initialJobs: VideoJob[] = restored.map((item) => ({
+        id: item.id,
+        fileName: item.filename,
+        fileSize: (item.size / (1024 * 1024)).toFixed(1) + " MB",
+        fileSizeBytes: item.size,
+        durationSeconds: item.durationSeconds,
+        uploadProgress: item.progressPercent,
+        pageId: item.pageId || "",
+        contentType: item.contentType || "VIDEO",
+        englishTitle: item.englishTitle,
+        englishCaption: item.englishCaption,
+        hashtags: item.hashtags,
+        scheduledTimeKolkata: item.scheduledTimeKolkata,
+        scheduledTimeUTC: item.scheduledTimeUTC,
+        status: "DRAFT",
+        retryCount: 0,
+        thumbnailMode: item.thumbnailMode,
+        customThumbnailUrl: item.customThumbnailUrl,
+        capturedThumbnailUrl: item.capturedThumbnailUrl,
+        localVideoUrl: item.localVideoUrl,
+        assetId: item.assetId,
+        uploadValidated: item.status === 'VALIDATED',
+        file: item.file,
+      }));
+      Promise.resolve().then(() => {
+        setTempJobsQueue(initialJobs);
+      });
+    }
+
+    controller.reconcileRestoredItems();
+  }, []);
+
   const [maxFileSizeMB, setMaxFileSizeMB] = useState(500);
   const [fileUploadError, setFileUploadError] = useState<string | null>(null);
 
@@ -373,71 +471,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     setFileUploadError(null);
     const filesArray = Array.from(filesList);
 
-    filesArray.forEach((file) => {
-      const ext = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
-      if (ext !== ".mp4" && ext !== ".mov") {
-        setFileUploadError(`File "${file.name}" rejected: Only MP4 and MOV formats are supported.`);
-        return;
-      }
-
-      const sizeMB = (file.size / (1024 * 1024)).toFixed(1) + " MB";
-      const localUrl = URL.createObjectURL(file);
-
-      let initialAssetId: string | undefined;
-      try {
-        const stored = localStorage.getItem(`upload_asset_${file.name}_${file.size}`);
-        if (stored) {
-          initialAssetId = stored;
-        }
-      } catch {
-        // Ignore
-      }
-
-      // Create a temporary job object with DRAFT status
-      const tempId = "temp-" + Math.random().toString(36).substr(2, 9);
-      const newJob: VideoJob = {
-        id: tempId,
-        fileName: file.name,
-        fileSize: sizeMB,
-        fileSizeBytes: file.size,
-        uploadProgress: 0,
-        pageId: pages[0]?.id || "",
-        contentType: "VIDEO",
-        englishTitle: file.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " "),
-        englishCaption: "",
-        hashtags: "",
-        scheduledTimeKolkata: "",
-        scheduledTimeUTC: "",
-        status: "DRAFT",
-        retryCount: 0,
-        thumbnailMode: "auto",
-        localVideoUrl: localUrl,
-        gcsVideoUri: undefined,
-        file,
-        assetId: initialAssetId,
-        uploadValidated: false,
-      };
-
-      setTempJobsQueue((prev) => [...prev, newJob]);
-
-      // Probe video duration programmatically
-      const videoElement = document.createElement("video");
-      videoElement.src = localUrl;
-      videoElement.onloadedmetadata = () => {
-        setTempJobsQueue((prev) =>
-          prev.map((j) =>
-            j.id === tempId
-              ? {
-                  ...j,
-                  durationSeconds: Math.round(videoElement.duration),
-                }
-              : j
-          )
-        );
-      };
-
-      addSecurityLog("INFO", `Selected local file ${file.name} for persistent R2 multipart upload.`, tempId);
-    });
+    if (queueControllerRef.current) {
+      queueControllerRef.current.addFiles(filesArray, pages[0]?.id || "", maxFileSizeMB);
+    }
   };
 
   // File Picker wrapper
@@ -469,6 +505,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         if (field === "scheduledTimeKolkata") {
           updated.scheduledTimeUTC = convertKolkataToUTC(value as string);
         }
+
+        // Sync with queue controller persistence
+        queueControllerRef.current?.updateJobFields(jobId, {
+          [field]: updated[field]
+        } as unknown as Partial<QueueItem>);
+
         return updated;
       })
     );
@@ -477,6 +519,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   // Delete draft from queue
   const handleDeleteDraft = (id: string) => {
     setTempJobsQueue((prev) => prev.filter((j) => j.id !== id));
+    queueControllerRef.current?.removeItem(id);
   };
 
   // ==========================================
@@ -484,6 +527,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   // ==========================================
   const handleApplyCaptionToAll = () => {
     setTempJobsQueue((prev) => prev.map((j) => ({ ...j, englishCaption: bulkCaption })));
+    tempJobsQueue.forEach((job) => {
+      queueControllerRef.current?.updateJobFields(job.id, { englishCaption: bulkCaption });
+    });
     addSecurityLog("INFO", `Bulk applied caption to all ${tempJobsQueue.length} draft items.`);
   };
 
@@ -492,9 +538,13 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       prev.map((j) => {
         const cleanedJobHash = j.hashtags ? j.hashtags.trim() : "";
         const cleanedBulkHash = bulkHashtags ? bulkHashtags.trim() : "";
+        const finalHashtags = cleanedJobHash ? `${cleanedJobHash} ${cleanedBulkHash}` : cleanedBulkHash;
+
+        queueControllerRef.current?.updateJobFields(j.id, { hashtags: finalHashtags });
+
         return {
           ...j,
-          hashtags: cleanedJobHash ? `${cleanedJobHash} ${cleanedBulkHash}` : cleanedBulkHash,
+          hashtags: finalHashtags,
         };
       })
     );
@@ -503,16 +553,25 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
   const handleReplaceHashtagsToAll = () => {
     setTempJobsQueue((prev) => prev.map((j) => ({ ...j, hashtags: bulkHashtags })));
+    tempJobsQueue.forEach((job) => {
+      queueControllerRef.current?.updateJobFields(job.id, { hashtags: bulkHashtags });
+    });
     addSecurityLog("INFO", `Bulk replaced hashtags on all ${tempJobsQueue.length} draft items.`);
   };
 
   const handleApplyPageToAll = () => {
     setTempJobsQueue((prev) => prev.map((j) => ({ ...j, pageId: bulkPageId })));
+    tempJobsQueue.forEach((job) => {
+      queueControllerRef.current?.updateJobFields(job.id, { pageId: bulkPageId });
+    });
     addSecurityLog("INFO", `Bulk assigned page ID ${bulkPageId} to all ${tempJobsQueue.length} draft items.`);
   };
 
   const handleApplyContentTypeToAll = () => {
     setTempJobsQueue((prev) => prev.map((j) => ({ ...j, contentType: bulkContentType })));
+    tempJobsQueue.forEach((job) => {
+      queueControllerRef.current?.updateJobFields(job.id, { contentType: bulkContentType });
+    });
     addSecurityLog("INFO", `Bulk assigned content type ${bulkContentType} to all ${tempJobsQueue.length} draft items.`);
   };
 
@@ -1049,6 +1108,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       if (res.ok) {
         addSecurityLog("INFO", `Scheduled ${jobsToSave.length} new bulk videos into database state queue.`);
         setTempJobsQueue([]);
+        queueControllerRef.current?.clearAll();
         setIsConfirmationOpen(false);
         await fetchJobs();
         setActiveTab("dashboard");
@@ -1067,6 +1127,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     setJobs([]);
     handleDisconnect();
     setTempJobsQueue([]);
+    queueControllerRef.current?.clearAll();
     setCsvErrors([]);
     setCsvSuccessCount(0);
     setSimulateTokenExpiry(false);
@@ -1888,6 +1949,42 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           {fileUploadError}
                         </div>
                       )}
+
+                      {queueItems.length > 0 && (
+                        <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-4 mt-5 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3 items-center text-center">
+                          <div className="text-xs">
+                            <span className="block text-zinc-500 font-mono uppercase tracking-wider text-[9px]">Total</span>
+                            <span className="text-sm font-extrabold text-zinc-900">{queueItems.length}</span>
+                          </div>
+                          <div className="text-xs">
+                            <span className="block text-zinc-500 font-mono uppercase tracking-wider text-[9px]">Queued</span>
+                            <span className="text-sm font-extrabold text-zinc-750">{queueItems.filter((i) => i.status === 'QUEUED').length}</span>
+                          </div>
+                          <div className="text-xs">
+                            <span className="block text-zinc-500 font-mono uppercase tracking-wider text-[9px]">Uploading</span>
+                            <span className="text-sm font-extrabold text-indigo-600 animate-pulse">{queueItems.filter((i) => ['INITIATING', 'UPLOADING', 'RECONCILING', 'RETRY_WAIT'].includes(i.status)).length}</span>
+                          </div>
+                          <div className="text-xs">
+                            <span className="block text-zinc-500 font-mono uppercase tracking-wider text-[9px]">Validating</span>
+                            <span className="text-sm font-extrabold text-amber-600 animate-pulse">{queueItems.filter((i) => ['COMPLETING', 'VALIDATING'].includes(i.status)).length}</span>
+                          </div>
+                          <div className="text-xs">
+                            <span className="block text-zinc-500 font-mono uppercase tracking-wider text-[9px]">Completed</span>
+                            <span className="text-sm font-extrabold text-emerald-600">{queueItems.filter((i) => i.status === 'VALIDATED').length}</span>
+                          </div>
+                          <div className="text-xs">
+                            <span className="block text-zinc-500 font-mono uppercase tracking-wider text-[9px]">Failed</span>
+                            <span className="text-sm font-extrabold text-rose-600">{queueItems.filter((i) => i.status === 'FAILED').length}</span>
+                          </div>
+                          <div className="text-xs col-span-2 sm:col-span-1 md:col-span-1 border-t sm:border-t-0 md:border-l border-zinc-200 pt-2 sm:pt-0 pl-0 sm:pl-2">
+                            <span className="block text-zinc-500 font-mono uppercase tracking-wider text-[9px] mb-0.5">Concurrency</span>
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 border border-indigo-100 text-indigo-700">
+                              <span className="h-1.5 w-1.5 rounded-full bg-indigo-600 animate-ping"></span>
+                              {queueItems.filter((i) => ['INITIATING', 'UPLOADING', 'RECONCILING', 'COMPLETING', 'VALIDATING'].includes(i.status)).length} of 2 active
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Configuration settings block */}
@@ -2243,44 +2340,58 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             {/* File Preview & Thumbnail Capture Column */}
                             <div className="w-full lg:w-72 flex-shrink-0 flex flex-col gap-4">
 
-                              {job.file ? (
-                                <VideoUploader
-                                  file={job.file}
-                                  initialAssetId={job.assetId}
-                                  recoveryKey={job.id}
-                                  onUploadValidated={(assetId, durationSeconds) => {
-                                    handleUpdateTempJobField(job.id, "assetId", assetId);
-                                    handleUpdateTempJobField(job.id, "durationSeconds", durationSeconds);
-                                    handleUpdateTempJobField(job.id, "uploadValidated", true);
-                                    handleUpdateTempJobField(job.id, "uploadProgress", 100);
-                                  }}
-                                  onRemove={() => handleDeleteDraft(job.id)}
-                                />
-                              ) : (
-                                <>
-                                  {/* Native video preview */}
-                                  {job.localVideoUrl ? (
-                                    <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-200 relative flex items-center justify-center">
-                                      <video
-                                        src={job.localVideoUrl}
-                                        className="h-full w-full object-contain"
-                                        controls
-                                      />
-                                    </div>
-                                  ) : (
-                                    <div className="aspect-video bg-zinc-100 rounded-lg flex items-center justify-center border border-zinc-200 text-zinc-500 text-xs">
-                                      Video Preview Unavailable
-                                    </div>
-                                  )}
+                              {(() => {
+                                const qItem = queueItems.find((q) => q.id === job.id);
+                                return (
+                                  <>
+                                    <VideoUploader
+                                      itemId={job.id}
+                                      filename={job.fileName}
+                                      size={job.fileSizeBytes}
+                                      status={qItem ? qItem.status : 'QUEUED'}
+                                      progressPercent={qItem ? qItem.progressPercent : 0}
+                                      uploadedBytes={qItem ? qItem.uploadedBytes : 0}
+                                      error={qItem?.error}
+                                      metadata={qItem?.metadata}
+                                      onStart={() => {
+                                        if (qItem) {
+                                          queueControllerRef.current?.processQueue();
+                                        }
+                                      }}
+                                      onPause={() => queueControllerRef.current?.pauseUpload(job.id)}
+                                      onResume={() => queueControllerRef.current?.resumeUpload(job.id)}
+                                      onCancel={() => queueControllerRef.current?.cancelUpload(job.id)}
+                                      onRetry={() => queueControllerRef.current?.retryUpload(job.id)}
+                                      onReselectFile={(file) => {
+                                        queueControllerRef.current?.reselectFile(job.id, file);
+                                      }}
+                                      onRemove={() => handleDeleteDraft(job.id)}
+                                    />
 
-                                  <div className="text-xs space-y-1.5 text-zinc-500 font-mono">
-                                    <div className="truncate max-w-[280px]">Original Name: <span className="text-zinc-800">{job.fileName}</span></div>
-                                    <div>Size: <span className="text-zinc-800">{job.fileSize}</span></div>
-                                    <div>Duration: <span className="text-zinc-800">{job.durationSeconds ? `${job.durationSeconds}s` : "Scanning..."}</span></div>
-                                    <div>Language: <span className="text-indigo-600 font-semibold">English (Fixed)</span></div>
-                                  </div>
-                                </>
-                              )}
+                                    {/* Native video preview */}
+                                    {job.localVideoUrl ? (
+                                      <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-200 relative flex items-center justify-center mt-2">
+                                        <video
+                                          src={job.localVideoUrl}
+                                          className="h-full w-full object-contain"
+                                          controls
+                                        />
+                                      </div>
+                                    ) : (
+                                      <div className="aspect-video bg-zinc-100 rounded-lg flex items-center justify-center border border-zinc-200 text-zinc-500 text-xs mt-2">
+                                        Video Preview Unavailable
+                                      </div>
+                                    )}
+
+                                    <div className="text-xs space-y-1.5 text-zinc-500 font-mono">
+                                      <div className="truncate max-w-[280px]">Original Name: <span className="text-zinc-800">{job.fileName}</span></div>
+                                      <div>Size: <span className="text-zinc-800">{job.fileSize}</span></div>
+                                      <div>Duration: <span className="text-zinc-800">{job.durationSeconds ? `${job.durationSeconds}s` : "Scanning..."}</span></div>
+                                      <div>Language: <span className="text-indigo-600 font-semibold">English (Fixed)</span></div>
+                                    </div>
+                                  </>
+                                );
+                              })()}
 
                               {/* Thumbnail Settings */}
                               <div className="border-t border-zinc-200 pt-3.5 space-y-2 text-xs">
