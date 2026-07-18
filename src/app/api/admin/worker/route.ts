@@ -1,20 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAdminSession, verifyAdminRole } from '@/lib/auth';
-import { runQueueWorker, generateWorkerToken } from '@/lib/job-worker';
-import { VideoValidationService } from '@/lib/storage';
+import { generateWorkerToken } from '@/lib/job-worker';
+import { executeWorkerCycle } from '@/lib/worker-runtime';
 
 export type WorkerRouteDependencies = {
   verifyAdminSession: typeof verifyAdminSession;
   verifyAdminRole: typeof verifyAdminRole;
-  runQueueWorker: typeof runQueueWorker;
-  validateOneAsset: typeof VideoValidationService.validateOneAsset;
+  executeWorkerCycle?: typeof executeWorkerCycle;
+  runQueueWorker?: typeof import('@/lib/job-worker').runQueueWorker;
+  validateOneAsset?: typeof import('@/lib/storage').VideoValidationService.validateOneAsset;
 };
 
 const defaultWorkerRouteDependencies: WorkerRouteDependencies = {
   verifyAdminSession,
   verifyAdminRole,
-  runQueueWorker,
-  validateOneAsset: VideoValidationService.validateOneAsset
+  executeWorkerCycle
 };
 
 export async function handleWorkerPost(
@@ -41,19 +41,24 @@ export async function handleWorkerPost(
     }
 
     const workerToken = generateWorkerToken();
-    const logs = await dependencies.runQueueWorker(workerToken);
+    let logs: string[] = [];
 
-    // Call provider-neutral uploaded-video validation task
-    try {
-      const validationResult = await dependencies.validateOneAsset();
-      if (validationResult) {
-        logs.push(`[Asset Validation] Processed asset ${validationResult.assetId}. Success: ${validationResult.success}, Status: ${validationResult.status}`);
-      } else {
-        logs.push(`[Asset Validation] No assets in VALIDATING state require validation.`);
+    if (dependencies.executeWorkerCycle) {
+      const res = await dependencies.executeWorkerCycle(workerToken);
+      logs = res.logs;
+    } else if (dependencies.runQueueWorker && dependencies.validateOneAsset) {
+      logs = await dependencies.runQueueWorker(workerToken);
+      try {
+        const valRes = await dependencies.validateOneAsset();
+        if (valRes) {
+          logs.push(`[Asset Validation] Processed asset ${valRes.assetId}. Success: ${valRes.success}, Status: ${valRes.status}`);
+        } else {
+          logs.push(`[Asset Validation] No assets in VALIDATING state require validation.`);
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logs.push(`[Asset Validation] [ERROR] Validation task failed: ${msg}`);
       }
-    } catch (validationError: unknown) {
-      const msg = validationError instanceof Error ? validationError.message : String(validationError);
-      logs.push(`[Asset Validation] [ERROR] Validation task failed: ${msg}`);
     }
 
     return NextResponse.json({ success: true, logs });

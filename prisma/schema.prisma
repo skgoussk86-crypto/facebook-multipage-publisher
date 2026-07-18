@@ -324,3 +324,18 @@ model GoogleDriveConnection {
   updatedAt              DateTime  @updatedAt @db.Timestamptz
   revokedAt              DateTime? @db.Timestamptz
 }
+
+model WorkerHeartbeat {
+  id                     String    @id @default(uuid()) @db.Uuid
+  workerId               String    @unique @db.VarChar(255)
+  startedAt              DateTime  @db.Timestamptz
+  lastPingAt             DateTime  @db.Timestamptz
+  currentStatus          String    @db.VarChar(50)
+  lastSuccessAt          DateTime? @db.Timestamptz
+  lastFailureAt          DateTime? @db.Timestamptz
+  lastError              String?   @db.Text
+  jobsProcessedLastCycle Int       @default(0) @db.Integer
+  nextPollEstimate       DateTime? @db.Timestamptz
+  createdAt              DateTime  @default(now()) @db.Timestamptz
+  updatedAt              DateTime  @updatedAt @db.Timestamptz
+}
