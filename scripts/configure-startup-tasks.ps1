@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [switch]$DryRun,
     [switch]$EnableTasks
@@ -14,7 +14,7 @@ $ServerLauncher = Join-Path `
 
 $WorkerLauncher = Join-Path `
     $PSScriptRoot `
-    "launch-worker.ps1"
+    "launch-worker-idempotent.ps1"
 
 $EnvPath = Join-Path `
     $ProjectRoot `
