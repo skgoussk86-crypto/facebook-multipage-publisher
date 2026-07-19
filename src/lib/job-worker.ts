@@ -1,4 +1,4 @@
-import { prisma } from './prisma-client';
+﻿import { prisma } from './prisma-client';
 import {
   JobStatus,
   FailureClassification,
@@ -308,133 +308,363 @@ async function processClaimedJob(
         throw new Error('INVALID_ASSET_SIZE');
       }
 
-      log(`[PREPARING] Video metadata validation successful. Initializing Meta upload session...`);
+      const isReel =
+        job.contentType?.toUpperCase() === 'REEL';
 
-      let uploadSessionId = job.providerReference;
+      log(
+        `[PREPARING] Video metadata validation successful. Initializing Meta ${isReel ? 'Reel' : 'video'} upload session...`,
+      );
+
+      let uploadReference = job.providerReference;
       let videoId = job.providerProcessingId;
 
-      const { FacebookPublishingService } = await import('./facebook/facebook-publishing-service');
+      const { FacebookPublishingService } =
+        await import(
+          './facebook/facebook-publishing-service'
+        );
 
-      if (!uploadSessionId || !videoId) {
+      if (!uploadReference || !videoId) {
         try {
-          const startRes = await FacebookPublishingService.startUploadSession(page.facebookPageId, pageToken, fileSize);
-          uploadSessionId = startRes.uploadSessionId;
-          videoId = startRes.videoId;
+          if (isReel) {
+            const startResult =
+              await FacebookPublishingService.startReelUploadSession(
+                pageToken,
+              );
+
+            uploadReference =
+              startResult.uploadUrl;
+            videoId = startResult.videoId;
+          } else {
+            const startResult =
+              await FacebookPublishingService.startUploadSession(
+                page.facebookPageId,
+                pageToken,
+                fileSize,
+              );
+
+            uploadReference =
+              startResult.uploadSessionId;
+            videoId = startResult.videoId;
+          }
 
           await prisma.$transaction(async (tx) => {
-            await transitionJobState(tx, job.id, workerUuid, JobStatus.UPLOADING_TO_META, job.userId!, {
-              providerReference: uploadSessionId,
-              providerProcessingId: videoId
-            });
+            await transitionJobState(
+              tx,
+              job.id,
+              workerUuid,
+              JobStatus.UPLOADING_TO_META,
+              job.userId!,
+              {
+                providerReference: uploadReference,
+                providerProcessingId: videoId,
+              },
+            );
           });
-          log(`[UPLOADING_TO_META] Initiated session: ${uploadSessionId}, Video ID: ${videoId}`);
+
+          log(
+            `[UPLOADING_TO_META] Initiated ${isReel ? 'Reel' : 'video'} upload. Video ID: ${videoId}`,
+          );
         } catch (err: unknown) {
           const error = err as Error;
-          if (error.message?.includes('META_AUTH_ERROR') || error.message?.includes('OAuth') || error.message?.includes('token')) {
-            await prisma.$transaction(async (tx) => {
-              await tx.facebookPage.updateMany({
-                where: { accountId: page.accountId },
-                data: { isSynced: false }
-              });
-              await transitionJobState(tx, job.id, workerUuid, JobStatus.FACEBOOK_RECONNECT_REQUIRED, job.userId!, {
-                failedAt: new Date(),
-                lastErrorCode: 'REVOKED_TOKEN',
-                lastErrorMessage: error.message,
-                failureClassification: FailureClassification.REVOKED_TOKEN
-              });
-            });
+
+          if (
+            error.message?.includes(
+              'META_AUTH_ERROR',
+            ) ||
+            error.message?.includes('OAuth') ||
+            error.message?.includes('token')
+          ) {
+            await prisma.$transaction(
+              async (tx) => {
+                await tx.facebookPage.updateMany({
+                  where: {
+                    accountId: page.accountId,
+                  },
+                  data: {
+                    isSynced: false,
+                  },
+                });
+
+                await transitionJobState(
+                  tx,
+                  job.id,
+                  workerUuid,
+                  JobStatus.FACEBOOK_RECONNECT_REQUIRED,
+                  job.userId!,
+                  {
+                    failedAt: new Date(),
+                    lastErrorCode: 'REVOKED_TOKEN',
+                    lastErrorMessage:
+                      error.message,
+                    failureClassification:
+                      FailureClassification.REVOKED_TOKEN,
+                  },
+                );
+              },
+            );
+
             return;
           }
+
           throw err;
         }
       } else {
-        log(`[UPLOADING_TO_META] Resuming existing upload session: ${uploadSessionId}`);
-        if (job.status !== JobStatus.UPLOADING_TO_META) {
-          await prisma.$transaction(async (tx) => {
-            await transitionJobState(tx, job.id, workerUuid, JobStatus.UPLOADING_TO_META, job.userId!, {
-              providerReference: uploadSessionId,
-              providerProcessingId: videoId
-            });
-          });
-        }
-      }
-
-      log(`[UPLOADING_TO_META] Retrieving download stream from ${asset.provider}...`);
-      let mediaStream: Readable;
-      if (asset.provider === 'GOOGLE_DRIVE') {
-        const { GoogleDriveMediaReader } = await import('./google-drive/google-drive-media-reader');
-        try {
-          mediaStream = await GoogleDriveMediaReader.getDownloadStream(job.userId, asset);
-        } catch (err: unknown) {
-          const error = err as Error;
-          if (error.message === 'GOOGLE_DRIVE_CONNECTION_REVOKED') {
-            await prisma.$transaction(async (tx) => {
-              await transitionJobState(tx, job.id, workerUuid, JobStatus.FAILED_PERMANENT, job.userId!, {
-                failedAt: new Date(),
-                lastErrorCode: 'GOOGLE_DRIVE_CONNECTION_REVOKED',
-                lastErrorMessage: 'Google Drive refresh token is missing or has been revoked.',
-                failureClassification: FailureClassification.REVOKED_TOKEN
-              });
-            });
-            return;
-          }
-          if (error.message === 'GOOGLE_DRIVE_FILE_NOT_FOUND') {
-            await prisma.$transaction(async (tx) => {
-              await transitionJobState(tx, job.id, workerUuid, JobStatus.FAILED_PERMANENT, job.userId!, {
-                failedAt: new Date(),
-                lastErrorCode: 'GOOGLE_DRIVE_FILE_NOT_FOUND',
-                lastErrorMessage: 'The linked Google Drive file was not found (404) or was trashed.',
-                failureClassification: FailureClassification.INVALID_MEDIA
-              });
-            });
-            return;
-          }
-          throw error;
-        }
-      } else if (asset.provider === 'R2' || asset.provider === 'GCS') {
-        const { getStorageAdapter } = await import('./storage');
-        const adapter = getStorageAdapter();
-        mediaStream = await adapter.createReadStream(asset.bucket, asset.objectKey);
-      } else {
-        throw new Error(`UNSUPPORTED_PROVIDER: ${asset.provider}`);
-      }
-
-      log(`[UPLOADING_TO_META] Commencing transfer loop of 4MB chunks to Meta...`);
-      const CHUNK_SIZE = 4 * 1024 * 1024;
-      let startOffset = 0;
-
-      try {
-        while (true) {
-          const chunk = await readChunkFromStream(mediaStream, CHUNK_SIZE);
-          if (!chunk) {
-            break;
-          }
-          log(`[UPLOADING_TO_META] Uploading chunk: bytes ${startOffset}-${startOffset + chunk.length - 1}/${fileSize}`);
-          await FacebookPublishingService.uploadChunk(page.facebookPageId, pageToken, uploadSessionId!, startOffset, chunk);
-          startOffset += chunk.length;
-        }
-        log(`[UPLOADING_TO_META] Chunks transfer completed. Finalizing Meta upload session...`);
-        mediaStream.destroy();
-
-        await FacebookPublishingService.finishUploadSession(
-          page.facebookPageId,
-          pageToken,
-          uploadSessionId!,
-          job.englishTitle,
-          job.englishCaption,
-          job.hashtags
+        log(
+          `[UPLOADING_TO_META] Resuming existing ${isReel ? 'Reel' : 'video'} upload for Video ID: ${videoId}`,
         );
 
-        const nextPollTime = new Date(Date.now() + 10 * 1000);
-        await prisma.$transaction(async (tx) => {
-          await transitionJobState(tx, job.id, workerUuid, JobStatus.META_PROCESSING, job.userId!, {
-            nextAttemptAt: nextPollTime
-          });
-        });
-        log(`[META_PROCESSING] Video processing initialized on Meta under Video ID: ${videoId}. Resuming check at ${nextPollTime.toISOString()}`);
-      } catch (err: unknown) {
-        mediaStream.destroy();
-        throw err;
+        if (
+          job.status !==
+          JobStatus.UPLOADING_TO_META
+        ) {
+          await prisma.$transaction(
+            async (tx) => {
+              await transitionJobState(
+                tx,
+                job.id,
+                workerUuid,
+                JobStatus.UPLOADING_TO_META,
+                job.userId!,
+                {
+                  providerReference:
+                    uploadReference,
+                  providerProcessingId:
+                    videoId,
+                },
+              );
+            },
+          );
+        }
+      }
+
+      log(
+        `[UPLOADING_TO_META] Retrieving download stream from ${asset.provider}...`,
+      );
+
+      let mediaStream: Readable;
+
+      if (asset.provider === 'GOOGLE_DRIVE') {
+        const { GoogleDriveMediaReader } =
+          await import(
+            './google-drive/google-drive-media-reader'
+          );
+
+        try {
+          mediaStream =
+            await GoogleDriveMediaReader.getDownloadStream(
+              job.userId,
+              asset,
+            );
+        } catch (err: unknown) {
+          const error = err as Error;
+
+          if (
+            error.message ===
+            'GOOGLE_DRIVE_CONNECTION_REVOKED'
+          ) {
+            await prisma.$transaction(
+              async (tx) => {
+                await transitionJobState(
+                  tx,
+                  job.id,
+                  workerUuid,
+                  JobStatus.FAILED_PERMANENT,
+                  job.userId!,
+                  {
+                    failedAt: new Date(),
+                    lastErrorCode:
+                      'GOOGLE_DRIVE_CONNECTION_REVOKED',
+                    lastErrorMessage:
+                      'Google Drive refresh token is missing or has been revoked.',
+                    failureClassification:
+                      FailureClassification.REVOKED_TOKEN,
+                  },
+                );
+              },
+            );
+
+            return;
+          }
+
+          if (
+            error.message ===
+            'GOOGLE_DRIVE_FILE_NOT_FOUND'
+          ) {
+            await prisma.$transaction(
+              async (tx) => {
+                await transitionJobState(
+                  tx,
+                  job.id,
+                  workerUuid,
+                  JobStatus.FAILED_PERMANENT,
+                  job.userId!,
+                  {
+                    failedAt: new Date(),
+                    lastErrorCode:
+                      'GOOGLE_DRIVE_FILE_NOT_FOUND',
+                    lastErrorMessage:
+                      'The linked Google Drive file was not found (404) or was trashed.',
+                    failureClassification:
+                      FailureClassification.INVALID_MEDIA,
+                  },
+                );
+              },
+            );
+
+            return;
+          }
+
+          throw error;
+        }
+      } else if (
+        asset.provider === 'R2' ||
+        asset.provider === 'GCS'
+      ) {
+        const { getStorageAdapter } =
+          await import('./storage');
+
+        const adapter = getStorageAdapter();
+
+        mediaStream =
+          await adapter.createReadStream(
+            asset.bucket,
+            asset.objectKey,
+          );
+      } else {
+        throw new Error(
+          `UNSUPPORTED_PROVIDER: ${asset.provider}`,
+        );
+      }
+
+      if (isReel) {
+        try {
+          log(
+            `[UPLOADING_TO_META] Streaming the Reel binary to Meta...`,
+          );
+
+          await FacebookPublishingService.uploadReelMedia(
+            uploadReference!,
+            pageToken,
+            fileSize,
+            mediaStream,
+          );
+
+          mediaStream.destroy();
+
+          log(
+            `[UPLOADING_TO_META] Reel transfer completed. Publishing Reel...`,
+          );
+
+          await FacebookPublishingService.finishReelUploadSession(
+            pageToken,
+            videoId!,
+            job.englishTitle,
+            job.englishCaption,
+            job.hashtags,
+          );
+
+          const nextPollTime = new Date(
+            Date.now() + 10 * 1000,
+          );
+
+          await prisma.$transaction(
+            async (tx) => {
+              await transitionJobState(
+                tx,
+                job.id,
+                workerUuid,
+                JobStatus.META_PROCESSING,
+                job.userId!,
+                {
+                  nextAttemptAt: nextPollTime,
+                },
+              );
+            },
+          );
+
+          log(
+            `[META_PROCESSING] Reel publishing initialized under Meta Video ID: ${videoId}. Resuming check at ${nextPollTime.toISOString()}`,
+          );
+        } catch (err: unknown) {
+          mediaStream.destroy();
+          throw err;
+        }
+      } else {
+        log(
+          `[UPLOADING_TO_META] Commencing transfer loop of 4MB chunks to Meta...`,
+        );
+
+        const CHUNK_SIZE = 4 * 1024 * 1024;
+        let startOffset = 0;
+
+        try {
+          while (true) {
+            const chunk =
+              await readChunkFromStream(
+                mediaStream,
+                CHUNK_SIZE,
+              );
+
+            if (!chunk) {
+              break;
+            }
+
+            log(
+              `[UPLOADING_TO_META] Uploading chunk: bytes ${startOffset}-${startOffset + chunk.length - 1}/${fileSize}`,
+            );
+
+            await FacebookPublishingService.uploadChunk(
+              page.facebookPageId,
+              pageToken,
+              uploadReference!,
+              startOffset,
+              chunk,
+            );
+
+            startOffset += chunk.length;
+          }
+
+          log(
+            `[UPLOADING_TO_META] Chunks transfer completed. Finalizing Meta upload session...`,
+          );
+
+          mediaStream.destroy();
+
+          await FacebookPublishingService.finishUploadSession(
+            page.facebookPageId,
+            pageToken,
+            uploadReference!,
+            job.englishTitle,
+            job.englishCaption,
+            job.hashtags,
+          );
+
+          const nextPollTime = new Date(
+            Date.now() + 10 * 1000,
+          );
+
+          await prisma.$transaction(
+            async (tx) => {
+              await transitionJobState(
+                tx,
+                job.id,
+                workerUuid,
+                JobStatus.META_PROCESSING,
+                job.userId!,
+                {
+                  nextAttemptAt: nextPollTime,
+                },
+              );
+            },
+          );
+
+          log(
+            `[META_PROCESSING] Video processing initialized on Meta under Video ID: ${videoId}. Resuming check at ${nextPollTime.toISOString()}`,
+          );
+        } catch (err: unknown) {
+          mediaStream.destroy();
+          throw err;
+        }
       }
     } else {
       // Mock Publishing scenario flow
