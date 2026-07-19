@@ -10,7 +10,7 @@ import { executeWorkerCycle, startWorkerDaemon, parseIntegerEnv, WorkerControlle
 import { prisma } from '../src/lib/prisma-client';
 import { handleHealthGet } from '../src/app/api/admin/worker/health/route';
 import { NextRequest } from 'next/server';
-import { sanitizeErrorMessage } from '../src/lib/worker-health';
+import { sanitizeErrorMessage, updateWorkerHeartbeat } from '../src/lib/worker-health';
 
 const dbUrl = process.env.DATABASE_URL || '';
 let dbName = '';
@@ -378,33 +378,225 @@ async function runTests() {
   assert(updatedFuture?.status === JobStatus.SCHEDULED, 'Future job remains scheduled');
 
   // ==========================================
-  // Test 5: Daemon start and graceful shutdown (Idle state)
+  // Test 5: Daemon start and graceful shutdown (Comprehensive Race-Safety and Idempotency)
   // ==========================================
-  console.log('Test 5: Daemon start and graceful shutdown...');
-  const daemonWorkerId = randomUUID();
-  const controller = startWorkerDaemon({
-    workerId: daemonWorkerId,
-    pollIntervalMs: 5000,
-    errorBackoffMs: 10000,
+  console.log('Test 5: Daemon start and graceful shutdown (Comprehensive)...');
+
+  // Helper function to wait for heartbeat status in DB
+  const waitForStatus = async (workerId: string, allowedStatuses: string[], timeoutMs = 5000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const hb = await prisma.workerHeartbeat.findUnique({ where: { workerId } });
+      if (hb && allowedStatuses.includes(hb.currentStatus)) {
+        return hb;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const finalHb = await prisma.workerHeartbeat.findUnique({ where: { workerId } });
+    throw new Error(`Timeout waiting for status ${allowedStatuses.join('/')}. Current status: ${finalHb?.currentStatus}`);
+  };
+
+  // Test 5.1: Repository explicit null update verification
+  console.log('  Subtest 5.1: Repository update with explicit null / undefined...');
+  const repoTestWorkerId = randomUUID();
+  await updateWorkerHeartbeat({
+    workerId: repoTestWorkerId,
+    startedAt: new Date(),
+    currentStatus: 'IDLE',
+    nextPollEstimate: new Date(Date.now() + 60000),
+    lastError: 'test-error-string'
+  });
+
+  const repoHb1 = await prisma.workerHeartbeat.findUnique({ where: { workerId: repoTestWorkerId } });
+  assert(repoHb1?.nextPollEstimate !== null, 'nextPollEstimate should be set');
+  assert(repoHb1?.lastError === 'test-error-string', 'lastError should be set');
+
+  // Update using explicit null to clear nextPollEstimate and lastError
+  await updateWorkerHeartbeat({
+    workerId: repoTestWorkerId,
+    startedAt: new Date(),
+    currentStatus: 'STOPPING',
+    nextPollEstimate: null,
+    lastError: null
+  });
+
+  const repoHb2 = await prisma.workerHeartbeat.findUnique({ where: { workerId: repoTestWorkerId } });
+  assert(repoHb2?.nextPollEstimate === null, 'STOPPING must clear nextPollEstimate (null)');
+  assert(repoHb2?.lastError === null, 'STOPPING must clear lastError (null)');
+
+  // Update using undefined to verify fields are NOT modified
+  await updateWorkerHeartbeat({
+    workerId: repoTestWorkerId,
+    startedAt: new Date(),
+    currentStatus: 'RUNNING'
+    // nextPollEstimate and lastError omitted (undefined)
+  });
+
+  const repoHb3 = await prisma.workerHeartbeat.findUnique({ where: { workerId: repoTestWorkerId } });
+  assert(repoHb3?.currentStatus === 'RUNNING', 'currentStatus should be updated');
+  assert(repoHb3?.nextPollEstimate === null, 'nextPollEstimate should remain null');
+  assert(repoHb3?.lastError === null, 'lastError should remain null');
+
+  // Test 5.2: Case A - Shutdown after a successful IDLE cycle
+  console.log('  Subtest 5.2: Case A - Shutdown after a successful IDLE cycle...');
+  const workerAId = randomUUID();
+  const controllerA = startWorkerDaemon({
+    workerId: workerAId,
+    pollIntervalMs: 500,
+    errorBackoffMs: 2000,
     registerSignals: false
   });
 
-  // Yield to allow the asynchronous heartbeat registration to execute in the event loop
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  // Wait for the daemon to run at least one successful cycle and enter IDLE state
+  const hbAIdle = await waitForStatus(workerAId, ['IDLE']);
+  assert(hbAIdle.lastSuccessAt !== null, 'lastSuccessAt must be set');
+  assert(hbAIdle.nextPollEstimate !== null, 'nextPollEstimate must be set to a future time');
+  const prevSuccessAt = hbAIdle.lastSuccessAt;
 
-  // Verify it created the heartbeat entry
-  const activeHeartbeat = await prisma.workerHeartbeat.findUnique({ where: { workerId: daemonWorkerId } });
-  assert(activeHeartbeat !== null, 'Should record status in DB during runtime');
+  // Trigger shutdown
+  await controllerA.shutdown();
+  await controllerA.completionPromise;
 
-  // Trigger graceful shutdown immediately
-  await controller.shutdown();
-  await controller.completionPromise;
+  const hbAShutdown = await prisma.workerHeartbeat.findUnique({ where: { workerId: workerAId } });
+  assert(hbAShutdown?.currentStatus === 'STOPPED', 'Final status must be STOPPED');
+  assert(hbAShutdown?.nextPollEstimate === null, 'STOPPED heartbeat must not have next poll estimate');
+  assert(hbAShutdown?.lastSuccessAt !== null && hbAShutdown?.lastSuccessAt !== undefined, 'lastSuccessAt must be preserved');
+  assert(prevSuccessAt !== null && hbAShutdown!.lastSuccessAt!.getTime() === prevSuccessAt.getTime(), 'lastSuccessAt value must remain unchanged');
+  assert(hbAShutdown?.lastError === null, 'lastError must be null');
 
-  const shutHeartbeat = await prisma.workerHeartbeat.findUnique({ where: { workerId: daemonWorkerId } });
-  assert(shutHeartbeat?.currentStatus === 'STOPPED', 'Should record STOPPED status on loop exit');
+  // Test 5.3: Case B - Shutdown while sleeping between polls (interrupt safety)
+  console.log('  Subtest 5.3: Case B - Shutdown while sleeping between polls...');
+  const workerBId = randomUUID();
+  const controllerB = startWorkerDaemon({
+    workerId: workerBId,
+    pollIntervalMs: 10000, // Very long sleep
+    errorBackoffMs: 20000,
+    registerSignals: false
+  });
 
-  // Repeated shutdown request is idempotent
-  await controller.shutdown();
+  // Wait for daemon to finish first cycle and enter IDLE sleep
+  await waitForStatus(workerBId, ['IDLE']);
+
+  const shutdownStartB = Date.now();
+  await controllerB.shutdown();
+  await controllerB.completionPromise;
+  const shutdownDurationB = Date.now() - shutdownStartB;
+
+  console.log(`    Shutdown during sleep took ${shutdownDurationB}ms`);
+  assert(shutdownDurationB < 2000, 'Sleep must be interrupted promptly');
+  const hbBShutdown = await prisma.workerHeartbeat.findUnique({ where: { workerId: workerBId } });
+  assert(hbBShutdown?.currentStatus === 'STOPPED', 'Final status must be STOPPED');
+  assert(hbBShutdown?.nextPollEstimate === null, 'nextPollEstimate must be null');
+
+  // Test 5.4: Case C - Shutdown during an active cycle (race safety)
+  console.log('  Subtest 5.4: Case C - Shutdown during active cycle...');
+  const { VideoValidationService: serviceC } = await import('../src/lib/storage/video-validation-service');
+  const originalValidateOneAssetC = serviceC.validateOneAsset;
+  serviceC.validateOneAsset = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return null;
+  };
+
+  const workerCId = randomUUID();
+  const controllerC = startWorkerDaemon({
+    workerId: workerCId,
+    pollIntervalMs: 1000,
+    errorBackoffMs: 2000,
+    registerSignals: false
+  });
+
+  try {
+    // Wait for it to start running
+    await waitForStatus(workerCId, ['RUNNING']);
+
+    // We request shutdown concurrently while running
+    const shutdownPromiseC = controllerC.shutdown();
+
+    // Wait for shutdown and completion to resolve
+    await shutdownPromiseC;
+    await controllerC.completionPromise;
+  } finally {
+    serviceC.validateOneAsset = originalValidateOneAssetC;
+  }
+
+  const hbCShutdown = await prisma.workerHeartbeat.findUnique({ where: { workerId: workerCId } });
+  assert(hbCShutdown?.currentStatus === 'STOPPED', 'Final status must be STOPPED');
+  assert(hbCShutdown?.nextPollEstimate === null, 'nextPollEstimate must be null');
+
+  // Wait a short time to verify no deferred heartbeat writes to DB can change STOPPED back to IDLE
+  await new Promise((r) => setTimeout(r, 600));
+  const hbCShutdownAfterDelay = await prisma.workerHeartbeat.findUnique({ where: { workerId: workerCId } });
+  assert(hbCShutdownAfterDelay?.currentStatus === 'STOPPED', 'No delayed heartbeat changes STOPPED back to IDLE');
+  assert(hbCShutdownAfterDelay?.nextPollEstimate === null, 'nextPollEstimate must remain null');
+
+  // Test 5.5: Case D - Repeated shutdown calls (idempotence)
+  console.log('  Subtest 5.5: Case D - Repeated shutdown calls...');
+  const workerCaseDId = randomUUID();
+  const controllerCaseD = startWorkerDaemon({
+    workerId: workerCaseDId,
+    pollIntervalMs: 500,
+    errorBackoffMs: 1000,
+    registerSignals: false
+  });
+
+  await waitForStatus(workerCaseDId, ['IDLE', 'RUNNING']);
+  await controllerCaseD.shutdown();
+  await controllerCaseD.completionPromise;
+
+  // Verify first shutdown
+  const hbD1 = await prisma.workerHeartbeat.findUnique({ where: { workerId: workerCaseDId } });
+  assert(hbD1?.currentStatus === 'STOPPED', 'Status must be STOPPED');
+  assert(hbD1?.nextPollEstimate === null, 'nextPollEstimate must be null');
+
+  // Call shutdown again
+  let repeatedThrew = false;
+  try {
+    await controllerCaseD.shutdown();
+  } catch {
+    repeatedThrew = true;
+  }
+  assert(!repeatedThrew, 'Repeated shutdown calls must not throw any exception');
+
+  const hbD2 = await prisma.workerHeartbeat.findUnique({ where: { workerId: workerCaseDId } });
+  assert(hbD2?.currentStatus === 'STOPPED', 'Status must remain STOPPED');
+  assert(hbD2?.nextPollEstimate === null, 'nextPollEstimate must remain null');
+
+  // Test 5.6: Case E - Shutdown after BACKING_OFF
+  console.log('  Subtest 5.6: Case E - Shutdown after BACKING_OFF...');
+  const workerEId = randomUUID();
+
+  // Temporarily force failure inside findMany to trigger error/backing off
+  const originalFindManyE = prisma.videoJob.findMany;
+  const mockVideoJobE = prisma.videoJob as unknown as { findMany: unknown };
+  mockVideoJobE.findMany = () => {
+    throw new Error('Forced backing off test failure');
+  };
+
+  const controllerE = startWorkerDaemon({
+    workerId: workerEId,
+    pollIntervalMs: 500,
+    errorBackoffMs: 2000,
+    registerSignals: false
+  });
+
+  try {
+    const hbEBackingOff = await waitForStatus(workerEId, ['BACKING_OFF']);
+    assert(hbEBackingOff.lastFailureAt !== null, 'lastFailureAt must be set');
+    assert(hbEBackingOff.lastError !== null, 'lastError must be set');
+    const prevFailureAt = hbEBackingOff.lastFailureAt;
+
+    await controllerE.shutdown();
+    await controllerE.completionPromise;
+
+    const hbEShutdown = await prisma.workerHeartbeat.findUnique({ where: { workerId: workerEId } });
+    assert(hbEShutdown?.currentStatus === 'STOPPED', 'Final status must be STOPPED');
+    assert(hbEShutdown?.nextPollEstimate === null, 'nextPollEstimate must be null');
+    assert(hbEShutdown?.lastFailureAt !== null && hbEShutdown?.lastFailureAt !== undefined, 'lastFailureAt must be preserved');
+    assert(prevFailureAt !== null && hbEShutdown!.lastFailureAt!.getTime() === prevFailureAt.getTime(), 'lastFailureAt value must remain unchanged');
+    assert(hbEShutdown?.lastError === null, 'Successful shutdown must set lastError: null');
+  } finally {
+    mockVideoJobE.findMany = originalFindManyE;
+  }
 
   // ==========================================
   // Test 6: Health API endpoint security & take: 50 limit
@@ -490,7 +682,7 @@ async function runTests() {
   const childHeartbeats = await prisma.workerHeartbeat.findMany({
     where: {
       currentStatus: 'RUNNING',
-      workerId: { notIn: [workerId, daemonWorkerId] }
+      workerId: { notIn: [workerId, workerAId, workerBId, workerCId, workerCaseDId, workerEId, repoTestWorkerId] }
     }
   });
   assert(childHeartbeats.length === 0, 'No active running heartbeats should be registered');

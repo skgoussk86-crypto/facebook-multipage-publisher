@@ -50,7 +50,7 @@ export async function updateWorkerHeartbeat(params: {
   }
 
   if (params.lastError !== undefined) {
-    updateData.lastError = sanitizeErrorMessage(params.lastError);
+    updateData.lastError = params.lastError === null ? null : sanitizeErrorMessage(params.lastError);
   }
 
   try {

@@ -136,6 +136,7 @@ export function startWorkerDaemon(params: {
   console.log(`[Worker] Starting background worker daemon. Worker ID: ${params.workerId}`);
   console.log(`[Worker] Poll Interval: ${pollInterval}ms, Error Backoff: ${errorBackoff}ms`);
 
+  const daemonStartedAt = new Date();
   let loopShutdownRequested = false;
   let loopIsProcessing = false;
   let loopTimeoutId: NodeJS.Timeout | null = null;
@@ -153,8 +154,9 @@ export function startWorkerDaemon(params: {
     try {
       await updateWorkerHeartbeat({
         workerId: params.workerId,
-        startedAt: new Date(),
+        startedAt: daemonStartedAt,
         currentStatus: 'STOPPING',
+        nextPollEstimate: null,
       });
     } catch (e) {
       console.error('[Worker] Failed to write STOPPING heartbeat status:', e);
@@ -179,8 +181,10 @@ export function startWorkerDaemon(params: {
     try {
       await updateWorkerHeartbeat({
         workerId: params.workerId,
-        startedAt: new Date(),
+        startedAt: daemonStartedAt,
         currentStatus: 'STOPPED',
+        nextPollEstimate: null,
+        lastError: null,
       });
     } catch (e) {
       console.error('[Worker] Failed to write STOPPED heartbeat status:', e);
@@ -200,24 +204,52 @@ export function startWorkerDaemon(params: {
   };
 
   const completionPromise = (async () => {
+    let lastCycleHadError = false;
+
     while (!loopShutdownRequested) {
       const cycleStart = new Date();
       loopIsProcessing = true;
-      let hasError = false;
 
-      let cycleErrorMsg: string | null = null;
-      // Update heartbeat to RUNNING is handled by executeWorkerCycle
-      activeCyclePromise = executeWorkerCycle(params.workerId, cycleStart, { updateFinalHeartbeat: false })
-        .then((res) => {
+      activeCyclePromise = (async () => {
+        let hasError = false;
+        let cycleErrorMsg: string | null = null;
+
+        try {
+          // Update heartbeat to RUNNING is handled by executeWorkerCycle
+          const res = await executeWorkerCycle(params.workerId, cycleStart, { updateFinalHeartbeat: false });
           if (res.processedCount > 0) {
             console.log(`[Worker] Tick completed. Processed ${res.processedCount} items.`);
           }
-        })
-        .catch((err) => {
+        } catch (err) {
           console.error('[Worker] Cycle execution failed:', err);
           hasError = true;
           cycleErrorMsg = err instanceof Error ? err.message : String(err);
-        });
+        }
+
+        lastCycleHadError = hasError;
+
+        if (loopShutdownRequested) {
+          return;
+        }
+
+        // Calculate next tick timing and write next status
+        const nextDelay = hasError ? errorBackoff : pollInterval;
+        const nextPollEstimate = new Date(Date.now() + nextDelay);
+        const statusAfterCycle = hasError ? 'BACKING_OFF' : 'IDLE';
+
+        try {
+          await updateWorkerHeartbeat({
+            workerId: params.workerId,
+            startedAt: cycleStart,
+            currentStatus: statusAfterCycle,
+            success: !hasError,
+            nextPollEstimate,
+            lastError: hasError ? cycleErrorMsg : null,
+          });
+        } catch (e) {
+          console.error('[Worker] Failed to write cycle completion heartbeat:', e);
+        }
+      })();
 
       await activeCyclePromise;
       activeCyclePromise = null;
@@ -227,19 +259,7 @@ export function startWorkerDaemon(params: {
         break;
       }
 
-      // Calculate next tick timing and write next status
-      const nextDelay = hasError ? errorBackoff : pollInterval;
-      const nextPollEstimate = new Date(Date.now() + nextDelay);
-      const statusAfterCycle = hasError ? 'BACKING_OFF' : 'IDLE';
-
-      await updateWorkerHeartbeat({
-        workerId: params.workerId,
-        startedAt: cycleStart,
-        currentStatus: statusAfterCycle,
-        success: !hasError,
-        nextPollEstimate,
-        lastError: hasError ? cycleErrorMsg : null,
-      });
+      const nextDelay = lastCycleHadError ? errorBackoff : pollInterval;
 
       // Sleep safely until next cycle or interrupted by shutdown
       await new Promise<void>((resolve) => {
