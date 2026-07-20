@@ -79,6 +79,22 @@ export interface PersistStoredThumbnailAssetResult {
   readonly isReused: boolean;
 }
 
+export interface ThumbnailRequestIdentityInput {
+  readonly sourceUploadAssetId: string;
+  readonly source: GoogleDriveThumbnailSource;
+  readonly timestampMs: number | null;
+}
+
+export interface ThumbnailRequestIdentity {
+  readonly idempotencyKey: string;
+  readonly requestFingerprint: string;
+}
+
+export interface FindPersistedThumbnailAssetInput
+  extends ThumbnailRequestIdentityInput {
+  readonly ownerUserId: string;
+}
+
 function requireNonEmpty(
   value: string,
   name: string,
@@ -150,29 +166,38 @@ function validateSourceAndTimestamp(
   }
 }
 
-function createRequestFingerprint(
-  input: {
-    readonly sourceUploadAssetId: string;
-    readonly mimeType: string;
-    readonly sizeBytes: number;
-    readonly checksum: string;
-    readonly source: GoogleDriveThumbnailSource;
-    readonly timestampMs: number | null;
-  },
-): string {
-  const canonical = JSON.stringify({
-    sourceUploadAssetId:
+export function createThumbnailRequestIdentity(
+  input: ThumbnailRequestIdentityInput,
+): ThumbnailRequestIdentity {
+  const sourceUploadAssetId =
+    requireNonEmpty(
       input.sourceUploadAssetId,
-    mimeType: input.mimeType,
-    sizeBytes: input.sizeBytes,
-    checksum: input.checksum,
+      "Source upload asset ID",
+      255,
+    );
+
+  validateSourceAndTimestamp(
+    input.source,
+    input.timestampMs,
+  );
+
+  const canonical = JSON.stringify({
+    version: 1,
+    sourceUploadAssetId,
     source: input.source,
     timestampMs: input.timestampMs,
   });
 
-  return createHash("sha256")
-    .update(canonical, "utf8")
-    .digest("hex");
+  const requestFingerprint =
+    createHash("sha256")
+      .update(canonical, "utf8")
+      .digest("hex");
+
+  return {
+    requestFingerprint,
+    idempotencyKey:
+      `thumbnail:v1:${requestFingerprint}`,
+  };
 }
 
 function isUniqueConstraintError(
@@ -260,6 +285,92 @@ async function getDefaultPersistence():
       });
     },
   };
+}
+
+export async function findPersistedThumbnailAssetByRequest(
+  input: FindPersistedThumbnailAssetInput,
+  persistence?: ThumbnailAssetPersistence,
+): Promise<ThumbnailAssetRecord | null> {
+  const ownerUserId =
+    requireNonEmpty(
+      input.ownerUserId,
+      "Owner user ID",
+      255,
+    );
+
+  const sourceUploadAssetId =
+    requireNonEmpty(
+      input.sourceUploadAssetId,
+      "Source upload asset ID",
+      255,
+    );
+
+  const identity =
+    createThumbnailRequestIdentity({
+      sourceUploadAssetId,
+      source: input.source,
+      timestampMs: input.timestampMs,
+    });
+
+  const activePersistence =
+    persistence ??
+    await getDefaultPersistence();
+
+  const sourceAsset =
+    await activePersistence
+      .findValidatedOwnedSourceAsset(
+        ownerUserId,
+        sourceUploadAssetId,
+      );
+
+  if (!sourceAsset) {
+    throw new Error(
+      "Validated owned source upload asset was not found.",
+    );
+  }
+
+  if (
+    sourceAsset.id !== sourceUploadAssetId ||
+    sourceAsset.userId !== ownerUserId ||
+    sourceAsset.status !== "VALIDATED" ||
+    sourceAsset.objectDeletedAt !== null
+  ) {
+    throw new Error(
+      "Source upload asset ownership or state is invalid.",
+    );
+  }
+
+  const existing =
+    await activePersistence
+      .findByOwnerAndIdempotencyKey(
+        ownerUserId,
+        identity.idempotencyKey,
+      );
+
+  if (!existing) {
+    return null;
+  }
+
+  if (existing.deletedAt !== null) {
+    throw new Error("THUMBNAIL_ASSET_DELETED");
+  }
+
+  if (
+    existing.userId !== ownerUserId ||
+    existing.sourceUploadAssetId !==
+      sourceUploadAssetId ||
+    existing.source !== input.source ||
+    existing.timestampMs !==
+      input.timestampMs ||
+    existing.requestFingerprint !==
+      identity.requestFingerprint
+  ) {
+    throw new Error(
+      "THUMBNAIL_IDEMPOTENCY_CONFLICT",
+    );
+  }
+
+  return existing;
 }
 
 export async function persistStoredThumbnailAsset(
@@ -375,18 +486,14 @@ export async function persistStoredThumbnailAsset(
     );
   }
 
-  const requestFingerprint =
-    createRequestFingerprint({
-      sourceUploadAssetId,
-      mimeType: stored.mimeType,
-      sizeBytes: stored.sizeBytes,
-      checksum,
-      source: stored.source,
-      timestampMs: stored.timestampMs,
-    });
-
-  const idempotencyKey =
-    `thumbnail:${requestFingerprint}`;
+  const {
+    requestFingerprint,
+    idempotencyKey,
+  } = createThumbnailRequestIdentity({
+    sourceUploadAssetId,
+    source: stored.source,
+    timestampMs: stored.timestampMs,
+  });
 
   const existing =
     await activePersistence
@@ -396,9 +503,20 @@ export async function persistStoredThumbnailAsset(
       );
 
   if (existing) {
+    if (existing.deletedAt !== null) {
+      throw new Error(
+        "THUMBNAIL_ASSET_DELETED",
+      );
+    }
+
     if (
+      existing.sourceUploadAssetId !==
+        sourceUploadAssetId ||
+      existing.source !== stored.source ||
+      existing.timestampMs !==
+        stored.timestampMs ||
       existing.requestFingerprint !==
-      requestFingerprint
+        requestFingerprint
     ) {
       throw new Error(
         "THUMBNAIL_IDEMPOTENCY_CONFLICT",
@@ -453,6 +571,12 @@ export async function persistStoredThumbnailAsset(
 
     if (
       !racedExisting ||
+      racedExisting.deletedAt !== null ||
+      racedExisting.sourceUploadAssetId !==
+        sourceUploadAssetId ||
+      racedExisting.source !== stored.source ||
+      racedExisting.timestampMs !==
+        stored.timestampMs ||
       racedExisting.requestFingerprint !==
         requestFingerprint
     ) {

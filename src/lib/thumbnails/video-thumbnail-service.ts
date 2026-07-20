@@ -141,7 +141,7 @@ function toSafeNumber(
   return Number(value);
 }
 
-function getEffectiveTimestamp(
+export function resolveEffectiveThumbnailTimestamp(
   requestedTimestampSeconds: number,
   durationMs: number,
 ): number {
@@ -385,7 +385,7 @@ export class VideoThumbnailService {
     }
 
     const effectiveTimestampSeconds =
-      getEffectiveTimestamp(
+      resolveEffectiveThumbnailTimestamp(
         input.timestampSeconds,
         asset.durationMs,
       );

@@ -4,6 +4,8 @@ import {
 } from "node:fs/promises";
 import {
   CreateThumbnailAssetRecordInput,
+  createThumbnailRequestIdentity,
+  findPersistedThumbnailAssetByRequest,
   OwnedThumbnailSourceAsset,
   persistStoredThumbnailAsset,
   ThumbnailAssetPersistence,
@@ -107,6 +109,50 @@ async function main(): Promise<void> {
     /VideoJob_thumbnailAssetId_fkey/,
   );
 
+  const identity =
+    createThumbnailRequestIdentity({
+      sourceUploadAssetId:
+        "video-123",
+      source: "GEMINI_FRAME",
+      timestampMs: 2500,
+    });
+
+  assert.match(
+    identity.requestFingerprint,
+    /^[a-f0-9]{64}$/,
+  );
+  assert.match(
+    identity.idempotencyKey,
+    /^thumbnail:v1:[a-f0-9]{64}$/,
+  );
+
+  const sameRequestIdentity =
+    createThumbnailRequestIdentity({
+      sourceUploadAssetId:
+        "video-123",
+      source: "GEMINI_FRAME",
+      timestampMs: 2500,
+    });
+
+  assert.deepEqual(
+    sameRequestIdentity,
+    identity,
+  );
+
+  const differentRequestIdentity =
+    createThumbnailRequestIdentity({
+      sourceUploadAssetId:
+        "video-123",
+      source: "MANUAL_FRAME",
+      timestampMs: 2500,
+    });
+
+  assert.notEqual(
+    differentRequestIdentity
+      .idempotencyKey,
+    identity.idempotencyKey,
+  );
+
   let sourceCalls = 0;
   let existingCalls = 0;
   let createCalls = 0;
@@ -144,7 +190,7 @@ async function main(): Promise<void> {
           );
           assert.match(
             idempotencyKey,
-            /^thumbnail:[a-f0-9]{64}$/,
+            /^thumbnail:v1:[a-f0-9]{64}$/,
           );
           return null;
         },
@@ -217,6 +263,102 @@ async function main(): Promise<void> {
   const existingRecord =
     createRecord(createInput);
 
+  let preflightSourceCalls = 0;
+  let preflightLookupCalls = 0;
+
+  const preflightExisting =
+    await findPersistedThumbnailAssetByRequest(
+      {
+        ownerUserId:
+          "user-123",
+        sourceUploadAssetId:
+          "video-123",
+        source: "GEMINI_FRAME",
+        timestampMs: 2500,
+      },
+      {
+        findValidatedOwnedSourceAsset:
+          async (
+            ownerUserId,
+            sourceUploadAssetId,
+          ) => {
+            preflightSourceCalls += 1;
+            assert.equal(
+              ownerUserId,
+              "user-123",
+            );
+            assert.equal(
+              sourceUploadAssetId,
+              "video-123",
+            );
+            return createSourceAsset();
+          },
+        findByOwnerAndIdempotencyKey:
+          async (
+            ownerUserId,
+            idempotencyKey,
+          ) => {
+            preflightLookupCalls += 1;
+            assert.equal(
+              ownerUserId,
+              "user-123",
+            );
+            assert.equal(
+              idempotencyKey,
+              createInput.idempotencyKey,
+            );
+            return existingRecord;
+          },
+        create: async () => {
+          throw new Error(
+            "Preflight must not create.",
+          );
+        },
+      },
+    );
+
+  assert.equal(
+    preflightExisting?.id,
+    existingRecord.id,
+  );
+  assert.equal(
+    preflightSourceCalls,
+    1,
+  );
+  assert.equal(
+    preflightLookupCalls,
+    1,
+  );
+
+  const preflightMissing =
+    await findPersistedThumbnailAssetByRequest(
+      {
+        ownerUserId:
+          "user-123",
+        sourceUploadAssetId:
+          "video-123",
+        source: "MANUAL_FRAME",
+        timestampMs: 2500,
+      },
+      {
+        findValidatedOwnedSourceAsset:
+          async () =>
+            createSourceAsset(),
+        findByOwnerAndIdempotencyKey:
+          async () => null,
+        create: async () => {
+          throw new Error(
+            "Preflight must not create.",
+          );
+        },
+      },
+    );
+
+  assert.equal(
+    preflightMissing,
+    null,
+  );
+
   const reused =
     await persistStoredThumbnailAsset(
       {
@@ -244,6 +386,49 @@ async function main(): Promise<void> {
   assert.equal(reused.isReused, true);
   assert.equal(
     reused.thumbnailAsset.id,
+    existingRecord.id,
+  );
+
+  const reusedWithDifferentOutput =
+    await persistStoredThumbnailAsset(
+      {
+        ownerUserId: "user-123",
+        sourceUploadAssetId:
+          "video-123",
+        storedThumbnail:
+          createStoredThumbnail({
+            fileId:
+              "duplicate-output-file",
+            storageUri:
+              "gdrive://duplicate-output-file",
+            md5Checksum:
+              "ffffffffffffffffffffffffffffffff",
+            sizeBytes: 7,
+          }),
+      },
+      {
+        findValidatedOwnedSourceAsset:
+          async () =>
+            createSourceAsset(),
+        findByOwnerAndIdempotencyKey:
+          async () =>
+            existingRecord,
+        create: async () => {
+          throw new Error(
+            "create must not run",
+          );
+        },
+      },
+    );
+
+  assert.equal(
+    reusedWithDifferentOutput
+      .isReused,
+    true,
+  );
+  assert.equal(
+    reusedWithDifferentOutput
+      .thumbnailAsset.id,
     existingRecord.id,
   );
 
