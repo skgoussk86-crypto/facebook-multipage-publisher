@@ -5,6 +5,11 @@ import Link from "next/link";
 import VideoUploader from "../components/uploads/video-uploader";
 import { UploadQueueController, QueueItem } from "../lib/uploads/upload-queue-controller";
 import { normalizeDashboardJobs } from "../lib/validation";
+import {
+  buildGeminiAnalysisUrl,
+  getGeminiAnalysisErrorMessage,
+  parseGeminiAnalysisApiResponse,
+} from "../lib/gemini/gemini-dashboard-analysis";
 
 // Types
 interface FacebookPage {
@@ -83,6 +88,15 @@ interface VideoJob {
   file?: File;
   assetId?: string;
   uploadValidated?: boolean;
+  geminiAnalysisStatus?:
+    | "idle"
+    | "analyzing"
+    | "complete"
+    | "error";
+  geminiAnalysisError?: string;
+  geminiThumbnailTimestampSeconds?: number;
+  geminiThumbnailReason?: string;
+  geminiAnalyzedAt?: string;
 }
 
 interface SecurityLog {
@@ -305,6 +319,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   // ==========================================
   const [tempJobsQueue, setTempJobsQueue] = useState<VideoJob[]>([]);
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+  const [isBulkGeminiAnalysisRunning, setIsBulkGeminiAnalysisRunning] = useState(false);
   const queueControllerRef = useRef<UploadQueueController | null>(null);
 
   const pagesRef = useRef(pages);
@@ -343,6 +358,18 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               localVideoUrl: item.localVideoUrl || existing?.localVideoUrl,
               assetId: item.assetId,
               uploadValidated: item.status === 'VALIDATED',
+              geminiAnalysisStatus:
+                item.geminiAnalysisStatus ||
+                existing?.geminiAnalysisStatus ||
+                "idle",
+              geminiAnalysisError:
+                item.geminiAnalysisError,
+              geminiThumbnailTimestampSeconds:
+                item.geminiThumbnailTimestampSeconds,
+              geminiThumbnailReason:
+                item.geminiThumbnailReason,
+              geminiAnalyzedAt:
+                item.geminiAnalyzedAt,
               file: item.file,
             };
           });
@@ -396,6 +423,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         localVideoUrl: item.localVideoUrl,
         assetId: item.assetId,
         uploadValidated: item.status === 'VALIDATED',
+        geminiAnalysisStatus:
+          item.geminiAnalysisStatus || "idle",
+        geminiAnalysisError:
+          item.geminiAnalysisError,
+        geminiThumbnailTimestampSeconds:
+          item.geminiThumbnailTimestampSeconds,
+        geminiThumbnailReason:
+          item.geminiThumbnailReason,
+        geminiAnalyzedAt:
+          item.geminiAnalyzedAt,
         file: item.file,
       }));
       Promise.resolve().then(() => {
@@ -577,23 +614,345 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     }
   };
 
-  // Update fields inside publisher queue
-  const handleUpdateTempJobField = (jobId: string, field: keyof VideoJob, value: string | number | boolean | undefined) => {
+  const updateTempJobFields = (
+    jobId: string,
+    fields: Partial<VideoJob>,
+  ) => {
     setTempJobsQueue((prev) =>
-      prev.map((job) => {
-        if (job.id !== jobId) return job;
-        const updated = { ...job, [field]: value };
-        if (field === "scheduledTimeKolkata") {
-          updated.scheduledTimeUTC = convertKolkataToUTC(value as string);
+      prev.map((job) =>
+        job.id === jobId
+          ? { ...job, ...fields }
+          : job,
+      ),
+    );
+
+    queueControllerRef.current?.updateJobFields(
+      jobId,
+      fields as Partial<QueueItem>,
+    );
+  };
+
+  // Update fields inside publisher queue
+  const handleUpdateTempJobField = (
+    jobId: string,
+    field: keyof VideoJob,
+    value: string | number | boolean | undefined,
+  ) => {
+    const fields: Partial<VideoJob> = {
+      [field]: value,
+    };
+
+    if (field === "scheduledTimeKolkata") {
+      fields.scheduledTimeUTC = convertKolkataToUTC(
+        value as string,
+      );
+    }
+
+    updateTempJobFields(jobId, fields);
+  };
+
+  const captureFrameFromVideoUrl = async (
+    videoUrl: string,
+    timestampSeconds: number,
+  ): Promise<string> => {
+    return await new Promise<string>(
+      (resolve, reject) => {
+        const video = document.createElement("video");
+        let settled = false;
+        let timeoutId = 0;
+
+        const cleanup = () => {
+          window.clearTimeout(timeoutId);
+          video.removeAttribute("src");
+          video.load();
+        };
+
+        const finishWithError = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(error);
+        };
+
+        timeoutId = window.setTimeout(
+          () => {
+            finishWithError(
+              new Error(
+                "Timed out while capturing the Gemini-selected frame.",
+              ),
+            );
+          },
+          20_000,
+        );
+
+        const capture = () => {
+          if (settled) return;
+
+          if (
+            video.videoWidth <= 0 ||
+            video.videoHeight <= 0
+          ) {
+            finishWithError(
+              new Error(
+                "The selected video frame is unavailable.",
+              ),
+            );
+            return;
+          }
+
+          const maximumDimension = 1280;
+          const scale = Math.min(
+            1,
+            maximumDimension /
+              Math.max(
+                video.videoWidth,
+                video.videoHeight,
+              ),
+          );
+
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(
+            1,
+            Math.round(video.videoWidth * scale),
+          );
+          canvas.height = Math.max(
+            1,
+            Math.round(video.videoHeight * scale),
+          );
+
+          const context = canvas.getContext("2d");
+
+          if (!context) {
+            finishWithError(
+              new Error(
+                "The browser could not create a thumbnail canvas.",
+              ),
+            );
+            return;
+          }
+
+          context.drawImage(
+            video,
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          );
+
+          const dataUrl = canvas.toDataURL(
+            "image/jpeg",
+            0.86,
+          );
+
+          settled = true;
+          cleanup();
+          resolve(dataUrl);
+        };
+
+        video.preload = "auto";
+        video.muted = true;
+        video.playsInline = true;
+
+        video.addEventListener(
+          "error",
+          () => {
+            finishWithError(
+              new Error(
+                "The local video preview could not be loaded.",
+              ),
+            );
+          },
+          { once: true },
+        );
+
+        video.addEventListener(
+          "loadedmetadata",
+          () => {
+            const duration = Number.isFinite(video.duration)
+              ? video.duration
+              : timestampSeconds;
+            const maximumTime = Math.max(
+              0,
+              duration - 0.05,
+            );
+            const safeTimestamp = Math.min(
+              Math.max(timestampSeconds, 0),
+              maximumTime,
+            );
+
+            if (safeTimestamp <= 0.01) {
+              if (video.readyState >= 2) {
+                capture();
+              } else {
+                video.addEventListener(
+                  "loadeddata",
+                  capture,
+                  { once: true },
+                );
+              }
+              return;
+            }
+
+            video.addEventListener(
+              "seeked",
+              capture,
+              { once: true },
+            );
+            video.currentTime = safeTimestamp;
+          },
+          { once: true },
+        );
+
+        video.src = videoUrl;
+        video.load();
+      },
+    );
+  };
+
+  const handleAnalyzeJobWithGemini = async (
+    job: VideoJob,
+  ): Promise<boolean> => {
+    if (!job.uploadValidated || !job.assetId) {
+      alert(
+        "Wait until this video finishes uploading and validation.",
+      );
+      return false;
+    }
+
+    if (job.geminiAnalysisStatus === "analyzing") {
+      return false;
+    }
+
+    updateTempJobFields(job.id, {
+      geminiAnalysisStatus: "analyzing",
+      geminiAnalysisError: undefined,
+    });
+
+    try {
+      const response = await fetch(
+        buildGeminiAnalysisUrl(job.assetId),
+        { method: "POST" },
+      );
+
+      let payload: unknown = null;
+
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          getGeminiAnalysisErrorMessage(
+            response.status,
+            payload,
+          ),
+        );
+      }
+
+      const analysis =
+        parseGeminiAnalysisApiResponse(payload);
+
+      const updates: Partial<VideoJob> = {
+        englishTitle: analysis.title,
+        englishCaption: analysis.caption,
+        hashtags: analysis.hashtagsText,
+        geminiAnalysisStatus: "complete",
+        geminiAnalysisError: undefined,
+        geminiThumbnailTimestampSeconds:
+          analysis.thumbnailTimestampSeconds,
+        geminiThumbnailReason:
+          analysis.thumbnailReason,
+        geminiAnalyzedAt: new Date().toISOString(),
+      };
+
+      if (job.localVideoUrl) {
+        try {
+          const capturedThumbnailUrl =
+            await captureFrameFromVideoUrl(
+              job.localVideoUrl,
+              analysis.thumbnailTimestampSeconds,
+            );
+
+          updates.capturedThumbnailUrl =
+            capturedThumbnailUrl;
+          updates.thumbnailMode = "captured";
+        } catch (captureError) {
+          addSecurityLog(
+            "WARN",
+            captureError instanceof Error
+              ? captureError.message
+              : "The Gemini-selected local frame could not be captured.",
+            job.id,
+          );
         }
+      }
 
-        // Sync with queue controller persistence
-        queueControllerRef.current?.updateJobFields(jobId, {
-          [field]: updated[field]
-        } as unknown as Partial<QueueItem>);
+      updateTempJobFields(job.id, updates);
 
-        return updated;
-      })
+      addSecurityLog(
+        "INFO",
+        `Gemini generated English content and selected thumbnail timestamp ${analysis.thumbnailTimestampSeconds.toFixed(2)}s for ${job.fileName}.`,
+        job.id,
+      );
+
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Gemini could not analyze this video.";
+
+      updateTempJobFields(job.id, {
+        geminiAnalysisStatus: "error",
+        geminiAnalysisError: message,
+      });
+
+      addSecurityLog(
+        "ERROR",
+        `Gemini analysis failed for ${job.fileName}: ${message}`,
+        job.id,
+      );
+
+      return false;
+    }
+  };
+
+  const handleAnalyzeAllValidated = async () => {
+    if (isBulkGeminiAnalysisRunning) return;
+
+    const eligibleJobs = tempJobsQueue.filter(
+      (job) =>
+        job.uploadValidated &&
+        job.assetId &&
+        job.geminiAnalysisStatus !== "analyzing",
+    );
+
+    if (eligibleJobs.length === 0) {
+      alert(
+        "No validated videos are ready for Gemini analysis.",
+      );
+      return;
+    }
+
+    setIsBulkGeminiAnalysisRunning(true);
+
+    let completedCount = 0;
+
+    try {
+      for (const job of eligibleJobs) {
+        if (await handleAnalyzeJobWithGemini(job)) {
+          completedCount += 1;
+        }
+      }
+    } finally {
+      setIsBulkGeminiAnalysisRunning(false);
+    }
+
+    addSecurityLog(
+      "INFO",
+      `Gemini bulk analysis completed for ${completedCount} of ${eligibleJobs.length} validated videos.`,
     );
   };
 
@@ -2370,12 +2729,30 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                       <p className="text-xs text-zinc-500">Configure parameters for local videos awaiting scheduling confirmation.</p>
                     </div>
                     {tempJobsQueue.length > 0 && (
-                      <button
-                        onClick={handleSaveTrigger}
-                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-lg transition shadow-md shadow-emerald-600/10"
-                      >
-                        Confirm Scheduled Queue
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={handleAnalyzeAllValidated}
+                          disabled={
+                            isBulkGeminiAnalysisRunning ||
+                            !tempJobsQueue.some(
+                              (job) =>
+                                job.uploadValidated &&
+                                job.assetId,
+                            )
+                          }
+                          className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:cursor-not-allowed text-white font-bold text-xs py-2 px-4 rounded-lg transition"
+                        >
+                          {isBulkGeminiAnalysisRunning
+                            ? "Analyzing Videos..."
+                            : "Generate All with Gemini"}
+                        </button>
+                        <button
+                          onClick={handleSaveTrigger}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-lg transition shadow-md shadow-emerald-600/10"
+                        >
+                          Confirm Scheduled Queue
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -2476,7 +2853,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                       job.thumbnailMode === "auto" ? "bg-zinc-200 border-zinc-300 text-zinc-900" : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                                     }`}
                                   >
-                                    Auto Meta
+                                    Facebook Auto
                                   </button>
                                   <button
                                     onClick={() => handleOpenFrameCaptureModal(job)}
@@ -2543,6 +2920,62 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                             {/* Editable Fields Column */}
                             <div className="flex-1 space-y-4 text-xs">
+
+                              <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+                                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                  <div>
+                                    <div className="text-[10px] font-mono uppercase tracking-wider text-indigo-700 font-bold">
+                                      Gemini Auto Content + Frame Selection
+                                    </div>
+                                    <p className="mt-1 text-[10px] leading-relaxed text-indigo-700/80">
+                                      Generates the English title, caption, exactly five hashtags, and selects the strongest video timestamp.
+                                    </p>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      void handleAnalyzeJobWithGemini(job);
+                                    }}
+                                    disabled={
+                                      !job.uploadValidated ||
+                                      !job.assetId ||
+                                      job.geminiAnalysisStatus === "analyzing"
+                                    }
+                                    className="shrink-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:cursor-not-allowed px-4 py-2 text-[10px] font-bold text-white transition"
+                                  >
+                                    {job.geminiAnalysisStatus === "analyzing"
+                                      ? "Analyzing..."
+                                      : job.geminiAnalysisStatus === "complete"
+                                        ? "Regenerate with Gemini"
+                                        : "Generate with Gemini"}
+                                  </button>
+                                </div>
+
+                                {!job.uploadValidated && (
+                                  <div className="mt-2 text-[10px] text-zinc-600">
+                                    Available after the upload reaches Validated status.
+                                  </div>
+                                )}
+
+                                {job.geminiAnalysisStatus === "error" &&
+                                  job.geminiAnalysisError && (
+                                    <div className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[10px] text-rose-700">
+                                      {job.geminiAnalysisError}
+                                    </div>
+                                  )}
+
+                                {job.geminiAnalysisStatus === "complete" &&
+                                  typeof job.geminiThumbnailTimestampSeconds === "number" && (
+                                    <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[10px] leading-relaxed text-emerald-800">
+                                      Selected frame: {job.geminiThumbnailTimestampSeconds.toFixed(2)}s.
+                                      {job.geminiThumbnailReason
+                                        ? ` ${job.geminiThumbnailReason}`
+                                        : ""}
+                                      {job.capturedThumbnailUrl
+                                        ? " A local thumbnail preview was captured automatically."
+                                        : " The timestamp is saved; permanent thumbnail storage will be connected in the next step."}
+                                    </div>
+                                  )}
+                              </div>
 
                               {/* English Title input */}
                               <div>

@@ -2,6 +2,41 @@ import { BrowserMultipartUploader } from './browser-multipart-uploader';
 import { BrowserUploaderStatus, VideoMetadata } from './upload-types';
 import { GoogleUploadTransport } from './google-drive-resumable-uploader';
 
+function createLocalVideoUrl(
+  file: File,
+): string | undefined {
+  if (
+    typeof URL === 'undefined' ||
+    typeof URL.createObjectURL !== 'function'
+  ) {
+    return undefined;
+  }
+
+  try {
+    return URL.createObjectURL(file);
+  } catch {
+    return undefined;
+  }
+}
+
+function revokeLocalVideoUrl(
+  url: string | undefined,
+): void {
+  if (
+    !url ||
+    typeof URL === 'undefined' ||
+    typeof URL.revokeObjectURL !== 'function'
+  ) {
+    return;
+  }
+
+  try {
+    URL.revokeObjectURL(url);
+  } catch {
+    // Object URL cleanup is best-effort.
+  }
+}
+
 export type QueueItemState =
   | 'QUEUED'
   | 'INITIATING'
@@ -48,6 +83,15 @@ export interface QueueItem {
   capturedThumbnailUrl?: string;
   localVideoUrl?: string;
   durationSeconds?: number;
+  geminiAnalysisStatus?:
+    | 'idle'
+    | 'analyzing'
+    | 'complete'
+    | 'error';
+  geminiAnalysisError?: string;
+  geminiThumbnailTimestampSeconds?: number;
+  geminiThumbnailReason?: string;
+  geminiAnalyzedAt?: string;
 }
 
 export function getFileFingerprint(file: { name: string; size: number; type: string; lastModified: number }): string {
@@ -216,6 +260,20 @@ export class UploadQueueController {
           customThumbnailUrl: item.customThumbnailUrl,
           capturedThumbnailUrl: item.capturedThumbnailUrl,
           durationSeconds: item.durationSeconds,
+          geminiAnalysisStatus:
+            item.geminiAnalysisStatus === 'analyzing'
+              ? 'idle'
+              : item.geminiAnalysisStatus,
+          geminiAnalysisError:
+            item.geminiAnalysisStatus === 'analyzing'
+              ? 'Previous Gemini analysis was interrupted. Run it again.'
+              : item.geminiAnalysisError,
+          geminiThumbnailTimestampSeconds:
+            item.geminiThumbnailTimestampSeconds,
+          geminiThumbnailReason:
+            item.geminiThumbnailReason,
+          geminiAnalyzedAt:
+            item.geminiAnalyzedAt,
         });
       }
 
@@ -259,6 +317,16 @@ export class UploadQueueController {
           customThumbnailUrl: item.customThumbnailUrl,
           capturedThumbnailUrl: item.capturedThumbnailUrl,
           durationSeconds: item.durationSeconds,
+          geminiAnalysisStatus:
+            item.geminiAnalysisStatus,
+          geminiAnalysisError:
+            item.geminiAnalysisError,
+          geminiThumbnailTimestampSeconds:
+            item.geminiThumbnailTimestampSeconds,
+          geminiThumbnailReason:
+            item.geminiThumbnailReason,
+          geminiAnalyzedAt:
+            item.geminiAnalyzedAt,
         };
       });
 
@@ -380,6 +448,9 @@ export class UploadQueueController {
         scheduledTimeKolkata: '',
         scheduledTimeUTC: '',
         thumbnailMode: 'auto',
+        localVideoUrl:
+          error ? undefined : createLocalVideoUrl(file),
+        geminiAnalysisStatus: 'idle',
       };
 
       this.items.push(newItem);
@@ -676,6 +747,7 @@ export class UploadQueueController {
       this.cleanupUploader(itemId);
     }
 
+    revokeLocalVideoUrl(item.localVideoUrl);
     this.items = this.items.filter((i) => i.id !== itemId);
     this.saveToStorage();
     this.notify();
@@ -696,7 +768,9 @@ export class UploadQueueController {
       return { success: false, error: 'RECOVERY_FILE_MISMATCH' };
     }
 
+    revokeLocalVideoUrl(item.localVideoUrl);
     item.file = file;
+    item.localVideoUrl = createLocalVideoUrl(file);
     item.status = 'PAUSED';
     item.error = undefined;
     this.saveToStorage();
@@ -717,6 +791,7 @@ export class UploadQueueController {
   public clearAll() {
     this.items.forEach((item) => {
       this.cleanupUploader(item.id);
+      revokeLocalVideoUrl(item.localVideoUrl);
     });
     this.items = [];
     this.saveToStorage();
