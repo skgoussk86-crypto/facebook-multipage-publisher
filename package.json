@@ -29,7 +29,9 @@
     "test:gemini-foundation": "node --conditions=react-server --import tsx scripts/run-gemini-foundation-tests.ts",
     "test:gemini-video-analysis": "node --conditions=react-server --import tsx scripts/run-gemini-video-analysis-tests.ts",
     "test:gemini-analysis-api": "node --conditions=react-server --import tsx scripts/run-gemini-analysis-api-tests.ts",
-    "test:gemini-dashboard-analysis": "node --conditions=react-server --import tsx scripts/run-gemini-dashboard-analysis-tests.ts"
+    "test:gemini-dashboard-analysis": "node --conditions=react-server --import tsx scripts/run-gemini-dashboard-analysis-tests.ts",
+    "test:google-drive-thumbnail-storage": "node --conditions=react-server --import tsx scripts/run-google-drive-thumbnail-storage-tests.ts",
+    "test:video-thumbnail-service": "node --conditions=react-server --import tsx scripts/run-video-thumbnail-service-tests.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1086.0",
