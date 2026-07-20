@@ -122,6 +122,7 @@ function makeVideoJobFixture(
     gcsVideoUri: null,
     storageUri: null,
     gcsThumbnailUri: null,
+    thumbnailAssetId: null,
     englishTitle: 'Default Title',
     englishCaption: 'Default Caption',
     hashtags: null,

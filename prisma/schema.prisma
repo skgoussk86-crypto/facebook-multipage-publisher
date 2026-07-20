@@ -83,6 +83,7 @@ model User {
   googleDriveConnection GoogleDriveConnection?
   auditLogs             AuditLog[]
   uploadAssets          UploadAsset[]
+  thumbnailAssets       ThumbnailAsset[]
   createdAt             DateTime               @default(now()) @db.Timestamptz
   updatedAt             DateTime               @updatedAt @db.Timestamptz
 
@@ -135,6 +136,8 @@ model VideoJob {
   gcsVideoUri           String?                @db.Text
   storageUri            String?                @db.Text
   gcsThumbnailUri       String?                @db.Text
+  thumbnailAssetId      String?                @db.Uuid
+  thumbnailAsset        ThumbnailAsset?        @relation(fields: [thumbnailAssetId], references: [id], onDelete: Restrict)
   englishTitle          String                 @db.VarChar(255)
   englishCaption        String                 @db.Text
   hashtags              String?                @db.Text
@@ -173,6 +176,7 @@ model VideoJob {
   @@index([pageId])
   @@index([userId])
   @@index([uploadAssetId])
+  @@index([thumbnailAssetId])
 }
 
 model AppConfiguration {
@@ -202,6 +206,12 @@ model AuditLog {
 enum StorageProvider {
   R2
   GOOGLE_DRIVE
+}
+
+enum ThumbnailSource {
+  GEMINI_FRAME
+  MANUAL_FRAME
+  CUSTOM_UPLOAD
 }
 
 enum UploadFinalizationOperation {
@@ -271,8 +281,9 @@ model UploadAsset {
   retentionUntil  DateTime? @db.Timestamptz
   objectDeletedAt DateTime? @db.Timestamptz
 
-  videoJobs      VideoJob[]
-  uploadAttempts UploadAttempt[]
+  videoJobs        VideoJob[]
+  thumbnailAssets  ThumbnailAsset[] @relation("ThumbnailSourceVideo")
+  uploadAttempts   UploadAttempt[]
   uploadSession  UploadSession?
   createdAt      DateTime        @default(now()) @db.Timestamptz
   updatedAt      DateTime        @updatedAt @db.Timestamptz
@@ -287,6 +298,34 @@ model UploadAsset {
   @@index([finalizationOperation, finalizationLockExpiresAt])
 }
 
+model ThumbnailAsset {
+  id                    String          @id @default(uuid()) @db.Uuid
+  userId                String          @db.Uuid
+  user                  User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sourceUploadAssetId   String          @db.Uuid
+  sourceUploadAsset     UploadAsset     @relation("ThumbnailSourceVideo", fields: [sourceUploadAssetId], references: [id], onDelete: Restrict)
+  provider              StorageProvider @default(GOOGLE_DRIVE)
+  bucket                String          @db.VarChar(255)
+  objectKey             String          @db.VarChar(512)
+  storageUri            String          @unique @db.Text
+  originalName          String          @db.VarChar(255)
+  mimeType              String          @db.VarChar(100)
+  sizeBytes             BigInt          @db.BigInt
+  checksum              String          @db.VarChar(255)
+  source                ThumbnailSource
+  timestampMs           Int?            @db.Integer
+  idempotencyKey        String          @db.VarChar(255)
+  requestFingerprint    String          @db.VarChar(64)
+  deletedAt             DateTime?       @db.Timestamptz
+  videoJobs             VideoJob[]
+  createdAt             DateTime        @default(now()) @db.Timestamptz
+  updatedAt             DateTime        @updatedAt @db.Timestamptz
+
+  @@unique([provider, bucket, objectKey])
+  @@unique([userId, idempotencyKey])
+  @@index([userId, deletedAt])
+  @@index([sourceUploadAssetId])
+}
 model UploadAttempt {
   id            String      @id @default(uuid()) @db.Uuid
   uploadAssetId String      @db.Uuid
