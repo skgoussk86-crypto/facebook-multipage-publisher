@@ -1,4 +1,5 @@
 import { MockScenario } from '@prisma/client';
+import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
 
 export interface MetaPublishInput {
@@ -9,6 +10,13 @@ export interface MetaPublishInput {
   hashtags: string | null;
   fileSize: number;
   mockScenario: MockScenario | null;
+}
+
+export interface ExperimentalMetaThumbnailInput {
+  readonly fileName: string;
+  readonly mimeType: "image/jpeg";
+  readonly sizeBytes: number;
+  readonly stream: Readable;
 }
 
 type MetaErrorBody = {
@@ -137,6 +145,79 @@ export class FacebookPublishingService {
     }
 
     return parsed.toString();
+  }
+
+  private static createMultipartField(
+    boundary: string,
+    name: string,
+    value: string,
+  ): Buffer {
+    return Buffer.from(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+        `${value}\r\n`,
+      'utf8',
+    );
+  }
+
+  private static async readExperimentalThumbnail(
+    thumbnail: ExperimentalMetaThumbnailInput,
+  ): Promise<Buffer> {
+    if (
+      thumbnail.mimeType !== 'image/jpeg' ||
+      !Number.isSafeInteger(thumbnail.sizeBytes) ||
+      thumbnail.sizeBytes <= 0 ||
+      thumbnail.sizeBytes > 10 * 1024 * 1024
+    ) {
+      throw new Error(
+        'META_THUMBNAIL_INVALID_INPUT: The experimental thumbnail must be a JPEG of 10 MiB or less.',
+      );
+    }
+
+    if (
+      !thumbnail.fileName ||
+      thumbnail.fileName.length > 255 ||
+      /[\x00-\x1F\x7F]/.test(thumbnail.fileName) ||
+      thumbnail.fileName.includes('/') ||
+      thumbnail.fileName.includes('\\')
+    ) {
+      throw new Error(
+        'META_THUMBNAIL_INVALID_INPUT: The experimental thumbnail filename is invalid.',
+      );
+    }
+
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+
+    for await (const chunk of thumbnail.stream) {
+      const buffer = Buffer.isBuffer(chunk)
+        ? chunk
+        : Buffer.from(chunk);
+
+      totalBytes += buffer.length;
+
+      if (
+        totalBytes > thumbnail.sizeBytes ||
+        totalBytes > 10 * 1024 * 1024
+      ) {
+        throw new Error(
+          'META_THUMBNAIL_SIZE_MISMATCH: The experimental thumbnail exceeded its validated size.',
+        );
+      }
+
+      chunks.push(buffer);
+    }
+
+    if (totalBytes !== thumbnail.sizeBytes) {
+      throw new Error(
+        'META_THUMBNAIL_SIZE_MISMATCH: The experimental thumbnail size did not match its validated metadata.',
+      );
+    }
+
+    return Buffer.concat(
+      chunks,
+      totalBytes,
+    );
   }
 
   // Existing regular Facebook Video resumable-upload flow.
@@ -276,6 +357,112 @@ export class FacebookPublishingService {
         'Meta video finish session',
         response,
         body,
+      );
+    }
+  }
+
+  /**
+   * Experimental regular-video finish request with the historical multipart
+   * `thumb` field. This method is intentionally isolated and must only be
+   * called after the explicit two-part capability gate is enabled.
+   *
+   * Current Meta Reels publishing documentation does not expose an equivalent
+   * thumbnail parameter, so this method must never be used for Reels.
+   */
+  static async finishUploadSessionWithExperimentalThumbnail(
+    pageId: string,
+    pageToken: string,
+    uploadSessionId: string,
+    title: string,
+    caption: string,
+    hashtags: string | null,
+    thumbnail: ExperimentalMetaThumbnailInput,
+  ): Promise<void> {
+    const url =
+      `${this.getBaseUrl()}/${pageId}/videos`;
+
+    const description = hashtags
+      ? `${caption}\n\n${hashtags}`
+      : caption;
+
+    const boundary =
+      `----FbPublisherThumbnail${
+        randomBytes(18).toString('hex')
+      }`;
+
+    const thumbnailBytes =
+      await this.readExperimentalThumbnail(
+        thumbnail,
+      );
+
+    const thumbnailHeader = Buffer.from(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="thumb"; filename="${thumbnail.fileName}"\r\n` +
+        `Content-Type: ${thumbnail.mimeType}\r\n\r\n`,
+      'utf8',
+    );
+
+    const body = Buffer.concat([
+      this.createMultipartField(
+        boundary,
+        'upload_phase',
+        'finish',
+      ),
+      this.createMultipartField(
+        boundary,
+        'access_token',
+        pageToken,
+      ),
+      this.createMultipartField(
+        boundary,
+        'upload_session_id',
+        uploadSessionId,
+      ),
+      this.createMultipartField(
+        boundary,
+        'title',
+        title,
+      ),
+      this.createMultipartField(
+        boundary,
+        'description',
+        description,
+      ),
+      thumbnailHeader,
+      thumbnailBytes,
+      Buffer.from(
+        `\r\n--${boundary}--\r\n`,
+        'utf8',
+      ),
+    ]);
+
+    let response: Response;
+
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type':
+            `multipart/form-data; boundary=${boundary}`,
+          'Content-Length':
+            body.length.toString(),
+        },
+        body,
+      });
+    } catch {
+      throw new Error(
+        'META_NETWORK_ERROR: Experimental thumbnail finish request failed.',
+      );
+    }
+
+    if (!response.ok) {
+      const responseBody =
+        await this.readResponseBody(response);
+
+      throw this.createMetaError(
+        'Meta experimental video thumbnail finish session',
+        response,
+        responseBody,
       );
     }
   }

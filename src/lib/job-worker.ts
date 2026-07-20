@@ -1,4 +1,4 @@
-﻿import { prisma } from './prisma-client';
+import { prisma } from './prisma-client';
 import {
   JobStatus,
   FailureClassification,
@@ -555,6 +555,12 @@ async function processClaimedJob(
             `[UPLOADING_TO_META] Reel transfer completed. Publishing Reel...`,
           );
 
+          if (job.thumbnailAssetId) {
+            log(
+              `[THUMBNAIL] A permanent thumbnail is linked, but the current Meta Reel publishing flow has no enabled thumbnail capability. Meta will select the Reel cover.`,
+            );
+          }
+
           await FacebookPublishingService.finishReelUploadSession(
             pageToken,
             videoId!,
@@ -630,14 +636,77 @@ async function processClaimedJob(
 
           mediaStream.destroy();
 
-          await FacebookPublishingService.finishUploadSession(
-            page.facebookPageId,
-            pageToken,
-            uploadReference!,
-            job.englishTitle,
-            job.englishCaption,
-            job.hashtags,
-          );
+          if (!job.thumbnailAssetId) {
+            await FacebookPublishingService.finishUploadSession(
+              page.facebookPageId,
+              pageToken,
+              uploadReference!,
+              job.englishTitle,
+              job.englishCaption,
+              job.hashtags,
+            );
+          } else {
+            const {
+              getFacebookThumbnailPublishingCapability,
+            } = await import(
+              './facebook/facebook-thumbnail-publishing-capability'
+            );
+
+            const thumbnailCapability =
+              getFacebookThumbnailPublishingCapability();
+
+            if (
+              !thumbnailCapability.enabled ||
+              !thumbnailCapability.regularVideoSupported
+            ) {
+              log(
+                `[THUMBNAIL] A permanent thumbnail is linked, but Meta thumbnail publishing is disabled (${thumbnailCapability.reason}). Meta will select the video thumbnail.`,
+              );
+
+              await FacebookPublishingService.finishUploadSession(
+                page.facebookPageId,
+                pageToken,
+                uploadReference!,
+                job.englishTitle,
+                job.englishCaption,
+                job.hashtags,
+              );
+            } else {
+              const {
+                resolvePublishingThumbnailSource,
+              } = await import(
+                './thumbnails/thumbnail-publishing-source'
+              );
+
+              const publishingThumbnail =
+                await resolvePublishingThumbnailSource({
+                  ownerUserId: job.userId,
+                  sourceUploadAssetId:
+                    job.uploadAssetId,
+                  thumbnailAssetId:
+                    job.thumbnailAssetId,
+                });
+
+              try {
+                log(
+                  `[THUMBNAIL] Experimental regular-video thumbnail capability enabled. Sending the validated server-side JPEG during the finish phase.`,
+                );
+
+                await FacebookPublishingService
+                  .finishUploadSessionWithExperimentalThumbnail(
+                    page.facebookPageId,
+                    pageToken,
+                    uploadReference!,
+                    job.englishTitle,
+                    job.englishCaption,
+                    job.hashtags,
+                    publishingThumbnail,
+                  );
+              } finally {
+                publishingThumbnail.stream.destroy();
+              }
+            }
+          }
 
           const nextPollTime = new Date(
             Date.now() + 10 * 1000,
@@ -763,6 +832,9 @@ async function processClaimedJob(
     } else if (err.message?.includes('GOOGLE_DRIVE_FILE_NOT_FOUND')) {
       classification = FailureClassification.INVALID_MEDIA;
       errorCode = 'GOOGLE_DRIVE_FILE_NOT_FOUND';
+    } else if (err.message?.includes('THUMBNAIL_PUBLISHING_') || err.message?.includes('META_THUMBNAIL_')) {
+      classification = FailureClassification.INVALID_MEDIA;
+      errorCode = 'THUMBNAIL_PUBLISHING_FAILED';
     } else if (err.message?.includes('META_AUTH_ERROR')) {
       classification = FailureClassification.REVOKED_TOKEN;
       errorCode = 'REVOKED_TOKEN';
@@ -776,7 +848,8 @@ async function processClaimedJob(
       const isTerminal = isExhausted ||
         errorCode === 'GOOGLE_DRIVE_CONNECTION_REVOKED' ||
         errorCode === 'GOOGLE_DRIVE_FILE_NOT_FOUND' ||
-        errorCode === 'GOOGLE_DRIVE_DECRYPTION_FAILED';
+        errorCode === 'GOOGLE_DRIVE_DECRYPTION_FAILED' ||
+        errorCode === 'THUMBNAIL_PUBLISHING_FAILED';
 
       if (isTerminal) {
         await prisma.$transaction(async (tx) => {

@@ -1,6 +1,10 @@
 import "server-only";
 import { Readable } from "stream";
-import { UploadAsset } from "@prisma/client";
+export interface GoogleDriveReadableAsset {
+  readonly userId: string;
+  readonly provider: string;
+  readonly objectKey: string;
+}
 import { getActiveConnectionForOwner } from "./google-drive-connection-repository";
 import { getGoogleDriveConfig } from "./google-drive-config";
 import { decryptRefreshToken } from "./google-drive-token-crypto";
@@ -10,7 +14,7 @@ import { createGoogleDriveFileReadStream, GoogleDriveFileNotFoundError } from ".
 export class GoogleDriveMediaReader {
   static async getDownloadStream(
     userId: string,
-    asset: UploadAsset,
+    asset: GoogleDriveReadableAsset,
     dependencies?: {
       getActiveConnection?: typeof getActiveConnectionForOwner;
       getGoogleDriveConfig?: typeof getGoogleDriveConfig;
