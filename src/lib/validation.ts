@@ -115,6 +115,7 @@ export interface NormalizedDashboardJob {
   attempts: unknown[];
   mockScenario?: string;
   uploadAssetId?: string;
+  thumbnailAssetId?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -214,10 +215,14 @@ export function normalizeDashboardJobs(data: unknown): NormalizedDashboardJob[] 
       metaPostId: typeof j.metaPostId === 'string' ? j.metaPostId : undefined,
       retryCount: typeof j.attemptCount === 'number' ? j.attemptCount : (typeof j.retryCount === 'number' ? j.retryCount : 0),
       errorLog: typeof j.lastErrorMessage === 'string' ? j.lastErrorMessage : (typeof j.errorLog === 'string' ? j.errorLog : undefined),
-      thumbnailMode: 'auto' as const,
+      thumbnailMode:
+        typeof j.thumbnailAssetId === 'string'
+          ? ('captured' as const)
+          : ('auto' as const),
       attempts: Array.isArray(j.attempts) ? j.attempts : [],
       mockScenario: typeof j.mockScenario === 'string' ? j.mockScenario : undefined,
       uploadAssetId: typeof j.uploadAssetId === 'string' ? j.uploadAssetId : undefined,
+      thumbnailAssetId: typeof j.thumbnailAssetId === 'string' ? j.thumbnailAssetId : undefined,
       createdAt: typeof j.createdAt === 'string' ? j.createdAt : undefined,
       updatedAt: typeof j.updatedAt === 'string' ? j.updatedAt : undefined
     };

@@ -10,6 +10,12 @@ import {
   getGeminiAnalysisErrorMessage,
   parseGeminiAnalysisApiResponse,
 } from "../lib/gemini/gemini-dashboard-analysis";
+import {
+  buildThumbnailGenerationUrl,
+  getThumbnailGenerationErrorMessage,
+  parseThumbnailGenerationResponse,
+  type DashboardThumbnailSource,
+} from "../lib/thumbnails/thumbnail-dashboard-client";
 
 // Types
 interface FacebookPage {
@@ -97,6 +103,15 @@ interface VideoJob {
   geminiThumbnailTimestampSeconds?: number;
   geminiThumbnailReason?: string;
   geminiAnalyzedAt?: string;
+  thumbnailAssetId?: string;
+  thumbnailGenerationStatus?:
+    | "idle"
+    | "generating"
+    | "complete"
+    | "error";
+  thumbnailGenerationError?: string;
+  thumbnailTimestampSeconds?: number;
+  thumbnailSource?: DashboardThumbnailSource;
 }
 
 interface SecurityLog {
@@ -370,6 +385,18 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 item.geminiThumbnailReason,
               geminiAnalyzedAt:
                 item.geminiAnalyzedAt,
+              thumbnailAssetId:
+                item.thumbnailAssetId,
+              thumbnailGenerationStatus:
+                item.thumbnailGenerationStatus ||
+                existing?.thumbnailGenerationStatus ||
+                "idle",
+              thumbnailGenerationError:
+                item.thumbnailGenerationError,
+              thumbnailTimestampSeconds:
+                item.thumbnailTimestampSeconds,
+              thumbnailSource:
+                item.thumbnailSource,
               file: item.file,
             };
           });
@@ -433,6 +460,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           item.geminiThumbnailReason,
         geminiAnalyzedAt:
           item.geminiAnalyzedAt,
+        thumbnailAssetId:
+          item.thumbnailAssetId,
+        thumbnailGenerationStatus:
+          item.thumbnailGenerationStatus || "idle",
+        thumbnailGenerationError:
+          item.thumbnailGenerationError,
+        thumbnailTimestampSeconds:
+          item.thumbnailTimestampSeconds,
+        thumbnailSource:
+          item.thumbnailSource,
         file: item.file,
       }));
       Promise.resolve().then(() => {
@@ -569,6 +606,20 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     // Persistent GCS/R2 validation
     if (!job.uploadValidated || !job.assetId) {
       errors.push("Video must be successfully uploaded and validated.");
+    }
+
+    if (job.thumbnailMode === "custom") {
+      errors.push(
+        "Custom image thumbnails are not yet available for permanent scheduling. Use Facebook Auto or Capture Frame.",
+      );
+    }
+
+    if (job.thumbnailMode === "captured") {
+      if (job.thumbnailGenerationStatus === "generating") {
+        errors.push("Wait for permanent thumbnail generation to finish.");
+      } else if (!job.thumbnailAssetId) {
+        errors.push("Captured thumbnail must be generated and stored before scheduling.");
+      }
     }
 
     // Page selection check
@@ -809,6 +860,102 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     );
   };
 
+  const handleGeneratePersistedThumbnail = async (input: {
+    jobId: string;
+    assetId: string;
+    fileName: string;
+    timestampSeconds: number;
+    source: DashboardThumbnailSource;
+  }): Promise<boolean> => {
+    updateTempJobFields(input.jobId, {
+      thumbnailMode: "captured",
+      thumbnailAssetId: undefined,
+      thumbnailGenerationStatus: "generating",
+      thumbnailGenerationError: undefined,
+      thumbnailTimestampSeconds: input.timestampSeconds,
+      thumbnailSource: input.source,
+    });
+
+    try {
+      const response = await fetch(
+        buildThumbnailGenerationUrl(input.assetId),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            timestampSeconds: input.timestampSeconds,
+            source: input.source,
+          }),
+        },
+      );
+
+      let payload: unknown = null;
+
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          getThumbnailGenerationErrorMessage(
+            response.status,
+            payload,
+          ),
+        );
+      }
+
+      const result = parseThumbnailGenerationResponse(
+        payload,
+        input.assetId,
+      );
+
+      if (result.thumbnail.source !== input.source) {
+        throw new Error(
+          "Thumbnail service returned a different source type.",
+        );
+      }
+
+      updateTempJobFields(input.jobId, {
+        thumbnailMode: "captured",
+        thumbnailAssetId: result.thumbnail.id,
+        thumbnailGenerationStatus: "complete",
+        thumbnailGenerationError: undefined,
+        thumbnailTimestampSeconds:
+          result.thumbnail.timestampSeconds,
+        thumbnailSource: result.thumbnail.source,
+      });
+
+      addSecurityLog(
+        "INFO",
+        `${result.reused ? "Reused" : "Generated"} permanent thumbnail at ${result.thumbnail.timestampSeconds.toFixed(2)}s for ${input.fileName}.`,
+        input.jobId,
+      );
+
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Permanent thumbnail generation failed.";
+
+      updateTempJobFields(input.jobId, {
+        thumbnailAssetId: undefined,
+        thumbnailGenerationStatus: "error",
+        thumbnailGenerationError: message,
+      });
+
+      addSecurityLog(
+        "ERROR",
+        `Permanent thumbnail generation failed for ${input.fileName}: ${message}`,
+        input.jobId,
+      );
+
+      return false;
+    }
+  };
+
   const handleAnalyzeJobWithGemini = async (
     job: VideoJob,
   ): Promise<boolean> => {
@@ -858,6 +1005,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         englishTitle: analysis.title,
         englishCaption: analysis.caption,
         hashtags: analysis.hashtagsText,
+        thumbnailMode: "captured",
+        thumbnailAssetId: undefined,
+        thumbnailGenerationStatus: "idle",
+        thumbnailGenerationError: undefined,
         geminiAnalysisStatus: "complete",
         geminiAnalysisError: undefined,
         geminiThumbnailTimestampSeconds:
@@ -877,7 +1028,6 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
           updates.capturedThumbnailUrl =
             capturedThumbnailUrl;
-          updates.thumbnailMode = "captured";
         } catch (captureError) {
           addSecurityLog(
             "WARN",
@@ -891,13 +1041,23 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
       updateTempJobFields(job.id, updates);
 
+      const thumbnailStored =
+        await handleGeneratePersistedThumbnail({
+          jobId: job.id,
+          assetId: job.assetId,
+          fileName: job.fileName,
+          timestampSeconds:
+            analysis.thumbnailTimestampSeconds,
+          source: "GEMINI_FRAME",
+        });
+
       addSecurityLog(
         "INFO",
         `Gemini generated English content and selected thumbnail timestamp ${analysis.thumbnailTimestampSeconds.toFixed(2)}s for ${job.fileName}.`,
         job.id,
       );
 
-      return true;
+      return thumbnailStored;
     } catch (error) {
       const message =
         error instanceof Error
@@ -1109,7 +1269,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     }
     setActiveFrameCaptureJobId(job.id);
     setFrameCaptureUrl(job.localVideoUrl);
-    setFrameCaptureTime(0);
+    setFrameCaptureTime(
+      job.thumbnailTimestampSeconds ?? 0,
+    );
     setFrameCaptureDuration(job.durationSeconds || 10);
   };
 
@@ -1258,25 +1420,62 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleCaptureFrameAction = () => {
+  const handleCaptureFrameAction = async () => {
     const video = videoCaptureRef.current;
-    if (video && activeFrameCaptureJobId) {
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 360;
+    const jobId = activeFrameCaptureJobId;
 
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg");
-
-        handleUpdateTempJobField(activeFrameCaptureJobId, "capturedThumbnailUrl", dataUrl);
-        handleUpdateTempJobField(activeFrameCaptureJobId, "thumbnailMode", "captured");
-
-        addSecurityLog("INFO", `Captured dynamic frame at ${frameCaptureTime.toFixed(1)}s from local video file.`);
-        setActiveFrameCaptureJobId(null);
-      }
+    if (!video || !jobId) {
+      return;
     }
+
+    const job = tempJobsQueue.find(
+      (item) => item.id === jobId,
+    );
+
+    if (!job?.assetId || !job.uploadValidated) {
+      alert(
+        "Wait until this video finishes uploading and validation.",
+      );
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 360;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      alert("The browser could not capture this video frame.");
+      return;
+    }
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg");
+
+    updateTempJobFields(jobId, {
+      capturedThumbnailUrl: dataUrl,
+      thumbnailMode: "captured",
+      thumbnailAssetId: undefined,
+      thumbnailGenerationStatus: "idle",
+      thumbnailGenerationError: undefined,
+      thumbnailTimestampSeconds: frameCaptureTime,
+      thumbnailSource: "MANUAL_FRAME",
+    });
+
+    addSecurityLog(
+      "INFO",
+      `Captured dynamic frame at ${frameCaptureTime.toFixed(1)}s from local video file.`,
+      jobId,
+    );
+    setActiveFrameCaptureJobId(null);
+
+    await handleGeneratePersistedThumbnail({
+      jobId,
+      assetId: job.assetId,
+      fileName: job.fileName,
+      timestampSeconds: frameCaptureTime,
+      source: "MANUAL_FRAME",
+    });
   };
 
   // ==========================================
@@ -1518,6 +1717,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         return {
           pageId: job.pageId,
           uploadAssetId: job.assetId,
+          thumbnailAssetId:
+            job.thumbnailMode === "captured"
+              ? job.thumbnailAssetId
+              : undefined,
           englishTitle: job.englishTitle,
           englishCaption: job.englishCaption,
           hashtags: job.hashtags,
@@ -2848,8 +3051,20 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                                 <div className="flex gap-2">
                                   <button
-                                    onClick={() => handleUpdateTempJobField(job.id, "thumbnailMode", "auto")}
-                                    className={`flex-1 py-1 border rounded text-[10px] font-bold transition ${
+                                    onClick={() =>
+                                      updateTempJobFields(job.id, {
+                                        thumbnailMode: "auto",
+                                        thumbnailAssetId: undefined,
+                                        thumbnailGenerationStatus: "idle",
+                                        thumbnailGenerationError: undefined,
+                                        thumbnailTimestampSeconds: undefined,
+                                        thumbnailSource: undefined,
+                                      })
+                                    }
+                                    disabled={
+                                      job.thumbnailGenerationStatus === "generating"
+                                    }
+                                    className={`flex-1 py-1 border rounded text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
                                       job.thumbnailMode === "auto" ? "bg-zinc-200 border-zinc-300 text-zinc-900" : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                                     }`}
                                   >
@@ -2857,7 +3072,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   </button>
                                   <button
                                     onClick={() => handleOpenFrameCaptureModal(job)}
-                                    className={`flex-1 py-1 border rounded text-[10px] font-bold transition ${
+                                    disabled={
+                                      !job.uploadValidated ||
+                                      !job.assetId ||
+                                      job.thumbnailGenerationStatus === "generating"
+                                    }
+                                    className={`flex-1 py-1 border rounded text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
                                       job.thumbnailMode === "captured" ? "bg-zinc-200 border-zinc-300 text-zinc-900" : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                                     }`}
                                   >
@@ -2865,7 +3085,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   </button>
                                   <div className="relative flex-1">
                                     <button
-                                      className={`w-full py-1 border rounded text-[10px] font-bold transition ${
+                                      disabled={
+                                        job.thumbnailGenerationStatus === "generating"
+                                      }
+                                      className={`w-full py-1 border rounded text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
                                         job.thumbnailMode === "custom" ? "bg-zinc-200 border-zinc-300 text-zinc-900" : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                                       }`}
                                     >
@@ -2874,12 +3097,22 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                     <input
                                       type="file"
                                       accept="image/jpeg,image/png"
+                                      disabled={
+                                        job.thumbnailGenerationStatus === "generating"
+                                      }
                                       onChange={(e) => {
                                         if (e.target.files?.[0]) {
                                           const localUrl = URL.createObjectURL(e.target.files[0]);
-                                          handleUpdateTempJobField(job.id, "customThumbnailUrl", localUrl);
-                                          handleUpdateTempJobField(job.id, "thumbnailMode", "custom");
-                                          addSecurityLog("INFO", `Uploaded custom image ${e.target.files[0].name} for local job thumbnail.`);
+                                          updateTempJobFields(job.id, {
+                                            customThumbnailUrl: localUrl,
+                                            thumbnailMode: "custom",
+                                            thumbnailAssetId: undefined,
+                                            thumbnailGenerationStatus: "idle",
+                                            thumbnailGenerationError: undefined,
+                                            thumbnailTimestampSeconds: undefined,
+                                            thumbnailSource: undefined,
+                                          });
+                                          addSecurityLog("INFO", `Uploaded custom image ${e.target.files[0].name} for local preview only.`);
                                         }
                                       }}
                                       className="absolute inset-0 opacity-0 cursor-pointer"
@@ -2907,7 +3140,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                       alt="Custom Thumbnail Preview"
                                       className="aspect-video w-full rounded border border-zinc-200 object-cover"
                                     />
-                                    <span className="text-[9px] text-zinc-500 mt-1 block">Custom JPG preview</span>
+                                    <span className="text-[9px] text-amber-700 mt-1 block">Local preview only. Custom thumbnail storage is not connected yet.</span>
                                   </div>
                                 )}
                                 {job.thumbnailMode === "auto" && (
@@ -2915,6 +3148,51 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                     Facebook will automatically generate the thumbnail.
                                   </div>
                                 )}
+
+                                {job.thumbnailMode === "captured" &&
+                                  job.thumbnailGenerationStatus === "generating" && (
+                                    <div className="mt-2 rounded border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-[9px] text-indigo-700">
+                                      Generating and storing the permanent JPEG thumbnail...
+                                    </div>
+                                  )}
+
+                                {job.thumbnailMode === "captured" &&
+                                  job.thumbnailGenerationStatus === "complete" &&
+                                  job.thumbnailAssetId && (
+                                    <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[9px] text-emerald-800">
+                                      Permanent thumbnail ready
+                                      {typeof job.thumbnailTimestampSeconds === "number"
+                                        ? ` at ${job.thumbnailTimestampSeconds.toFixed(2)}s`
+                                        : ""}.
+                                    </div>
+                                  )}
+
+                                {job.thumbnailMode === "captured" &&
+                                  job.thumbnailGenerationStatus === "error" &&
+                                  job.thumbnailGenerationError && (
+                                    <div className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[9px] text-rose-700">
+                                      <div>{job.thumbnailGenerationError}</div>
+                                      {job.assetId &&
+                                        typeof job.thumbnailTimestampSeconds === "number" &&
+                                        job.thumbnailSource && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              void handleGeneratePersistedThumbnail({
+                                                jobId: job.id,
+                                                assetId: job.assetId!,
+                                                fileName: job.fileName,
+                                                timestampSeconds: job.thumbnailTimestampSeconds!,
+                                                source: job.thumbnailSource!,
+                                              });
+                                            }}
+                                            className="mt-1 font-bold underline"
+                                          >
+                                            Retry permanent thumbnail
+                                          </button>
+                                        )}
+                                    </div>
+                                  )}
                               </div>
                             </div>
 
@@ -2970,9 +3248,13 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                       {job.geminiThumbnailReason
                                         ? ` ${job.geminiThumbnailReason}`
                                         : ""}
-                                      {job.capturedThumbnailUrl
-                                        ? " A local thumbnail preview was captured automatically."
-                                        : " The timestamp is saved; permanent thumbnail storage will be connected in the next step."}
+                                      {job.thumbnailGenerationStatus === "complete" && job.thumbnailAssetId
+                                        ? " The permanent thumbnail is stored and linked for scheduling."
+                                        : job.thumbnailGenerationStatus === "generating"
+                                          ? " The permanent thumbnail is being generated."
+                                          : job.capturedThumbnailUrl
+                                            ? " A local preview is ready; permanent storage must succeed before scheduling."
+                                            : " Permanent thumbnail generation must succeed before scheduling."}
                                     </div>
                                   )}
                               </div>

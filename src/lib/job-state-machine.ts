@@ -668,6 +668,7 @@ export interface BulkCreateScheduledJobsTx {
         storageUri: string | null;
         uploadAssetId: string | null;
         gcsThumbnailUri: string | null;
+        thumbnailAssetId: string | null;
         englishTitle: string;
         englishCaption: string;
         hashtags: string | null;
@@ -677,6 +678,26 @@ export interface BulkCreateScheduledJobsTx {
         contentType: string;
       }
     }): Promise<VideoJob>;
+  };
+  thumbnailAsset?: {
+    findMany(args: {
+      where: {
+        id: { in: string[] };
+        userId: string;
+        deletedAt: null;
+      };
+      select: {
+        id: true;
+        userId: true;
+        sourceUploadAssetId: true;
+        deletedAt: true;
+      };
+    }): Promise<Array<{
+      id: string;
+      userId: string;
+      sourceUploadAssetId: string;
+      deletedAt: Date | null;
+    }>>;
   };
   auditLog: {
     create(args: {
@@ -702,6 +723,7 @@ export async function bulkCreateScheduledJobs(
     storageUri?: string | null;
     uploadAssetId?: string | null;
     gcsThumbnailUri?: string | null;
+    thumbnailAssetId?: string | null;
     englishTitle: string;
     englishCaption: string;
     hashtags?: string | null;
@@ -723,15 +745,74 @@ export async function bulkCreateScheduledJobs(
     }
   }
 
-  // Row-lock referenced UploadAsset records to serialize concurrent requests for the same asset
+  const referencedThumbnailIds = Array.from(
+    new Set(
+      jobsData
+        .map((job) => job.thumbnailAssetId)
+        .filter((value): value is string => Boolean(value))
+    )
+  ).sort();
+
+  // Lock source uploads and thumbnails before re-reading thumbnail ownership/state.
+  // This closes the gap where a thumbnail could be soft-deleted between validation
+  // and VideoJob creation.
   if (typeof tx.$executeRaw === 'function') {
-    const assetIds = Array.from(new Set(jobsData.map(j => j.uploadAssetId).filter(Boolean))) as string[];
-    if (assetIds.length > 0) {
-      assetIds.sort();
-      for (const assetId of assetIds) {
-        await tx.$executeRaw`
-          SELECT id FROM "UploadAsset" WHERE id = ${assetId}::uuid FOR UPDATE
-        `;
+    const assetIds = Array.from(
+      new Set(
+        jobsData
+          .map((job) => job.uploadAssetId)
+          .filter((value): value is string => Boolean(value))
+      )
+    ).sort();
+
+    for (const assetId of assetIds) {
+      await tx.$executeRaw`
+        SELECT id FROM "UploadAsset" WHERE id = ${assetId}::uuid FOR UPDATE
+      `;
+    }
+
+    for (const thumbnailAssetId of referencedThumbnailIds) {
+      await tx.$executeRaw`
+        SELECT id FROM "ThumbnailAsset" WHERE id = ${thumbnailAssetId}::uuid FOR UPDATE
+      `;
+    }
+  }
+
+  if (referencedThumbnailIds.length > 0) {
+    if (!tx.thumbnailAsset) {
+      throw new Error('Thumbnail asset validation is unavailable.');
+    }
+
+    const thumbnailAssets = await tx.thumbnailAsset.findMany({
+      where: {
+        id: { in: referencedThumbnailIds },
+        userId,
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        userId: true,
+        sourceUploadAssetId: true,
+        deletedAt: true,
+      },
+    });
+
+    const thumbnailsById = new Map(
+      thumbnailAssets.map((thumbnail) => [thumbnail.id, thumbnail])
+    );
+
+    for (const job of jobsData) {
+      if (!job.thumbnailAssetId) {
+        continue;
+      }
+
+      const thumbnail = thumbnailsById.get(job.thumbnailAssetId);
+      if (!thumbnail || thumbnail.userId !== userId || thumbnail.deletedAt !== null) {
+        throw new Error('Unauthorized or unavailable thumbnail asset.');
+      }
+
+      if (!job.uploadAssetId || thumbnail.sourceUploadAssetId !== job.uploadAssetId) {
+        throw new Error('Thumbnail asset does not belong to the scheduled upload asset.');
       }
     }
   }
@@ -755,6 +836,15 @@ export async function bulkCreateScheduledJobs(
     }
 
     if (existing) {
+      if (
+        (existing.thumbnailAssetId ?? null) !==
+        (job.thumbnailAssetId ?? null)
+      ) {
+        throw new Error(
+          'A scheduled job already exists for this page, upload, and time with a different thumbnail.',
+        );
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (existing as any).isReused = true;
       createdJobs.push(existing);
@@ -769,6 +859,7 @@ export async function bulkCreateScheduledJobs(
         storageUri: job.storageUri || null,
         uploadAssetId: job.uploadAssetId || null,
         gcsThumbnailUri: job.gcsThumbnailUri || null,
+        thumbnailAssetId: job.thumbnailAssetId || null,
         englishTitle: job.englishTitle,
         englishCaption: job.englishCaption,
         hashtags: job.hashtags || null,

@@ -7,6 +7,53 @@ import { prisma } from '@/lib/prisma-client';
 import { bulkCreateScheduledJobs } from '@/lib/job-state-machine';
 import { resolveStorageReference } from '@/lib/storage';
 
+interface SchedulableThumbnailAsset {
+  id: string;
+  userId: string;
+  sourceUploadAssetId: string;
+  provider: string;
+  storageUri: string;
+  deletedAt: Date | null;
+}
+
+const FORBIDDEN_BROWSER_THUMBNAIL_FIELDS = [
+  'gcsThumbnailUri',
+  'thumbnailStorageUri',
+  'thumbnailUri',
+  'thumbnailProvider',
+  'thumbnailBucket',
+  'thumbnailObjectKey',
+  'thumbnailUserId',
+] as const;
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function sanitizeCreatedJob(job: unknown): Record<string, unknown> {
+  if (!job || typeof job !== 'object') {
+    return {};
+  }
+
+  const record = job as Record<string, unknown>;
+  return {
+    id: record.id,
+    pageId: record.pageId,
+    uploadAssetId: record.uploadAssetId ?? null,
+    thumbnailAssetId: record.thumbnailAssetId ?? null,
+    englishTitle: record.englishTitle,
+    englishCaption: record.englishCaption,
+    hashtags: record.hashtags ?? null,
+    scheduledTimeUTC: record.scheduledTimeUTC,
+    status: record.status,
+    mockScenario: record.mockScenario ?? MockScenario.SUCCESS,
+    contentType: record.contentType ?? 'VIDEO',
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    isReused: record.isReused === true,
+  };
+}
+
 export interface JobsRouteDependencies {
   getSessionUser: typeof getSessionUser;
   verifyAdminSession: typeof verifyAdminSession;
@@ -22,6 +69,7 @@ export interface JobsRouteDependencies {
     objectKey: string;
     objectDeletedAt?: Date | null;
   } | null>;
+  findThumbnailAsset?: (id: string) => Promise<SchedulableThumbnailAsset | null>;
   findUserPages: (userId: string) => Promise<Array<{ id: string }>>;
   bulkCreateScheduledJobs: (
     userId: string,
@@ -35,6 +83,19 @@ export const defaultJobsRouteDependencies: JobsRouteDependencies = {
   getVideoJobs: (userId) => getVideoJobs(userId),
   findUploadAsset: async (id) => {
     return await prisma.uploadAsset.findUnique({ where: { id } });
+  },
+  findThumbnailAsset: async (id) => {
+    return await prisma.thumbnailAsset.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        userId: true,
+        sourceUploadAssetId: true,
+        provider: true,
+        storageUri: true,
+        deletedAt: true,
+      },
+    });
   },
   findUserPages: async (userId) => {
     return await prisma.facebookPage.findMany({
@@ -77,6 +138,7 @@ export async function handleJobsGet(
         mockScenario: job.mockScenario ?? MockScenario.SUCCESS,
         contentType: job.contentType,
         uploadAssetId: job.uploadAssetId,
+        thumbnailAssetId: job.thumbnailAssetId,
         fileName,
         attemptCount: job.attemptCount,
         lastErrorMessage: job.lastErrorMessage,
@@ -129,6 +191,12 @@ export async function handleJobsPost(
     // Validate each job schema and load UploadAsset
     for (let index = 0; index < jobs.length; index++) {
       const job = jobs[index];
+
+      if (!job || typeof job !== 'object' || Array.isArray(job)) {
+        results[index] = { index, status: 'FAILED', error: 'Each video job must be an object.' };
+        continue;
+      }
+
       const errors = validateJobInput({
         englishTitle: job.englishTitle,
         englishCaption: job.englishCaption || '',
@@ -144,8 +212,11 @@ export async function handleJobsPost(
         continue;
       }
 
-      // Check for browser-supplied URIs and reject them
-      if (job.gcsVideoUri || job.storageUri) {
+      // Check for browser-supplied URIs and reject them, including null placeholders.
+      if (
+        Object.prototype.hasOwnProperty.call(job, 'gcsVideoUri') ||
+        Object.prototype.hasOwnProperty.call(job, 'storageUri')
+      ) {
         errors.push("Manually specified storage references are not accepted.");
       }
 
@@ -174,6 +245,47 @@ export async function handleJobsPost(
         }
       }
 
+      for (const field of FORBIDDEN_BROWSER_THUMBNAIL_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(job, field)) {
+          errors.push('Manually specified thumbnail storage references are not accepted.');
+          break;
+        }
+      }
+
+      let thumbnailAssetId: string | null = null;
+      const requestedThumbnailAssetId = job.thumbnailAssetId;
+
+      if (requestedThumbnailAssetId !== undefined && requestedThumbnailAssetId !== null) {
+        if (typeof requestedThumbnailAssetId !== 'string' || !isUuid(requestedThumbnailAssetId.trim())) {
+          errors.push('thumbnailAssetId must be a valid UUID.');
+        } else if (!asset) {
+          errors.push('Thumbnail asset cannot be validated without its source upload asset.');
+        } else {
+          const thumbnail = await (dependencies.findThumbnailAsset ?? defaultJobsRouteDependencies.findThumbnailAsset!)(requestedThumbnailAssetId.trim());
+
+          if (!thumbnail) {
+            errors.push('Thumbnail asset not found.');
+          } else {
+            if (thumbnail.userId !== user.id) {
+              errors.push('Unauthorized thumbnail asset.');
+            }
+            if (thumbnail.sourceUploadAssetId !== asset.id) {
+              errors.push('Thumbnail asset does not belong to the selected upload asset.');
+            }
+            if (thumbnail.deletedAt) {
+              errors.push('Thumbnail asset is deleted.');
+            }
+            if (thumbnail.provider !== 'GOOGLE_DRIVE' || !thumbnail.storageUri.startsWith('gdrive://')) {
+              errors.push('Thumbnail asset storage provider is invalid.');
+            }
+
+            if (errors.length === 0) {
+              thumbnailAssetId = thumbnail.id;
+            }
+          }
+        }
+      }
+
       let mockScenarioVal: MockScenario = MockScenario.SUCCESS;
       try {
         mockScenarioVal = normalizeMockScenario(job.mockScenario);
@@ -196,7 +308,8 @@ export async function handleJobsPost(
           uploadAssetId: asset.id,
           gcsVideoUri: gcsVideoUri ?? null,
           storageUri: storageUri ?? null,
-          gcsThumbnailUri: job.gcsThumbnailUri ?? null,
+          gcsThumbnailUri: null,
+          thumbnailAssetId,
           englishTitle: job.englishTitle,
           englishCaption: job.englishCaption ?? '',
           hashtags: job.hashtags ?? null,
@@ -215,7 +328,8 @@ export async function handleJobsPost(
         uploadAssetId: j.uploadAssetId,
         gcsVideoUri: j.gcsVideoUri,
         storageUri: j.storageUri,
-        gcsThumbnailUri: j.gcsThumbnailUri,
+        gcsThumbnailUri: null,
+        thumbnailAssetId: j.thumbnailAssetId,
         englishTitle: j.englishTitle,
         englishCaption: j.englishCaption,
         hashtags: j.hashtags,
@@ -230,11 +344,12 @@ export async function handleJobsPost(
         const job = created[i];
 
         const isDuplicate = !!job.isReused;
+        const safeJob = sanitizeCreatedJob(job);
 
         results[originalIndex] = {
           index: originalIndex,
           status: isDuplicate ? 'DUPLICATE' : 'SUCCESS',
-          job
+          job: safeJob
         };
       }
     }
@@ -251,7 +366,8 @@ export async function handleJobsPost(
       return NextResponse.json({ error: 'Validation failed', details: allErrors }, { status: 400 });
     }
 
-    return NextResponse.json({ success: true, count: created.length, jobs: created, results });
+    const safeCreated = created.map((job) => sanitizeCreatedJob(job));
+    return NextResponse.json({ success: true, count: safeCreated.length, jobs: safeCreated, results });
   } catch (error) {
     console.error('Error creating video jobs:', error);
     const msg = error instanceof Error ? error.message : '';
@@ -259,6 +375,12 @@ export async function handleJobsPost(
       return NextResponse.json(
         { error: 'Invalid Facebook Page selection.' },
         { status: 400 }
+      );
+    }
+    if (msg.includes('different thumbnail')) {
+      return NextResponse.json(
+        { error: 'A matching scheduled job already exists with a different thumbnail.' },
+        { status: 409 }
       );
     }
     return NextResponse.json(

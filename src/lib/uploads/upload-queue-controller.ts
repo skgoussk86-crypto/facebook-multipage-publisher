@@ -92,6 +92,15 @@ export interface QueueItem {
   geminiThumbnailTimestampSeconds?: number;
   geminiThumbnailReason?: string;
   geminiAnalyzedAt?: string;
+  thumbnailAssetId?: string;
+  thumbnailGenerationStatus?:
+    | 'idle'
+    | 'generating'
+    | 'complete'
+    | 'error';
+  thumbnailGenerationError?: string;
+  thumbnailTimestampSeconds?: number;
+  thumbnailSource?: 'GEMINI_FRAME' | 'MANUAL_FRAME';
 }
 
 export function getFileFingerprint(file: { name: string; size: number; type: string; lastModified: number }): string {
@@ -274,6 +283,20 @@ export class UploadQueueController {
             item.geminiThumbnailReason,
           geminiAnalyzedAt:
             item.geminiAnalyzedAt,
+          thumbnailAssetId:
+            item.thumbnailAssetId,
+          thumbnailGenerationStatus:
+            item.thumbnailGenerationStatus === 'generating'
+              ? 'idle'
+              : item.thumbnailGenerationStatus,
+          thumbnailGenerationError:
+            item.thumbnailGenerationStatus === 'generating'
+              ? 'Previous thumbnail generation was interrupted. Generate the frame again.'
+              : item.thumbnailGenerationError,
+          thumbnailTimestampSeconds:
+            item.thumbnailTimestampSeconds,
+          thumbnailSource:
+            item.thumbnailSource,
         });
       }
 
@@ -327,6 +350,16 @@ export class UploadQueueController {
             item.geminiThumbnailReason,
           geminiAnalyzedAt:
             item.geminiAnalyzedAt,
+          thumbnailAssetId:
+            item.thumbnailAssetId,
+          thumbnailGenerationStatus:
+            item.thumbnailGenerationStatus,
+          thumbnailGenerationError:
+            item.thumbnailGenerationError,
+          thumbnailTimestampSeconds:
+            item.thumbnailTimestampSeconds,
+          thumbnailSource:
+            item.thumbnailSource,
         };
       });
 
