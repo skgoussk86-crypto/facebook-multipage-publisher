@@ -6,6 +6,7 @@ import {
 } from "node:fs";
 import {
   FACEBOOK_THUMBNAIL_PUBLISHING_EXPERIMENTAL_ACK,
+  FACEBOOK_THUMBNAIL_PUBLISHING_MAX_PROBE_WINDOW_MS,
   FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB,
   getFacebookThumbnailPublishingCapability,
 } from "../src/lib/facebook/facebook-thumbnail-publishing-capability";
@@ -151,9 +152,37 @@ async function runCapabilityTests():
     "Facebook thumbnail capability tests...",
   );
 
+  const now =
+    new Date(
+      "2026-07-20T16:00:00.000Z",
+    );
+
+  const context = {
+    jobId: "probe-job-id",
+    pageId: "probe-page-id",
+    now,
+  };
+
+  const validEnvironment = {
+    FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_MODE:
+      FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB,
+    FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_ACK:
+      FACEBOOK_THUMBNAIL_PUBLISHING_EXPERIMENTAL_ACK,
+    FACEBOOK_VIDEO_THUMBNAIL_PROBE_JOB_ID:
+      "probe-job-id",
+    FACEBOOK_VIDEO_THUMBNAIL_PROBE_PAGE_ID:
+      "probe-page-id",
+    FACEBOOK_VIDEO_THUMBNAIL_PROBE_EXPIRES_AT:
+      new Date(
+        now.getTime() +
+          5 * 60 * 1000,
+      ).toISOString(),
+  };
+
   const defaultCapability =
     getFacebookThumbnailPublishingCapability(
       {},
+      context,
     );
 
   assert(
@@ -173,10 +202,13 @@ async function runCapabilityTests():
   );
 
   const missingAcknowledgement =
-    getFacebookThumbnailPublishingCapability({
-      FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_MODE:
-        FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB,
-    });
+    getFacebookThumbnailPublishingCapability(
+      {
+        FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_MODE:
+          FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB,
+      },
+      context,
+    );
 
   assert(
     missingAcknowledgement.enabled === false,
@@ -189,17 +221,151 @@ async function runCapabilityTests():
     "Missing acknowledgement must be explicit.",
   );
 
+  const missingTarget =
+    getFacebookThumbnailPublishingCapability(
+      {
+        FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_MODE:
+          FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB,
+        FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_ACK:
+          FACEBOOK_THUMBNAIL_PUBLISHING_EXPERIMENTAL_ACK,
+      },
+      context,
+    );
+
+  assert(
+    missingTarget.enabled === false &&
+      missingTarget.reason ===
+        "MISSING_PROBE_TARGET",
+    "The global mode must not enable thumbnail publishing without an exact job and Page target.",
+  );
+
+  const missingContext =
+    getFacebookThumbnailPublishingCapability(
+      validEnvironment,
+    );
+
+  assert(
+    missingContext.enabled === false &&
+      missingContext.reason ===
+        "MISSING_PROBE_CONTEXT",
+    "The capability must require the worker's current job and Page context.",
+  );
+
+  const wrongJob =
+    getFacebookThumbnailPublishingCapability(
+      validEnvironment,
+      {
+        ...context,
+        jobId: "other-job-id",
+      },
+    );
+
+  assert(
+    wrongJob.enabled === false &&
+      wrongJob.reason ===
+        "PROBE_JOB_MISMATCH",
+    "Only the exact configured job may use the experimental adapter.",
+  );
+
+  const wrongPage =
+    getFacebookThumbnailPublishingCapability(
+      validEnvironment,
+      {
+        ...context,
+        pageId: "other-page-id",
+      },
+    );
+
+  assert(
+    wrongPage.enabled === false &&
+      wrongPage.reason ===
+        "PROBE_PAGE_MISMATCH",
+    "Only the exact configured Page may use the experimental adapter.",
+  );
+
+  const missingExpiry =
+    getFacebookThumbnailPublishingCapability(
+      {
+        ...validEnvironment,
+        FACEBOOK_VIDEO_THUMBNAIL_PROBE_EXPIRES_AT:
+          "",
+      },
+      context,
+    );
+
+  assert(
+    missingExpiry.enabled === false &&
+      missingExpiry.reason ===
+        "MISSING_PROBE_EXPIRY",
+    "A live probe must have an explicit expiry.",
+  );
+
+  const invalidExpiry =
+    getFacebookThumbnailPublishingCapability(
+      {
+        ...validEnvironment,
+        FACEBOOK_VIDEO_THUMBNAIL_PROBE_EXPIRES_AT:
+          "not-a-date",
+      },
+      context,
+    );
+
+  assert(
+    invalidExpiry.enabled === false &&
+      invalidExpiry.reason ===
+        "INVALID_PROBE_EXPIRY",
+    "An invalid probe expiry must fail closed.",
+  );
+
+  const expired =
+    getFacebookThumbnailPublishingCapability(
+      {
+        ...validEnvironment,
+        FACEBOOK_VIDEO_THUMBNAIL_PROBE_EXPIRES_AT:
+          new Date(
+            now.getTime() - 1000,
+          ).toISOString(),
+      },
+      context,
+    );
+
+  assert(
+    expired.enabled === false &&
+      expired.reason ===
+        "PROBE_WINDOW_EXPIRED",
+    "An expired probe window must fail closed.",
+  );
+
+  const tooLong =
+    getFacebookThumbnailPublishingCapability(
+      {
+        ...validEnvironment,
+        FACEBOOK_VIDEO_THUMBNAIL_PROBE_EXPIRES_AT:
+          new Date(
+            now.getTime() +
+              FACEBOOK_THUMBNAIL_PUBLISHING_MAX_PROBE_WINDOW_MS +
+              1000,
+          ).toISOString(),
+      },
+      context,
+    );
+
+  assert(
+    tooLong.enabled === false &&
+      tooLong.reason ===
+        "PROBE_WINDOW_TOO_LONG",
+    "A probe window longer than 15 minutes must fail closed.",
+  );
+
   const enabled =
-    getFacebookThumbnailPublishingCapability({
-      FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_MODE:
-        FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB,
-      FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_ACK:
-        FACEBOOK_THUMBNAIL_PUBLISHING_EXPERIMENTAL_ACK,
-    });
+    getFacebookThumbnailPublishingCapability(
+      validEnvironment,
+      context,
+    );
 
   assert(
     enabled.enabled === true,
-    "The exact mode and acknowledgement should enable the experimental adapter.",
+    "The exact mode, acknowledgement, target, context, and short expiry should enable the experimental adapter.",
   );
 
   assert(
@@ -213,7 +379,7 @@ async function runCapabilityTests():
   );
 
   console.log(
-    "  ✓ default-off and two-part acknowledgement gate verified",
+    "  ✓ default-off, acknowledgement, exact job/Page target, and short expiry gate verified",
   );
 }
 
@@ -721,6 +887,16 @@ function runWorkerBoundaryTests():
 
   assert(
     workerSource.includes(
+      "jobId: job.id",
+    ) &&
+      workerSource.includes(
+        "page.facebookPageId",
+      ),
+    "The worker must scope the experimental capability to the exact current job and Page.",
+  );
+
+  assert(
+    workerSource.includes(
       "current Meta Reel publishing flow has no enabled thumbnail capability",
     ),
     "The worker must not claim Reel thumbnail support.",
@@ -734,7 +910,7 @@ function runWorkerBoundaryTests():
   );
 
   console.log(
-    "  ✓ capability-first resolution, default fallback, Reel exclusion, and failure classification verified",
+    "  ✓ capability-first resolution, exact job/Page scoping, default fallback, Reel exclusion, and failure classification verified",
   );
 }
 

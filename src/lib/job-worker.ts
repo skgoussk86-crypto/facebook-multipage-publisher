@@ -653,7 +653,14 @@ async function processClaimedJob(
             );
 
             const thumbnailCapability =
-              getFacebookThumbnailPublishingCapability();
+              getFacebookThumbnailPublishingCapability(
+                process.env,
+                {
+                  jobId: job.id,
+                  pageId:
+                    page.facebookPageId,
+                },
+              );
 
             if (
               !thumbnailCapability.enabled ||
