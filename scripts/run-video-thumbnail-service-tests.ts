@@ -39,6 +39,7 @@ function createAsset(
     provider: "GOOGLE_DRIVE",
     status: "VALIDATED",
     originalName: "video.mp4",
+    objectKey: "drive-video-file",
     expectedSize: BigInt(8),
     actualSize: BigInt(8),
     durationMs: 10_000,

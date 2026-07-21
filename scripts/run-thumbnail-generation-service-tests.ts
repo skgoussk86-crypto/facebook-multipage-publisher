@@ -32,6 +32,7 @@ function createAsset(
     originalName: "video.mp4",
     expectedSize: BigInt(1000),
     actualSize: BigInt(900),
+    objectKey: "drive-video-file",
     durationMs: 10000,
     objectDeletedAt: null,
     ...overrides,
@@ -454,6 +455,15 @@ async function testSuccessfulCreation():
     actualGeneratedInput
       .timestampSeconds,
     2.5,
+  );
+
+  const generatedAsset =
+    actualGeneratedInput.asset as
+      ThumbnailGenerationAsset;
+
+  assert.equal(
+    generatedAsset.objectKey,
+    "drive-video-file",
   );
 
   assert(persistedInput !== null);

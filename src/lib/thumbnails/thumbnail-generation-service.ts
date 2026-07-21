@@ -290,6 +290,7 @@ async function findAssetById(
       originalName: true,
       expectedSize: true,
       actualSize: true,
+      objectKey: true,
       durationMs: true,
       objectDeletedAt: true,
     },

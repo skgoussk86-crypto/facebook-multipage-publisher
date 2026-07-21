@@ -45,6 +45,7 @@ export interface ThumbnailSourceVideoAsset {
   readonly originalName: string;
   readonly expectedSize: bigint;
   readonly actualSize: bigint | null;
+  readonly objectKey: string;
   readonly durationMs: number | null;
   readonly objectDeletedAt: Date | null;
 }
