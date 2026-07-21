@@ -24,25 +24,20 @@ export async function handleDisconnect(request: NextRequest, deps?: DisconnectDe
       return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401 });
     }
 
-    let config: GoogleDriveConfig;
     try {
-      config = getConfig();
+      getConfig();
     } catch {
       return NextResponse.json({ error: "GOOGLE_DRIVE_NOT_CONFIGURED" }, { status: 500 });
     }
 
-    if (user.id !== config.ownerUserId) {
-      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-    }
-
-    if (user.role !== "ADMIN" || user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
+    if (user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
       return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     }
 
     // Call mock revocation if registered
     if (deps?.mockRevokeCall) {
       const conn = await prisma.googleDriveConnection.findUnique({
-        where: { userId: config.ownerUserId },
+        where: { userId: user.id },
       });
       if (conn && conn.encryptedRefreshToken && conn.encryptedRefreshToken !== "REVOKED") {
         try {
@@ -56,7 +51,7 @@ export async function handleDisconnect(request: NextRequest, deps?: DisconnectDe
     }
 
     // Execute local disconnect and clear refresh token
-    await disconnectFn(config.ownerUserId);
+    await disconnectFn(user.id);
 
     return NextResponse.json({
       disconnected: true,

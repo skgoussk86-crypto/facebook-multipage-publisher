@@ -50,7 +50,6 @@ export function verifyOAuthState(
       payload.version !== "v1" ||
       payload.purpose !== "GOOGLE_DRIVE" ||
       payload.userId !== expectedUserId ||
-      expectedUserId !== ownerUserId ||
       typeof payload.issuedAt !== "number" ||
       typeof payload.expiresAt !== "number" ||
       payload.expiresAt < Date.now() ||

@@ -77,11 +77,7 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
     return createCallbackRedirect(`${publicOrigin}/login?callbackUrl=/settings/storage`);
   }
 
-  if (user.id !== config.ownerUserId) {
-    return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_drive_connection_failed`);
-  }
-
-  if (user.role !== "ADMIN" || user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
+  if (user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
     return createCallbackRedirect(`${publicOrigin}/settings/storage?error=google_drive_connection_failed`);
   }
 
@@ -132,7 +128,7 @@ export async function handleCallback(request: NextRequest, deps?: CallbackDepend
 
     // 5. Check for active connection
     const getActiveConn = deps?.getActiveConnection || getActiveConnectionForOwner;
-    const activeConnection = await getActiveConn(config.ownerUserId);
+    const activeConnection = await getActiveConn(user.id);
 
     if (!refreshToken && !activeConnection) {
       console.error("Google Drive connection failed: Missing refresh token on first connection or revoked connection.");

@@ -19,6 +19,10 @@ export async function GET() {
       return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401 });
     }
 
+    if (user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    }
+
     const connection = await getGoogleDriveConnectionForUser(user.id);
     const oauthConfigured = isGoogleDriveOAuthConfigured();
     let callbackUrl: string | null = null;
@@ -73,6 +77,10 @@ export async function DELETE(request: NextRequest) {
     const user = await verifyAdminSession(request);
     if (!user) {
       return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401 });
+    }
+
+    if (user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     }
 
     const connection = await getGoogleDriveConnectionForUser(user.id);

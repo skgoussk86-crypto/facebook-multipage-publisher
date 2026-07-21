@@ -38,15 +38,11 @@ export async function handleInitiate(request: NextRequest, deps?: InitiateDepend
       return NextResponse.json({ error: "GOOGLE_DRIVE_NOT_CONFIGURED", details: errorMsg }, { status: 500 });
     }
 
-    if (user.id !== config.ownerUserId) {
-      return NextResponse.json({ error: "FORBIDDEN_NOT_OWNER" }, { status: 403 });
+    if (user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
+      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     }
 
-    if (user.role !== "ADMIN" || user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
-      return NextResponse.json({ error: "FORBIDDEN_INVALID_ADMIN_STATUS" }, { status: 403 });
-    }
-
-    const activeConnection = await getActiveConn(config.ownerUserId);
+    const activeConnection = await getActiveConn(user.id);
     const hasActiveToken = !!activeConnection;
 
     const searchParams = request.nextUrl.searchParams;

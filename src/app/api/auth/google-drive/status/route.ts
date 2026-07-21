@@ -21,27 +21,22 @@ export async function handleStatus(request: NextRequest, deps?: StatusDependenci
       return NextResponse.json({ error: "UNAUTHENTICATED" }, { status: 401 });
     }
 
-    let config: GoogleDriveConfig;
     try {
-      config = getConfig();
+      getConfig();
     } catch {
       return NextResponse.json({ error: "GOOGLE_DRIVE_NOT_CONFIGURED" }, { status: 500 });
     }
 
-    if (user.id !== config.ownerUserId) {
-      return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-    }
-
-    if (user.role !== "ADMIN" || user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
+    if (user.status !== "ACTIVE" || user.approvalStatus !== "APPROVED") {
       return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     }
 
     let connection: GoogleDriveConnectionRecord | null;
     if (deps?.getConnection) {
-      connection = await deps.getConnection(config.ownerUserId);
+      connection = await deps.getConnection(user.id);
     } else {
       connection = (await prisma.googleDriveConnection.findUnique({
-        where: { userId: config.ownerUserId },
+        where: { userId: user.id },
       })) as GoogleDriveConnectionRecord | null;
     }
 

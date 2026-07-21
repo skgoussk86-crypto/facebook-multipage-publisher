@@ -254,66 +254,95 @@ async function runTests() {
     console.error("Test 2 Failed:", msg);
   }
 
-  // Test 3: Ordinary user rejected
+  // Test 3: ACTIVE + APPROVED USER is permitted
   try {
     resetMocks();
     const req = new NextRequest("http://localhost:3000/api/auth/google-drive/initiate");
     const res = await handleInitiate(req, {
       getSessionUser: async () => mockOrdinaryUser,
       getConfig: () => testConfig,
+      getActiveConnection: async (uid) => {
+        assert(uid === mockOrdinaryUser.id, "Expected getActiveConnection to be called with authenticated user ID");
+        return null;
+      },
+      generateState: (uid) => {
+        assert(uid === mockOrdinaryUser.id, "Expected generateState to be called with authenticated user ID");
+        return { state: "mock-state", nonce: "mock-nonce" };
+      },
+      setCookie: () => {},
     });
-    assert(res.status === 403, "Expected 403 status");
-    console.log("Test 3 Passed: Ordinary user rejected [✓]");
+    assert(res.status === 307 || res.status === 302, `Expected 307/302 redirect, got ${res.status}`);
+    const location = res.headers.get("location") || "";
+    assert(location.includes("scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file"), "Requested OAuth scope must remain drive.file");
+    console.log("Test 3 Passed: ACTIVE + APPROVED USER is permitted [✓]");
     passedCount++;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("Test 3 Failed:", msg);
   }
 
-  // Test 4: Non-owner admin rejected
+  // Test 4: ACTIVE + APPROVED ADMIN is permitted
   try {
     resetMocks();
     const req = new NextRequest("http://localhost:3000/api/auth/google-drive/initiate");
     const res = await handleInitiate(req, {
       getSessionUser: async () => mockOtherAdmin,
       getConfig: () => testConfig,
+      getActiveConnection: async (uid) => {
+        assert(uid === mockOtherAdmin.id, "Expected getActiveConnection to be called with authenticated user ID");
+        return null;
+      },
+      generateState: (uid) => {
+        assert(uid === mockOtherAdmin.id, "Expected generateState to be called with authenticated user ID");
+        return { state: "mock-state", nonce: "mock-nonce" };
+      },
+      setCookie: () => {},
     });
-    assert(res.status === 403, "Expected 403 status");
-    console.log("Test 4 Passed: Non-owner admin rejected [✓]");
+    assert(res.status === 307 || res.status === 302, `Expected 307/302 redirect, got ${res.status}`);
+    console.log("Test 4 Passed: ACTIVE + APPROVED ADMIN is permitted [✓]");
     passedCount++;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("Test 4 Failed:", msg);
   }
 
-  // Test 5: Inactive owner rejected
+  // Test 5: SUSPENDED user is denied
   try {
     resetMocks();
-    const inactiveOwner = { ...mockOwnerAdmin, status: UserStatus.SUSPENDED };
+    const inactiveUser = { ...mockOrdinaryUser, status: UserStatus.SUSPENDED };
     const req = new NextRequest("http://localhost:3000/api/auth/google-drive/initiate");
     const res = await handleInitiate(req, {
-      getSessionUser: async () => inactiveOwner,
+      getSessionUser: async () => inactiveUser,
       getConfig: () => testConfig,
     });
     assert(res.status === 403, "Expected 403 status");
-    console.log("Test 5 Passed: Inactive owner rejected [✓]");
+    console.log("Test 5 Passed: SUSPENDED user is denied [✓]");
     passedCount++;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("Test 5 Failed:", msg);
   }
 
-  // Test 6: Unapproved owner rejected
+  // Test 6: PENDING, REJECTED, or otherwise unapproved user is denied
   try {
     resetMocks();
-    const unapprovedOwner = { ...mockOwnerAdmin, approvalStatus: UserApprovalStatus.PENDING };
-    const req = new NextRequest("http://localhost:3000/api/auth/google-drive/initiate");
-    const res = await handleInitiate(req, {
-      getSessionUser: async () => unapprovedOwner,
+    const pendingUser = { ...mockOrdinaryUser, approvalStatus: UserApprovalStatus.PENDING };
+    const req1 = new NextRequest("http://localhost:3000/api/auth/google-drive/initiate");
+    const res1 = await handleInitiate(req1, {
+      getSessionUser: async () => pendingUser,
       getConfig: () => testConfig,
     });
-    assert(res.status === 403, "Expected 403 status");
-    console.log("Test 6 Passed: Unapproved owner rejected [✓]");
+    assert(res1.status === 403, "Expected 403 status for pending user");
+
+    const rejectedUser = { ...mockOrdinaryUser, approvalStatus: UserApprovalStatus.REJECTED };
+    const req2 = new NextRequest("http://localhost:3000/api/auth/google-drive/initiate");
+    const res2 = await handleInitiate(req2, {
+      getSessionUser: async () => rejectedUser,
+      getConfig: () => testConfig,
+    });
+    assert(res2.status === 403, "Expected 403 status for rejected user");
+
+    console.log("Test 6 Passed: PENDING, REJECTED, or otherwise unapproved user is denied [✓]");
     passedCount++;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -734,27 +763,27 @@ async function runTests() {
     console.error("Test 21 Failed:", msg);
   }
 
-  // Test 22: Disconnect is owner-only and idempotent
+  // Test 22: Disconnect is permitted for any active approved user and is idempotent
   try {
     resetMocks();
-    const reqNonOwner = new NextRequest("http://localhost:3000/api/auth/google-drive/disconnect", { method: "POST" });
-    const resNonOwner = await handleDisconnect(reqNonOwner, {
-      verifySession: async () => mockOtherAdmin,
+    const reqSuspended = new NextRequest("http://localhost:3000/api/auth/google-drive/disconnect", { method: "POST" });
+    const resSuspended = await handleDisconnect(reqSuspended, {
+      verifySession: async () => ({ ...mockOtherAdmin, status: UserStatus.SUSPENDED }),
       getConfig: () => testConfig,
     });
-    assert(resNonOwner.status === 403, "Expected 403 for non-owner disconnect request");
+    assert(resSuspended.status === 403, "Expected 403 for suspended user disconnect request");
 
-    // Idempotent check
+    // Idempotent check for active approved user
     const reqIdempotent = new NextRequest("http://localhost:3000/api/auth/google-drive/disconnect", { method: "POST" });
     const resIdempotent = await handleDisconnect(reqIdempotent, {
-      verifySession: async () => mockOwnerAdmin,
+      verifySession: async () => mockOtherAdmin,
       getConfig: () => testConfig,
       disconnect: async () => null,
     });
     assert(resIdempotent.status === 200, "Expected 200 status for idempotent disconnect");
     const body = await resIdempotent.json() as { disconnected: boolean };
     assert(body.disconnected === true, "Expected disconnected true");
-    console.log("Test 22 Passed: Disconnect is owner-only and idempotent [✓]");
+    console.log("Test 22 Passed: Disconnect is permitted for active users and idempotent [✓]");
     passedCount++;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -1048,8 +1077,189 @@ async function runTests() {
     console.error("Test 30 Failed:", msg);
   }
 
-  console.log(`\nGoogle Drive OAuth Validation complete. Passed: ${passedCount}/30`);
-  if (passedCount !== 30) {
+  // Test 31: Initiate looks up the Drive connection using the authenticated user ID
+  try {
+    resetMocks();
+    let lookedUpUserId = "";
+    const req = new NextRequest("http://localhost:3000/api/auth/google-drive/initiate");
+    await handleInitiate(req, {
+      getSessionUser: async () => mockOrdinaryUser,
+      getConfig: () => testConfig,
+      getActiveConnection: async (uid) => {
+        lookedUpUserId = uid;
+        return null;
+      },
+      generateState: () => ({ state: "mock-state", nonce: "mock-nonce" }),
+      setCookie: () => {},
+    });
+    assert(lookedUpUserId === mockOrdinaryUser.id, `Expected to look up user connection for ${mockOrdinaryUser.id}, got ${lookedUpUserId}`);
+    console.log("Test 31 Passed: Initiate looks up connection using authenticated user ID [✓]");
+    passedCount++;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Test 31 Failed:", msg);
+  }
+
+  // Test 32: Callback validates state against the authenticated user
+  try {
+    resetMocks();
+    const { state, nonce } = generateOAuthState(mockOrdinaryUser.id);
+    const req = new NextRequest(`http://localhost:3000/api/auth/google-drive/callback?state=${state}&code=mock-code`, {
+      headers: {
+        Cookie: `google_drive_oauth_state_nonce=${nonce}`
+      }
+    });
+
+    let stateValidatedExpectedUserId = "";
+    const res = await handleCallback(req, {
+      getSessionUser: async () => mockOrdinaryUser,
+      getConfig: () => testConfig,
+      verifyState: (st, cNonce, expectedUid, ownerUid) => {
+        stateValidatedExpectedUserId = expectedUid;
+        return verifyOAuthState(st, cNonce, expectedUid, ownerUid);
+      },
+      exchangeCode: async () => ({
+        accessToken: "access-token",
+        refreshToken: "refresh-token",
+        expiryDate: Date.now() + 3600,
+      }),
+      getActiveConnection: async () => null,
+      upsertConn: async (uid, data) => ({
+        id: "conn-id",
+        userId: uid,
+        encryptedRefreshToken: data.encryptedRefreshToken,
+        refreshTokenKeyVersion: data.refreshTokenKeyVersion,
+        googleAccountEmail: data.googleAccountEmail ?? null,
+        driveFolderId: data.driveFolderId ?? null,
+        connectedAt: new Date(),
+        updatedAt: new Date(),
+        revokedAt: null,
+      }),
+      provisionFolder: fakeProvisionFolder,
+      writeAuditLog: async () => {},
+    });
+
+    assert(stateValidatedExpectedUserId === mockOrdinaryUser.id, `Expected state to be validated against authenticated user ID ${mockOrdinaryUser.id}, got ${stateValidatedExpectedUserId}`);
+    assert(res.headers.get("location")?.includes("success=google_drive_connected") === true, "Expected success redirect");
+    console.log("Test 32 Passed: Callback validates state against the authenticated user [✓]");
+    passedCount++;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Test 32 Failed:", msg);
+  }
+
+  // Test 33: Callback looks up and saves connection using the authenticated user ID
+  try {
+    resetMocks();
+    const { state, nonce } = generateOAuthState(mockOrdinaryUser.id);
+    const req = new NextRequest(`http://localhost:3000/api/auth/google-drive/callback?state=${state}&code=mock-code`, {
+      headers: {
+        Cookie: `google_drive_oauth_state_nonce=${nonce}`
+      }
+    });
+
+    let lookedUpUserId = "";
+    let savedUserId = "";
+    const res = await handleCallback(req, {
+      getSessionUser: async () => mockOrdinaryUser,
+      getConfig: () => testConfig,
+      verifyState: () => true,
+      exchangeCode: async () => ({
+        accessToken: "access-token",
+        refreshToken: "refresh-token",
+        expiryDate: Date.now() + 3600,
+      }),
+      getActiveConnection: async (uid) => {
+        lookedUpUserId = uid;
+        return null;
+      },
+      upsertConn: async (uid, data) => {
+        savedUserId = uid;
+        return {
+          id: "conn-id",
+          userId: uid,
+          encryptedRefreshToken: data.encryptedRefreshToken,
+          refreshTokenKeyVersion: data.refreshTokenKeyVersion,
+          googleAccountEmail: data.googleAccountEmail ?? null,
+          driveFolderId: data.driveFolderId ?? null,
+          connectedAt: new Date(),
+          updatedAt: new Date(),
+          revokedAt: null,
+        };
+      },
+      provisionFolder: fakeProvisionFolder,
+      writeAuditLog: async () => {},
+    });
+
+    assert(lookedUpUserId === mockOrdinaryUser.id, `Expected connection look up for ${mockOrdinaryUser.id}, got ${lookedUpUserId}`);
+    assert(savedUserId === mockOrdinaryUser.id, `Expected connection save for ${mockOrdinaryUser.id}, got ${savedUserId}`);
+    assert(res.headers.get("location")?.includes("success=google_drive_connected") === true, "Expected success redirect");
+    console.log("Test 33 Passed: Callback looks up and saves connection using authenticated user ID [✓]");
+    passedCount++;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Test 33 Failed:", msg);
+  }
+
+  // Test 34: Isolation - Two users cannot read or overwrite each other's Drive connections
+  try {
+    resetMocks();
+    const userA = mockOrdinaryUser;
+    const userB = mockOtherAdmin;
+
+    const connectionA: MockConnection = {
+      id: "conn-a-id",
+      userId: userA.id,
+      encryptedRefreshToken: "v1:token-a-envelope",
+      refreshTokenKeyVersion: "1",
+      googleAccountEmail: "userA@gmail.com",
+      driveFolderId: "folder-a-id",
+      connectedAt: new Date(),
+      updatedAt: new Date(),
+      revokedAt: null,
+    };
+
+    mockDb.connection = connectionA;
+
+    const reqStatusB = new NextRequest("http://localhost:3000/api/auth/google-drive/status");
+    const resStatusB = await handleStatus(reqStatusB, {
+      getSessionUser: async () => userB,
+      getConfig: () => testConfig,
+      getConnection: async (uid) => {
+        if (uid === userA.id) {
+          return connectionA as GoogleDriveConnectionRecord;
+        }
+        return null;
+      },
+    });
+    assert(resStatusB.status === 200, "Expected status 200");
+    const bodyB = await resStatusB.json() as Record<string, unknown>;
+    assert(bodyB.connected === false, "User B should be reported as disconnected (not seeing User A's connection)");
+    assert(bodyB.googleAccountEmail === null, "User B should not see User A's email");
+
+    const reqDisconnectB = new NextRequest("http://localhost:3000/api/auth/google-drive/disconnect", { method: "POST" });
+    const resDisconnectB = await handleDisconnect(reqDisconnectB, {
+      verifySession: async () => userB,
+      getConfig: () => testConfig,
+      disconnect: async (uid) => {
+        if (uid === userB.id) {
+          return null;
+        }
+        throw new Error("Invalid disconnect target");
+      }
+    });
+    assert(resDisconnectB.status === 200, "Expected status 200 for idempotent disconnect");
+    assert(mockDb.connection.revokedAt === null, "User A's connection must not be revoked by User B's disconnect action");
+
+    console.log("Test 34 Passed: Two users cannot read or overwrite each other's Drive connections [✓]");
+    passedCount++;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Test 34 Failed:", msg);
+  }
+
+  console.log(`\nGoogle Drive OAuth Validation complete. Passed: ${passedCount}/34`);
+  if (passedCount !== 34) {
     console.error("ERROR: Not all validation tests passed.");
     process.exit(1);
   } else {
