@@ -8,6 +8,8 @@ import {
   FACEBOOK_THUMBNAIL_PUBLISHING_EXPERIMENTAL_ACK,
   FACEBOOK_THUMBNAIL_PUBLISHING_MAX_PROBE_WINDOW_MS,
   FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB,
+  FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB,
+  FACEBOOK_THUMBNAIL_PUBLISHING_PRODUCTION_ACK,
   getFacebookThumbnailPublishingCapability,
 } from "../src/lib/facebook/facebook-thumbnail-publishing-capability";
 import {
@@ -378,8 +380,93 @@ async function runCapabilityTests():
     "The experimental adapter must not claim Reel support.",
   );
 
+  const productionMissingAcknowledgement =
+    getFacebookThumbnailPublishingCapability(
+      {
+        FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_MODE:
+          FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB,
+      },
+      context,
+    );
+
+  assert(
+    productionMissingAcknowledgement.enabled ===
+      false &&
+      productionMissingAcknowledgement.reason ===
+        "MISSING_PRODUCTION_ACKNOWLEDGEMENT",
+    "Production mode must require its dedicated acknowledgement.",
+  );
+
+  const productionMissingContext =
+    getFacebookThumbnailPublishingCapability(
+      {
+        FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_MODE:
+          FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB,
+        FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_ACK:
+          FACEBOOK_THUMBNAIL_PUBLISHING_PRODUCTION_ACK,
+      },
+    );
+
+  assert(
+    productionMissingContext.enabled === false &&
+      productionMissingContext.reason ===
+        "MISSING_PUBLISHING_CONTEXT",
+    "Production mode must still require the worker's current job and Page context.",
+  );
+
+  const productionInvalidContext =
+    getFacebookThumbnailPublishingCapability(
+      {
+        FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_MODE:
+          FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB,
+        FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_ACK:
+          FACEBOOK_THUMBNAIL_PUBLISHING_PRODUCTION_ACK,
+      },
+      {
+        jobId: "",
+        pageId: "page-id",
+      },
+    );
+
+  assert(
+    productionInvalidContext.enabled === false &&
+      productionInvalidContext.reason ===
+        "MISSING_PUBLISHING_CONTEXT",
+    "Production mode must reject an invalid job or Page context.",
+  );
+
+  const productionEnabled =
+    getFacebookThumbnailPublishingCapability(
+      {
+        FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_MODE:
+          FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB,
+        FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_ACK:
+          FACEBOOK_THUMBNAIL_PUBLISHING_PRODUCTION_ACK,
+      },
+      {
+        jobId: "production-job-id",
+        pageId: "production-page-id",
+        now,
+      },
+    );
+
+  assert(
+    productionEnabled.enabled === true &&
+      productionEnabled.mode ===
+        FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB &&
+      productionEnabled.reason ===
+        "PRODUCTION_REGULAR_VIDEO_THUMB_ENABLED",
+    "Production mode must enable regular-video thumbnails for any valid worker job and Page context.",
+  );
+
+  assert(
+    productionEnabled.regularVideoSupported === true &&
+      productionEnabled.reelSupported === false,
+    "Production mode must remain regular-video-only and must not claim Reel cover support.",
+  );
+
   console.log(
-    "  ✓ default-off, acknowledgement, exact job/Page target, and short expiry gate verified",
+    "  ✓ default-off, controlled-probe, and acknowledged production regular-video modes verified",
   );
 }
 
@@ -882,7 +969,7 @@ function runWorkerBoundaryTests():
       workerSource.includes(
         "finishUploadSessionWithExperimentalThumbnail",
       ),
-    "The worker must preserve a disabled fallback and isolate the experimental adapter.",
+    "The worker must preserve a disabled fallback and isolate the thumbnail adapter.",
   );
 
   assert(
@@ -892,7 +979,7 @@ function runWorkerBoundaryTests():
       workerSource.includes(
         "page.facebookPageId",
       ),
-    "The worker must scope the experimental capability to the exact current job and Page.",
+    "The worker must provide the exact current job and Page context to the capability gate.",
   );
 
   assert(
@@ -906,11 +993,11 @@ function runWorkerBoundaryTests():
     workerSource.includes(
       "THUMBNAIL_PUBLISHING_FAILED",
     ),
-    "Invalid experimental thumbnail failures must be classified explicitly.",
+    "Invalid thumbnail publishing failures must be classified explicitly.",
   );
 
   console.log(
-    "  ✓ capability-first resolution, exact job/Page scoping, default fallback, Reel exclusion, and failure classification verified",
+    "  ✓ capability-first resolution, job/Page context, default fallback, Reel exclusion, and failure classification verified",
   );
 }
 

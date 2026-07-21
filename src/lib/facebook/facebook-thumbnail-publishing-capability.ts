@@ -6,30 +6,40 @@ export const FACEBOOK_THUMBNAIL_PUBLISHING_MODE_DISABLED =
 export const FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB =
   "experimental_regular_video_thumb" as const;
 
+export const FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB =
+  "production_regular_video_thumb" as const;
+
 export const FACEBOOK_THUMBNAIL_PUBLISHING_EXPERIMENTAL_ACK =
   "I_UNDERSTAND_META_THUMBNAIL_API_IS_UNVERIFIED" as const;
+
+export const FACEBOOK_THUMBNAIL_PUBLISHING_PRODUCTION_ACK =
+  "I_ACCEPT_META_REGULAR_VIDEO_THUMBNAIL_PRODUCTION_USE" as const;
 
 export const FACEBOOK_THUMBNAIL_PUBLISHING_MAX_PROBE_WINDOW_MS =
   15 * 60 * 1000;
 
 export type FacebookThumbnailPublishingMode =
   | typeof FACEBOOK_THUMBNAIL_PUBLISHING_MODE_DISABLED
-  | typeof FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB;
+  | typeof FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB
+  | typeof FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB;
 
 export type FacebookThumbnailPublishingCapabilityReason =
   | "DISABLED_BY_DEFAULT"
   | "UNSUPPORTED_MODE"
   | "MISSING_EXPERIMENTAL_ACKNOWLEDGEMENT"
+  | "MISSING_PRODUCTION_ACKNOWLEDGEMENT"
   | "MISSING_PROBE_TARGET"
   | "INVALID_PROBE_TARGET"
   | "MISSING_PROBE_CONTEXT"
+  | "MISSING_PUBLISHING_CONTEXT"
   | "PROBE_JOB_MISMATCH"
   | "PROBE_PAGE_MISMATCH"
   | "MISSING_PROBE_EXPIRY"
   | "INVALID_PROBE_EXPIRY"
   | "PROBE_WINDOW_EXPIRED"
   | "PROBE_WINDOW_TOO_LONG"
-  | "EXPERIMENTAL_REGULAR_VIDEO_THUMB_ENABLED";
+  | "EXPERIMENTAL_REGULAR_VIDEO_THUMB_ENABLED"
+  | "PRODUCTION_REGULAR_VIDEO_THUMB_ENABLED";
 
 export interface FacebookThumbnailPublishingCapability {
   readonly enabled: boolean;
@@ -72,7 +82,7 @@ function createDisabledCapability(
   });
 }
 
-function normalizeProbeIdentifier(
+function normalizePublishingIdentifier(
   value: string | undefined,
 ): string | null {
   const trimmed =
@@ -87,6 +97,41 @@ function normalizeProbeIdentifier(
   }
 
   return trimmed;
+}
+
+function hasValidPublishingContext(
+  context:
+    FacebookThumbnailPublishingProbeContext | undefined,
+): context is FacebookThumbnailPublishingProbeContext {
+  if (!context) {
+    return false;
+  }
+
+  return Boolean(
+    normalizePublishingIdentifier(
+      context.jobId,
+    ) &&
+      normalizePublishingIdentifier(
+        context.pageId,
+      ),
+  );
+}
+
+function createEnabledCapability(
+  mode:
+    | typeof FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB
+    | typeof FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB,
+  reason:
+    | "EXPERIMENTAL_REGULAR_VIDEO_THUMB_ENABLED"
+    | "PRODUCTION_REGULAR_VIDEO_THUMB_ENABLED",
+): FacebookThumbnailPublishingCapability {
+  return Object.freeze({
+    enabled: true,
+    mode,
+    regularVideoSupported: true,
+    reelSupported: false,
+    reason,
+  });
 }
 
 export function getFacebookThumbnailPublishingCapability(
@@ -112,6 +157,37 @@ export function getFacebookThumbnailPublishingCapability(
   }
 
   if (
+    configuredMode ===
+    FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB
+  ) {
+    if (
+      environment
+        .FACEBOOK_VIDEO_THUMBNAIL_PUBLISHING_ACK
+        ?.trim() !==
+      FACEBOOK_THUMBNAIL_PUBLISHING_PRODUCTION_ACK
+    ) {
+      return createDisabledCapability(
+        "MISSING_PRODUCTION_ACKNOWLEDGEMENT",
+      );
+    }
+
+    if (
+      !hasValidPublishingContext(
+        context,
+      )
+    ) {
+      return createDisabledCapability(
+        "MISSING_PUBLISHING_CONTEXT",
+      );
+    }
+
+    return createEnabledCapability(
+      FACEBOOK_THUMBNAIL_PUBLISHING_MODE_PRODUCTION_REGULAR_VIDEO_THUMB,
+      "PRODUCTION_REGULAR_VIDEO_THUMB_ENABLED",
+    );
+  }
+
+  if (
     configuredMode !==
     FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB
   ) {
@@ -132,13 +208,13 @@ export function getFacebookThumbnailPublishingCapability(
   }
 
   const configuredJobId =
-    normalizeProbeIdentifier(
+    normalizePublishingIdentifier(
       environment
         .FACEBOOK_VIDEO_THUMBNAIL_PROBE_JOB_ID,
     );
 
   const configuredPageId =
-    normalizeProbeIdentifier(
+    normalizePublishingIdentifier(
       environment
         .FACEBOOK_VIDEO_THUMBNAIL_PROBE_PAGE_ID,
     );
@@ -165,30 +241,25 @@ export function getFacebookThumbnailPublishingCapability(
     );
   }
 
-  if (!context) {
+  if (
+    !hasValidPublishingContext(
+      context,
+    )
+  ) {
     return createDisabledCapability(
       "MISSING_PROBE_CONTEXT",
     );
   }
 
   const contextJobId =
-    normalizeProbeIdentifier(
+    normalizePublishingIdentifier(
       context.jobId,
     );
 
   const contextPageId =
-    normalizeProbeIdentifier(
+    normalizePublishingIdentifier(
       context.pageId,
     );
-
-  if (
-    !contextJobId ||
-    !contextPageId
-  ) {
-    return createDisabledCapability(
-      "MISSING_PROBE_CONTEXT",
-    );
-  }
 
   if (
     contextJobId !== configuredJobId
@@ -260,13 +331,8 @@ export function getFacebookThumbnailPublishingCapability(
     );
   }
 
-  return Object.freeze({
-    enabled: true,
-    mode:
-      FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB,
-    regularVideoSupported: true,
-    reelSupported: false,
-    reason:
-      "EXPERIMENTAL_REGULAR_VIDEO_THUMB_ENABLED",
-  });
+  return createEnabledCapability(
+    FACEBOOK_THUMBNAIL_PUBLISHING_MODE_EXPERIMENTAL_REGULAR_VIDEO_THUMB,
+    "EXPERIMENTAL_REGULAR_VIDEO_THUMB_ENABLED",
+  );
 }
