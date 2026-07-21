@@ -377,14 +377,19 @@ async function runTests() {
           startCalled = true;
           return new Response(JSON.stringify({
             upload_session_id: 'session-abc',
-            video_id: 'video-123'
+            video_id: 'video-123',
+            start_offset: 0,
+            end_offset: 5000000
           }), { status: 200 });
         }
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (init.headers && (init.headers as any)['Content-Type']?.includes('multipart/form-data')) {
           uploadChunkCount++;
-          return new Response(JSON.stringify({ success: true }), { status: 200 });
+          return new Response(JSON.stringify({
+            start_offset: 5000000,
+            end_offset: 5000000
+          }), { status: 200 });
         }
 
         if (body.upload_phase === 'finish') {
@@ -412,7 +417,7 @@ async function runTests() {
     const { GoogleDriveMediaReader } = await import('../src/lib/google-drive/google-drive-media-reader');
     GoogleDriveMediaReader.getDownloadStream = async () => {
       const { Readable } = await import('stream');
-      return Readable.from([Buffer.alloc(1000000)]);
+      return Readable.from([Buffer.alloc(5000000)]);
     };
 
     const token = randomUUID();

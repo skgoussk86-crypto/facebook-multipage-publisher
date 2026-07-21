@@ -19,60 +19,92 @@ export function generateWorkerToken(): string {
   return randomUUID();
 }
 
-// Lightweight stream reader to read chunk-by-chunk with backpressure
-async function readChunkFromStream(stream: Readable, chunkSize: number): Promise<Buffer | null> {
-  if (stream.destroyed || !stream.readable || (stream as unknown as { readableEnded?: boolean }).readableEnded) {
-    return null;
+class StreamAccumulator {
+  private stream: Readable;
+  private buffer: Buffer = Buffer.alloc(0);
+  private done: boolean = false;
+  private iterator: AsyncIterator<unknown>;
+
+  constructor(stream: Readable) {
+    this.stream = stream;
+    this.iterator = stream[Symbol.asyncIterator]();
   }
-  return new Promise((resolve, reject) => {
-    let resolved = false;
-    const buffers: Buffer[] = [];
-    let bytesRead = 0;
 
-    const onData = (chunk: Buffer) => {
-      buffers.push(chunk);
-      bytesRead += chunk.length;
-      if (bytesRead >= chunkSize) {
-        cleanup();
-        const combined = Buffer.concat(buffers);
-        const result = combined.subarray(0, chunkSize);
-        const extra = combined.subarray(chunkSize);
-        if (extra.length > 0) {
-          stream.unshift(extra);
+  async readBytes(bytesNeeded: number): Promise<Buffer | null> {
+    if (this.buffer.length >= bytesNeeded) {
+      const chunk = this.buffer.subarray(0, bytesNeeded);
+      this.buffer = this.buffer.subarray(bytesNeeded);
+      return chunk;
+    }
+
+    while (!this.done && this.buffer.length < bytesNeeded) {
+      try {
+        const { value, done } = await this.iterator.next();
+        if (done) {
+          this.done = true;
+          break;
         }
-        resolved = true;
-        resolve(result);
+        if (value) {
+          const chunkBuf = typeof value === 'string' ? Buffer.from(value) : (value as Buffer);
+          this.buffer = Buffer.concat([this.buffer, chunkBuf]);
+        }
+      } catch (err) {
+        this.done = true;
+        throw err;
       }
-    };
+    }
 
-    const onEnd = () => {
-      if (resolved) return;
-      cleanup();
-      resolved = true;
-      if (buffers.length === 0) {
-        resolve(null);
-      } else {
-        resolve(Buffer.concat(buffers));
-      }
-    };
+    if (this.buffer.length === 0) {
+      return null;
+    }
 
-    const onError = (err: Error) => {
-      if (resolved) return;
-      cleanup();
-      resolved = true;
-      reject(err);
-    };
+    const actualBytes = Math.min(this.buffer.length, bytesNeeded);
+    const chunk = this.buffer.subarray(0, actualBytes);
+    this.buffer = this.buffer.subarray(actualBytes);
+    return chunk;
+  }
+}
 
-    const cleanup = () => {
-      stream.removeListener('data', onData);
-      stream.removeListener('end', onEnd);
-      stream.removeListener('error', onError);
-    };
+function classifyFailure(checkResult: {
+  status: 'ready' | 'processing' | 'error';
+  errorMsg?: string;
+  errorDetails?: {
+    code?: number;
+    subcode?: number;
+    message?: string;
+    phase?: 'uploading' | 'processing' | 'publishing' | 'unknown';
+  };
+}): {
+  classification: FailureClassification;
+  code: string;
+} {
+  let classification: FailureClassification = FailureClassification.UNKNOWN_ERROR;
+  let code = 'META_TRANSCODE_FAILED';
 
-    stream.on('data', onData);
-    stream.on('end', onEnd);
-    stream.on('error', onError);
-  });
+  if (checkResult.errorDetails) {
+    const { phase, code: errCode, message } = checkResult.errorDetails;
+    if (phase === 'processing') {
+      classification = FailureClassification.INVALID_MEDIA;
+      code = 'META_TRANSCODE_FAILED';
+    } else if (phase === 'publishing') {
+      classification = FailureClassification.UNKNOWN_ERROR;
+      code = 'META_PUBLISH_FAILED';
+    } else if (phase === 'uploading') {
+      classification = FailureClassification.NETWORK_ERROR;
+      code = 'META_UPLOAD_FAILED';
+    }
+
+    const msgUpper = (message || '').toUpperCase();
+    if (msgUpper.includes('OAUTH') || msgUpper.includes('TOKEN') || msgUpper.includes('AUTHENTICAT') || errCode === 190) {
+      classification = FailureClassification.REVOKED_TOKEN;
+      code = 'REVOKED_TOKEN';
+    } else if (msgUpper.includes('PERMISSION') || errCode === 10 || errCode === 200 || errCode === 283) {
+      classification = FailureClassification.MISSING_PERMISSION;
+      code = 'MISSING_PERMISSION';
+    }
+  }
+
+  return { classification, code };
 }
 
 /**
@@ -232,12 +264,13 @@ async function processClaimedJob(
           log(`Job ${job.id} reconciled as META_PROCESSING.`);
           return;
         } else {
+          const { classification, code } = classifyFailure(checkResult);
           await prisma.$transaction(async (tx) => {
             await transitionJobState(tx, job.id, workerUuid, JobStatus.FAILED_PERMANENT, job.userId!, {
               failedAt: new Date(),
-              lastErrorCode: 'META_TRANSCODE_FAILED',
+              lastErrorCode: code,
               lastErrorMessage: checkResult.errorMsg || 'Meta transcoding failed',
-              failureClassification: FailureClassification.INVALID_MEDIA
+              failureClassification: classification
             });
           });
           return;
@@ -315,8 +348,10 @@ async function processClaimedJob(
         `[PREPARING] Video metadata validation successful. Initializing Meta ${isReel ? 'Reel' : 'video'} upload session...`,
       );
 
-      let uploadReference = job.providerReference;
-      let videoId = job.providerProcessingId;
+      let uploadReference = isReel ? job.providerReference : null;
+      let videoId = isReel ? job.providerProcessingId : null;
+      let startOffset = 0;
+      let endOffset = 0;
 
       const { FacebookPublishingService } =
         await import(
@@ -345,6 +380,8 @@ async function processClaimedJob(
             uploadReference =
               startResult.uploadSessionId;
             videoId = startResult.videoId;
+            startOffset = startResult.startOffset;
+            endOffset = startResult.endOffset;
           }
 
           await prisma.$transaction(async (tx) => {
@@ -597,29 +634,29 @@ async function processClaimedJob(
         }
       } else {
         log(
-          `[UPLOADING_TO_META] Commencing transfer loop of 4MB chunks to Meta...`,
+          `[UPLOADING_TO_META] Commencing transfer loop following Meta authoritative offsets...`,
         );
 
-        const CHUNK_SIZE = 4 * 1024 * 1024;
-        let startOffset = 0;
+        let totalTransferred = 0;
+        const accumulator = new StreamAccumulator(mediaStream);
 
         try {
-          while (true) {
-            const chunk =
-              await readChunkFromStream(
-                mediaStream,
-                CHUNK_SIZE,
-              );
+          while (startOffset < fileSize) {
+            const neededBytes = endOffset - startOffset;
+            if (neededBytes <= 0) {
+              throw new Error(`META_UPLOAD_INVALID_CHUNK_SIZE: Meta requested non-positive chunk size: ${neededBytes}`);
+            }
 
-            if (!chunk) {
-              break;
+            const chunk = await accumulator.readBytes(neededBytes);
+            if (!chunk || chunk.length === 0) {
+              throw new Error(`META_UPLOAD_EOF_REACHED: Reached end of stream but Meta requested more bytes. Transferred: ${totalTransferred}, offset: ${startOffset}, needed: ${neededBytes}`);
             }
 
             log(
-              `[UPLOADING_TO_META] Uploading chunk: bytes ${startOffset}-${startOffset + chunk.length - 1}/${fileSize}`,
+              `[UPLOADING_TO_META] Uploading chunk: Job ID: ${job.id}, bytes ${startOffset}-${startOffset + chunk.length - 1}/${fileSize}, chunk size: ${chunk.length}`,
             );
 
-            await FacebookPublishingService.uploadChunk(
+            const uploadResult = await FacebookPublishingService.uploadChunk(
               page.facebookPageId,
               pageToken,
               uploadReference!,
@@ -627,7 +664,49 @@ async function processClaimedJob(
               chunk,
             );
 
-            startOffset += chunk.length;
+            const prevStartOffset = startOffset;
+            const newStartOffset = uploadResult.startOffset;
+            const newEndOffset = uploadResult.endOffset;
+
+            log(
+              `[PROGRESS] Job ID: ${job.id}, previous offset: ${prevStartOffset}, returned start offset: ${newStartOffset}, returned end offset: ${newEndOffset}, source file size: ${fileSize}, transferred byte count: ${chunk.length}`,
+            );
+
+            if (newStartOffset < prevStartOffset) {
+              throw new Error(`META_UPLOAD_BACKWARD_OFFSET: Meta returned start_offset ${newStartOffset} moved backward from ${prevStartOffset}.`);
+            }
+
+            if (newStartOffset === prevStartOffset) {
+              throw new Error(`META_UPLOAD_NO_PROGRESS: Meta returned start_offset ${newStartOffset} made no progress.`);
+            }
+
+            if (newStartOffset > fileSize || newEndOffset > fileSize) {
+              throw new Error(`META_UPLOAD_EXCEEDS_FILE_SIZE: Meta returned offset ${newStartOffset}/${newEndOffset} exceeds file size ${fileSize}.`);
+            }
+
+            if (newStartOffset < prevStartOffset + chunk.length) {
+              throw new Error(`META_UPLOAD_CONSUMED_BYTES: Meta requested already-consumed bytes. New start_offset: ${newStartOffset}, expected at least ${prevStartOffset + chunk.length}.`);
+            }
+
+            if (newStartOffset > newEndOffset) {
+              throw new Error(`META_UPLOAD_CONTRADICTORY_RANGE: Meta returned start_offset ${newStartOffset} greater than end_offset ${newEndOffset}.`);
+            }
+
+            totalTransferred += chunk.length;
+            startOffset = newStartOffset;
+            endOffset = newEndOffset;
+
+            const isComplete = (startOffset === endOffset) || (startOffset === fileSize);
+            if (isComplete) {
+              if (startOffset !== fileSize) {
+                throw new Error(`META_UPLOAD_INCOMPLETE: Meta indicated completion but final offset ${startOffset} does not equal file size ${fileSize}.`);
+              }
+              break;
+            }
+          }
+
+          if (startOffset !== fileSize) {
+            throw new Error(`META_UPLOAD_UNFINISHED: Upload finished loop but final offset ${startOffset} does not match file size ${fileSize}.`);
           }
 
           log(
@@ -842,6 +921,9 @@ async function processClaimedJob(
     } else if (err.message?.includes('THUMBNAIL_PUBLISHING_') || err.message?.includes('META_THUMBNAIL_')) {
       classification = FailureClassification.INVALID_MEDIA;
       errorCode = 'THUMBNAIL_PUBLISHING_FAILED';
+    } else if (err.message?.includes('META_UPLOAD_')) {
+      classification = FailureClassification.NETWORK_ERROR;
+      errorCode = 'META_UPLOAD_FAILED';
     } else if (err.message?.includes('META_AUTH_ERROR')) {
       classification = FailureClassification.REVOKED_TOKEN;
       errorCode = 'REVOKED_TOKEN';
@@ -979,12 +1061,13 @@ async function resumeMetaProcessingCheck(
         log(`[META_PROCESSING] Video transcoding still in progress. Reset locks for polling resumption in 15 seconds.`);
       } else if (checkResult.status === 'error') {
         log(`[ERROR] Meta transcoding failed: ${checkResult.errorMsg}`);
+        const { classification, code } = classifyFailure(checkResult);
         await prisma.$transaction(async (tx) => {
           await transitionJobState(tx, job.id, workerUuid, JobStatus.FAILED_PERMANENT, job.userId!, {
             failedAt: new Date(),
-            lastErrorCode: 'META_TRANSCODE_FAILED',
+            lastErrorCode: code,
             lastErrorMessage: checkResult.errorMsg || 'Meta transcoding failed',
-            failureClassification: FailureClassification.INVALID_MEDIA
+            failureClassification: classification
           });
         });
       }

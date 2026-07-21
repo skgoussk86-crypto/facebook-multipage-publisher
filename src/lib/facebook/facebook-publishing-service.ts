@@ -34,12 +34,33 @@ type MetaResponseBody = {
   error?: MetaErrorBody;
   upload_session_id?: string;
   video_id?: string;
+  start_offset?: string | number;
+  end_offset?: string | number;
   upload_url?: string;
   success?: boolean;
   status?: {
     video_status?: string;
-    processing_phase?: {
+    uploading_phase?: {
+      status?: string;
       errors?: Array<{
+        code?: number;
+        error_subcode?: number;
+        message?: string;
+      }>;
+    };
+    processing_phase?: {
+      status?: string;
+      errors?: Array<{
+        code?: number;
+        error_subcode?: number;
+        message?: string;
+      }>;
+    };
+    publishing_phase?: {
+      status?: string;
+      errors?: Array<{
+        code?: number;
+        error_subcode?: number;
         message?: string;
       }>;
     };
@@ -220,6 +241,17 @@ export class FacebookPublishingService {
     );
   }
 
+  static parseOffset(val: unknown): number {
+    if (val === undefined || val === null) {
+      throw new Error('META_OFFSET_MISSING: Offset is missing.');
+    }
+    const num = Number(val);
+    if (!Number.isInteger(num) || num < 0 || Number.isNaN(num) || !Number.isFinite(num)) {
+      throw new Error(`META_OFFSET_INVALID: Invalid offset value: ${String(val)}`);
+    }
+    return num;
+  }
+
   // Existing regular Facebook Video resumable-upload flow.
   static async startUploadSession(
     pageId: string,
@@ -228,6 +260,8 @@ export class FacebookPublishingService {
   ): Promise<{
     uploadSessionId: string;
     videoId: string;
+    startOffset: number;
+    endOffset: number;
   }> {
     const url = `${this.getBaseUrl()}/${pageId}/videos`;
 
@@ -259,9 +293,24 @@ export class FacebookPublishingService {
       );
     }
 
+    const startOffset = this.parseOffset(body.start_offset);
+    const endOffset = this.parseOffset(body.end_offset);
+
+    if (startOffset !== 0) {
+      throw new Error(`META_OFFSET_INVALID: Initial start_offset must be 0, got ${startOffset}.`);
+    }
+    if (endOffset <= startOffset) {
+      throw new Error(`META_OFFSET_INVALID: Initial end_offset ${endOffset} must be greater than start_offset.`);
+    }
+    if (endOffset > fileSize) {
+      throw new Error(`META_OFFSET_INVALID: Initial end_offset ${endOffset} exceeds file size ${fileSize}.`);
+    }
+
     return {
       uploadSessionId: body.upload_session_id,
       videoId: body.video_id,
+      startOffset,
+      endOffset,
     };
   }
 
@@ -271,7 +320,10 @@ export class FacebookPublishingService {
     uploadSessionId: string,
     startOffset: number,
     chunkBuffer: Buffer,
-  ): Promise<void> {
+  ): Promise<{
+    startOffset: number;
+    endOffset: number;
+  }> {
     const url = `${this.getBaseUrl()}/${pageId}/videos`;
     const boundary =
       '----WebKitFormBoundary' +
@@ -314,14 +366,23 @@ export class FacebookPublishingService {
       body: bodyBuffer,
     });
 
+    const body = await this.readResponseBody(response);
+
     if (!response.ok) {
-      const body = await this.readResponseBody(response);
       throw this.createMetaError(
         'Meta video chunk transfer',
         response,
         body,
       );
     }
+
+    const nextStartOffset = this.parseOffset(body.start_offset);
+    const nextEndOffset = this.parseOffset(body.end_offset);
+
+    return {
+      startOffset: nextStartOffset,
+      endOffset: nextEndOffset,
+    };
   }
 
   static async finishUploadSession(
@@ -613,6 +674,12 @@ export class FacebookPublishingService {
   ): Promise<{
     status: 'ready' | 'processing' | 'error';
     errorMsg?: string;
+    errorDetails?: {
+      code?: number;
+      subcode?: number;
+      message?: string;
+      phase?: 'uploading' | 'processing' | 'publishing' | 'unknown';
+    };
   }> {
     const url = new URL(
       `${this.getBaseUrl()}/${videoId}`,
@@ -650,13 +717,66 @@ export class FacebookPublishingService {
       };
     }
 
-    const processingError =
-      body.status?.processing_phase?.errors?.[0]
-        ?.message || 'Meta transcoding failed';
+    const uploadingPhase = body.status?.uploading_phase;
+    const processingPhase = body.status?.processing_phase;
+    const publishingPhase = body.status?.publishing_phase;
 
+    let foundError: {
+      code?: number;
+      subcode?: number;
+      message?: string;
+      phase: 'uploading' | 'processing' | 'publishing';
+    } | null = null;
+
+    if (uploadingPhase?.errors && uploadingPhase.errors.length > 0) {
+      foundError = {
+        code: uploadingPhase.errors[0].code,
+        subcode: uploadingPhase.errors[0].error_subcode,
+        message: uploadingPhase.errors[0].message,
+        phase: 'uploading',
+      };
+    } else if (processingPhase?.errors && processingPhase.errors.length > 0) {
+      foundError = {
+        code: processingPhase.errors[0].code,
+        subcode: processingPhase.errors[0].error_subcode,
+        message: processingPhase.errors[0].message,
+        phase: 'processing',
+      };
+    } else if (publishingPhase?.errors && publishingPhase.errors.length > 0) {
+      foundError = {
+        code: publishingPhase.errors[0].code,
+        subcode: publishingPhase.errors[0].error_subcode,
+        message: publishingPhase.errors[0].message,
+        phase: 'publishing',
+      };
+    }
+
+    if (foundError) {
+      const parts: string[] = [];
+      if (foundError.message) parts.push(foundError.message);
+      if (foundError.code !== undefined) parts.push(`Code: ${foundError.code}`);
+      if (foundError.subcode !== undefined) parts.push(`Subcode: ${foundError.subcode}`);
+      parts.push(`Phase: ${foundError.phase}`);
+
+      return {
+        status: 'error',
+        errorMsg: `Meta video status=error; ${parts.join('; ')}`,
+        errorDetails: {
+          code: foundError.code,
+          subcode: foundError.subcode,
+          message: foundError.message,
+          phase: foundError.phase,
+        },
+      };
+    }
+
+    const fallbackMsg = `Meta video status=error; uploading_phase=${uploadingPhase?.status || 'unknown'}; processing_phase=${processingPhase?.status || 'unknown'}; publishing_phase=${publishingPhase?.status || 'unknown'}; Meta returned no phase error details.`;
     return {
       status: 'error',
-      errorMsg: processingError,
+      errorMsg: fallbackMsg,
+      errorDetails: {
+        phase: 'unknown',
+      },
     };
   }
 }

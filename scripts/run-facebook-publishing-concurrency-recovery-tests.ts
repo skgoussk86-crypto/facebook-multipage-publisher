@@ -25,6 +25,21 @@ if (dbName !== 'fb_publisher_test') {
 
 const prisma = new PrismaClient();
 
+function mockStreamOfSize(size: number): Readable {
+  let bytesSent = 0;
+  return new Readable({
+    read(chunkSize) {
+      if (bytesSent >= size) {
+        this.push(null);
+        return;
+      }
+      const toSend = Math.min(chunkSize, size - bytesSent);
+      this.push(Buffer.alloc(toSend));
+      bytesSent += toSend;
+    }
+  });
+}
+
 function assert(cond: boolean, msg: string) {
   if (!cond) {
     throw new Error('Test Assertion Failed: ' + msg);
@@ -315,11 +330,12 @@ async function runTests() {
     // Mock Facebook Publishing Service functions directly
     FacebookPublishingService.startUploadSession = async () => {
       sessionCreatedCount++;
-      return { uploadSessionId: 'session-abc-123', videoId: 'video-xyz-999' };
+      return { uploadSessionId: 'session-abc-123', videoId: 'video-xyz-999', startOffset: 0, endOffset: 5000000 };
     };
 
     FacebookPublishingService.uploadChunk = async () => {
       videoUploadedCount++;
+      return { startOffset: 5000000, endOffset: 5000000 };
     };
 
     FacebookPublishingService.finishUploadSession = async () => {
@@ -333,7 +349,7 @@ async function runTests() {
 
     // Mock media reader download stream
     GoogleDriveMediaReader.getDownloadStream = async () => {
-      return Readable.from([Buffer.from('media content')]);
+      return mockStreamOfSize(5000000);
     };
 
     // Enable live Meta mode mock configuration in database
