@@ -639,6 +639,10 @@ function runSourceBoundaryTests(): void {
   assert(dashboard.includes('buildThumbnailGenerationUrl(input.assetId)'), 'Dashboard must call the secure thumbnail endpoint.');
   assert(dashboard.includes('thumbnailAssetId:'), 'Dashboard scheduling payload must include thumbnailAssetId.');
   assert(dashboard.includes('Captured thumbnail must be generated and stored before scheduling.'), 'Dashboard must block unsaved captured thumbnails.');
+  assert(!dashboard.includes('Local video URL not available. Frame capture is only supported for local uploaded files.'), 'Restored validated uploads must not be blocked by a missing local object URL.');
+  assert(dashboard.includes('extracted server-side from the stored Google'), 'Dashboard must explain server-side frame extraction after refresh.');
+  assert(dashboard.includes('job.localVideoUrl || ""'), 'Frame selection must open for restored validated uploads without a local preview URL.');
+  assert(dashboard.includes('Generate Permanent Thumbnail'), 'Restored uploads must expose a server-side thumbnail action.');
   assert(queue.includes('thumbnailGenerationStatus'), 'Queue recovery must persist thumbnail generation state.');
   assert(queue.includes('thumbnailAssetId'), 'Queue recovery must persist thumbnailAssetId.');
   assert(route.includes('Manually specified thumbnail storage references are not accepted.'), 'Jobs route must reject browser thumbnail storage fields.');

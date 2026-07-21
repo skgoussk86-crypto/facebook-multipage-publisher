@@ -1263,16 +1263,35 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   // LOCAL THUMBNAIL FRAME CAPTURING
   // ==========================================
   const handleOpenFrameCaptureModal = (job: VideoJob) => {
-    if (!job.localVideoUrl) {
-      alert("Local video URL not available. Frame capture is only supported for local uploaded files.");
+    if (!job.uploadValidated || !job.assetId) {
+      alert(
+        "Wait until this video finishes uploading and validation.",
+      );
       return;
     }
-    setActiveFrameCaptureJobId(job.id);
-    setFrameCaptureUrl(job.localVideoUrl);
-    setFrameCaptureTime(
-      job.thumbnailTimestampSeconds ?? 0,
+
+    const durationSeconds = Math.max(
+      job.durationSeconds || 10,
+      0.1,
     );
-    setFrameCaptureDuration(job.durationSeconds || 10);
+    const maximumTimestamp = Math.max(
+      0,
+      durationSeconds - 0.05,
+    );
+    const preferredTimestamp =
+      typeof job.thumbnailTimestampSeconds === "number"
+        ? job.thumbnailTimestampSeconds
+        : Math.min(5, maximumTimestamp);
+
+    setActiveFrameCaptureJobId(job.id);
+    setFrameCaptureUrl(job.localVideoUrl || "");
+    setFrameCaptureTime(
+      Math.min(
+        Math.max(preferredTimestamp, 0),
+        maximumTimestamp,
+      ),
+    );
+    setFrameCaptureDuration(durationSeconds);
   };
 
   // Seek and update frame state
@@ -1421,10 +1440,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   }, []);
 
   const handleCaptureFrameAction = async () => {
-    const video = videoCaptureRef.current;
     const jobId = activeFrameCaptureJobId;
 
-    if (!video || !jobId) {
+    if (!jobId) {
       return;
     }
 
@@ -1439,34 +1457,60 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       return;
     }
 
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 360;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      alert("The browser could not capture this video frame.");
-      return;
-    }
-
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL("image/jpeg");
-
-    updateTempJobFields(jobId, {
-      capturedThumbnailUrl: dataUrl,
+    const updates: Partial<VideoJob> = {
       thumbnailMode: "captured",
       thumbnailAssetId: undefined,
       thumbnailGenerationStatus: "idle",
       thumbnailGenerationError: undefined,
       thumbnailTimestampSeconds: frameCaptureTime,
       thumbnailSource: "MANUAL_FRAME",
-    });
+    };
 
-    addSecurityLog(
-      "INFO",
-      `Captured dynamic frame at ${frameCaptureTime.toFixed(1)}s from local video file.`,
-      jobId,
-    );
+    const video = videoCaptureRef.current;
+
+    if (
+      frameCaptureUrl &&
+      video &&
+      video.videoWidth > 0 &&
+      video.videoHeight > 0
+    ) {
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const ctx = canvas.getContext("2d");
+
+      if (!ctx) {
+        alert(
+          "The browser could not create the local thumbnail preview.",
+        );
+        return;
+      }
+
+      ctx.drawImage(
+        video,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      );
+      updates.capturedThumbnailUrl =
+        canvas.toDataURL("image/jpeg");
+
+      addSecurityLog(
+        "INFO",
+        `Captured local preview at ${frameCaptureTime.toFixed(1)}s before permanent server-side generation.`,
+        jobId,
+      );
+    } else {
+      addSecurityLog(
+        "INFO",
+        `Selected ${frameCaptureTime.toFixed(1)}s for server-side frame extraction from the stored video.`,
+        jobId,
+      );
+    }
+
+    updateTempJobFields(jobId, updates);
     setActiveFrameCaptureJobId(null);
 
     await handleGeneratePersistedThumbnail({
@@ -3609,13 +3653,21 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             </div>
 
             <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-200 relative flex items-center justify-center">
-              {/* Capture video target element */}
-              <video
-                ref={videoCaptureRef}
-                src={frameCaptureUrl}
-                className="h-full w-full object-contain"
-                crossOrigin="anonymous"
-              />
+              {frameCaptureUrl ? (
+                <video
+                  ref={videoCaptureRef}
+                  src={frameCaptureUrl}
+                  className="h-full w-full object-contain"
+                  crossOrigin="anonymous"
+                />
+              ) : (
+                <div className="max-w-md px-6 text-center text-xs leading-5 text-zinc-300">
+                  Local preview is unavailable after a page refresh.
+                  Choose the timestamp below and the permanent frame
+                  will be extracted server-side from the stored Google
+                  Drive video.
+                </div>
+              )}
             </div>
 
             {/* Slider control */}
@@ -3646,7 +3698,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 onClick={handleCaptureFrameAction}
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition"
               >
-                Confirm & Snapshot Frame
+                {frameCaptureUrl
+                  ? "Capture and Store Frame"
+                  : "Generate Permanent Thumbnail"}
               </button>
             </div>
           </div>
