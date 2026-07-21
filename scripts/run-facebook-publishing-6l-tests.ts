@@ -202,7 +202,7 @@ async function runTests() {
   {
     const fileSize = 15; // Small file size for deterministic boundary check
     const asset = await createTestAsset(fileSize);
-    
+
     // Simulate stream emitting chunks in size 2, 3, 4, 6 (total size = 15)
     const mockChunks = [
       Buffer.from([0x01, 0x02]),
@@ -210,7 +210,7 @@ async function runTests() {
       Buffer.from([0x06, 0x07, 0x08, 0x09]),
       Buffer.from([0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f])
     ];
-    
+
     const { GoogleDriveMediaReader } = await import('../src/lib/google-drive/google-drive-media-reader');
     GoogleDriveMediaReader.getDownloadStream = async () => {
       return Readable.from(mockChunks);
@@ -248,12 +248,12 @@ async function runTests() {
           // Find the chunk buffer itself to verify size
           const startBoundaryIndex = bodyBuffer.indexOf('Content-Type: application/octet-stream\r\n\r\n');
           const chunkDataStart = startBoundaryIndex + 'Content-Type: application/octet-stream\r\n\r\n'.length;
-          
+
           const contentType = headers['Content-Type'];
           const boundaryMatch = contentType.match(/boundary=(.+)/);
           const boundary = boundaryMatch ? boundaryMatch[1] : '';
           const footerBoundary = `\r\n--${boundary}`;
-          
+
           const chunkDataEnd = bodyBuffer.indexOf(Buffer.from(footerBoundary), chunkDataStart);
           const chunkBytes = bodyBuffer.subarray(chunkDataStart, chunkDataEnd);
 
@@ -372,7 +372,7 @@ async function runTests() {
     assert(updatedJob?.status === 'SCHEDULED', 'Should revert to SCHEDULED for retry');
     assert(updatedJob?.lastErrorCode === 'META_UPLOAD_FAILED', 'Should map code to META_UPLOAD_FAILED');
     assert(updatedJob?.lastErrorMessage?.includes('META_UPLOAD_BACKWARD_OFFSET') === true, 'Should include backward offset description');
-    
+
     testCount++;
     console.log('✓ Test 8: Offset moving backward triggers immediate error and marks job retry.');
   }
@@ -634,7 +634,7 @@ async function runTests() {
     const check = await FacebookPublishingService.checkVideoStatus('video-15', 'token');
     assert(check.status === 'error', 'Status must be error');
     assert(check.errorDetails?.phase === 'processing', 'Phase must be processing');
-    
+
     // Simulate worker parsing and transition
     const job = await prisma.videoJob.create({
       data: {
