@@ -2,20 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { verifyAdminSession } from "@/lib/auth";
 import {
+  AiVideoAnalysisError,
+  AiService,
+  type AiVideoAnalysisErrorCode,
+} from "@/lib/ai";
+import {
   GeminiVideoAnalysisError,
-  GeminiVideoAnalysisService,
   type GeminiVideoAnalysisErrorCode,
 } from "@/lib/gemini/gemini-video-analysis-service";
 
 export interface GeminiAnalysisRouteDependencies {
   verifySession?: typeof verifyAdminSession;
   analyzeValidatedAsset?:
-    typeof GeminiVideoAnalysisService.analyzeValidatedAsset;
+    | typeof AiService.analyzeValidatedAsset
+    | typeof import("@/lib/gemini/gemini-video-analysis-service").GeminiVideoAnalysisService.analyzeValidatedAsset;
 }
 
 interface SafeErrorResponse {
-  error: GeminiVideoAnalysisErrorCode | "INTERNAL_SERVER_ERROR";
+  error: AiVideoAnalysisErrorCode | GeminiVideoAnalysisErrorCode | "INTERNAL_SERVER_ERROR";
   message: string;
+  retryable?: boolean;
 }
 
 interface ErrorMapping {
@@ -23,10 +29,24 @@ interface ErrorMapping {
   body: SafeErrorResponse;
 }
 
-const ERROR_STATUS_BY_CODE: Record<
-  GeminiVideoAnalysisErrorCode,
-  number
-> = {
+const AI_ERROR_STATUS_BY_CODE: Record<AiVideoAnalysisErrorCode, number> = {
+  AI_DISABLED: 503,
+  AI_NOT_CONFIGURED: 503,
+  AI_PROVIDER_UNAVAILABLE: 502,
+  AI_TIMEOUT: 504,
+  AI_BUSY: 429,
+  AI_INVALID_RESPONSE: 502,
+  AI_ANALYSIS_FAILED: 502,
+  UPLOAD_ASSET_NOT_FOUND: 404,
+  UPLOAD_ASSET_NOT_VALIDATED: 409,
+  UPLOAD_ASSET_DELETED: 409,
+  UNSUPPORTED_STORAGE_PROVIDER: 422,
+  INVALID_VIDEO_METADATA: 422,
+  VIDEO_TOO_LARGE: 413,
+  VIDEO_DOWNLOAD_FAILED: 502,
+};
+
+const GEMINI_ERROR_STATUS_BY_CODE: Record<GeminiVideoAnalysisErrorCode, number> = {
   GEMINI_DISABLED: 503,
   GEMINI_NOT_CONFIGURED: 503,
   UPLOAD_ASSET_NOT_FOUND: 404,
@@ -46,18 +66,32 @@ const ERROR_STATUS_BY_CODE: Record<
 export function mapGeminiAnalysisError(
   error: unknown,
 ): ErrorMapping {
-  if (error instanceof GeminiVideoAnalysisError) {
+  if (error instanceof AiVideoAnalysisError) {
+    const isRetryable = error.code === "AI_BUSY" || error.code === "AI_TIMEOUT" || error.code === "AI_PROVIDER_UNAVAILABLE";
     return {
-      status: ERROR_STATUS_BY_CODE[error.code],
+      status: AI_ERROR_STATUS_BY_CODE[error.code] || 500,
       body: {
         error: error.code,
         message: error.message,
+        ...(isRetryable ? { retryable: true } : {}),
+      },
+    };
+  }
+
+  if (error instanceof GeminiVideoAnalysisError) {
+    const isRetryable = error.code === "GEMINI_ANALYSIS_TIMEOUT" || error.code === "VIDEO_DOWNLOAD_FAILED";
+    return {
+      status: GEMINI_ERROR_STATUS_BY_CODE[error.code] || 500,
+      body: {
+        error: error.code,
+        message: error.message,
+        ...(isRetryable ? { retryable: true } : {}),
       },
     };
   }
 
   console.error(
-    "Unexpected Gemini analysis API error:",
+    "Unexpected AI analysis API error:",
     error,
   );
 
@@ -105,7 +139,7 @@ export async function handleAnalyzeUploadRequest(
 
   const analyzeValidatedAsset =
     dependencies.analyzeValidatedAsset ??
-    GeminiVideoAnalysisService.analyzeValidatedAsset;
+    AiService.analyzeValidatedAsset;
 
   try {
     const analysis = await analyzeValidatedAsset(
@@ -123,7 +157,7 @@ export async function handleAnalyzeUploadRequest(
           thumbnailTimestampSeconds:
             analysis.thumbnailTimestampSeconds,
           thumbnailReason:
-            analysis.thumbnailReason,
+            (analysis as unknown as Record<string, unknown>).thumbnailReason as string || "AI recommended thumbnail frame.",
         },
       },
       { status: 200 },

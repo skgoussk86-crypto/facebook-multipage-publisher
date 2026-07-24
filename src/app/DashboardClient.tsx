@@ -1033,7 +1033,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             "WARN",
             captureError instanceof Error
               ? captureError.message
-              : "The Gemini-selected local frame could not be captured.",
+              : "The AI-selected local frame could not be captured.",
             job.id,
           );
         }
@@ -1053,7 +1053,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
       addSecurityLog(
         "INFO",
-        `Gemini generated English content and selected thumbnail timestamp ${analysis.thumbnailTimestampSeconds.toFixed(2)}s for ${job.fileName}.`,
+        `AI generated English content and selected thumbnail timestamp ${analysis.thumbnailTimestampSeconds.toFixed(2)}s for ${job.fileName}.`,
         job.id,
       );
 
@@ -1062,7 +1062,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       const message =
         error instanceof Error
           ? error.message
-          : "Gemini could not analyze this video.";
+          : "AI could not analyze this video.";
 
       updateTempJobFields(job.id, {
         geminiAnalysisStatus: "error",
@@ -1071,7 +1071,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
       addSecurityLog(
         "ERROR",
-        `Gemini analysis failed for ${job.fileName}: ${message}`,
+        `AI analysis failed for ${job.fileName}: ${message}`,
         job.id,
       );
 
@@ -1091,7 +1091,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
     if (eligibleJobs.length === 0) {
       alert(
-        "No validated videos are ready for Gemini analysis.",
+        "No validated videos are ready for AI analysis.",
       );
       return;
     }
@@ -1112,7 +1112,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
     addSecurityLog(
       "INFO",
-      `Gemini bulk analysis completed for ${completedCount} of ${eligibleJobs.length} validated videos.`,
+      `AI bulk analysis completed for ${completedCount} of ${eligibleJobs.length} validated videos.`,
     );
   };
 
@@ -3247,7 +3247,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                                   <div>
                                     <div className="text-[10px] font-mono uppercase tracking-wider text-indigo-700 font-bold">
-                                      Gemini Auto Content + Frame Selection
+                                      AI Auto Content + Frame Selection
                                     </div>
                                     <p className="mt-1 text-[10px] leading-relaxed text-indigo-700/80">
                                       Generates the English title, caption, exactly five hashtags, and selects the strongest video timestamp.
@@ -3267,8 +3267,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                     {job.geminiAnalysisStatus === "analyzing"
                                       ? "Analyzing..."
                                       : job.geminiAnalysisStatus === "complete"
-                                        ? "Regenerate with Gemini"
-                                        : "Generate with Gemini"}
+                                        ? "Regenerate with AI"
+                                        : "Generate with AI"}
                                   </button>
                                 </div>
 

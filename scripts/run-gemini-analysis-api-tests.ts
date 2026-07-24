@@ -103,8 +103,8 @@ async function testSuccess(): Promise<void> {
           id: userId,
         } as never),
         analyzeValidatedAsset: async (
-          actualUserId,
-          actualAssetId,
+          actualUserId: string,
+          actualAssetId: string,
         ) => {
           receivedUserId = actualUserId;
           receivedAssetId = actualAssetId;

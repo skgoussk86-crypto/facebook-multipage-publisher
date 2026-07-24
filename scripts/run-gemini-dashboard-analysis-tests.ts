@@ -123,12 +123,12 @@ function testSafeErrors(): void {
 
   assert.equal(
     getGeminiAnalysisErrorMessage(409, null),
-    "The video must finish uploading and validation before Gemini can analyze it.",
+    "The video must finish uploading and validation before the AI can analyze it.",
   );
 
   assert.equal(
     getGeminiAnalysisErrorMessage(504, {}),
-    "Gemini analysis timed out. Try again once.",
+    "AI analysis timed out. Try again in a few moments.",
   );
 }
 
