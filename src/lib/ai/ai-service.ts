@@ -168,7 +168,11 @@ export class AiService {
       // 4. Delegate to the selected provider
       if (config.provider === "OLLAMA") {
         // Step 4A: Frame extraction on the local disk
-        const extractorFn = extractFrames ?? OllamaFrameExtractor.extractFrames;
+        const extractorFn =
+          extractFrames ??
+          OllamaFrameExtractor.extractFrames.bind(
+            OllamaFrameExtractor
+          );
         const { timestamps, base64Frames } = await extractorFn({
           userId,
           asset: {

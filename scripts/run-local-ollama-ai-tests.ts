@@ -395,6 +395,117 @@ async function testOwnershipIsolationAndValidation() {
   );
 }
 
+async function testAiServiceDefaultExtractorBinding() {
+  AiService.releaseLock();
+
+  const mockAsset = {
+    id: "asset-binding",
+    userId: "user-binding",
+    provider: "GOOGLE_DRIVE",
+    objectKey: "mock-google-drive-file-id",
+    status: "VALIDATED",
+    originalName: "binding-test.mp4",
+    expectedSize: BigInt(100),
+    actualSize: BigInt(100),
+    declaredMimeType: "video/mp4",
+    detectedMimeType: "video/mp4",
+    durationMs: 10000,
+    objectDeletedAt: null,
+  };
+
+  const originalExtractFrames =
+    OllamaFrameExtractor.extractFrames;
+
+  let extractorWasCalled = false;
+  let receiverWasBound = false;
+
+  const receiverAwareExtractor:
+    typeof OllamaFrameExtractor.extractFrames =
+    async function (
+      this: typeof OllamaFrameExtractor,
+      params
+    ) {
+      extractorWasCalled = true;
+      receiverWasBound =
+        this === OllamaFrameExtractor;
+
+      assert.equal(
+        params.userId,
+        "user-binding"
+      );
+
+      assert.equal(
+        params.asset.objectKey,
+        "mock-google-drive-file-id"
+      );
+
+      assert.equal(
+        params.frameCount,
+        8
+      );
+
+      return {
+        timestamps: [2, 4],
+        base64Frames: [
+          "mock-frame-one",
+          "mock-frame-two",
+        ],
+      };
+    };
+
+  OllamaFrameExtractor.extractFrames =
+    receiverAwareExtractor;
+
+  try {
+    const result =
+      await AiService.analyzeValidatedAsset(
+        "user-binding",
+        "asset-binding",
+        {
+          findAsset: async () => mockAsset,
+          generateOllamaMetadata:
+            async () => ({
+              title: "Binding Test Passed",
+              caption:
+                "The default frame extractor retained its class receiver.",
+              hashtags: [
+                "#binding",
+                "#ollama",
+                "#video",
+                "#test",
+                "#localai",
+              ],
+              thumbnailTimestampSeconds: 2,
+            }),
+        }
+      );
+
+    assert.equal(
+      extractorWasCalled,
+      true
+    );
+
+    assert.equal(
+      receiverWasBound,
+      true,
+      "Default extractor must retain OllamaFrameExtractor as its receiver."
+    );
+
+    assert.equal(
+      result.title,
+      "Binding Test Passed"
+    );
+
+    console.log(
+      "PHASE6M_BINDING_REGRESSION=PASSED"
+    );
+  } finally {
+    OllamaFrameExtractor.extractFrames =
+      originalExtractFrames;
+
+    AiService.releaseLock();
+  }
+}
 async function testFrameExtractorDiskCleanup() {
   const tempTestDir = join(
     tmpdir(),
@@ -506,6 +617,7 @@ async function main() {
     await testOllamaClientJsonRepair();
     await testAiServiceConcurrency();
     await testOwnershipIsolationAndValidation();
+    await testAiServiceDefaultExtractorBinding();
     await testFrameExtractorDiskCleanup();
 
     console.log("PHASE6M_LOCAL_OLLAMA_AI_TESTS=PASSED");
