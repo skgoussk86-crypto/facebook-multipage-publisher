@@ -297,6 +297,7 @@ async function testAiServiceConcurrency() {
     id: "asset-1",
     userId: "user-1",
     provider: "GOOGLE_DRIVE",
+    objectKey: "mock-google-drive-file-id",
     status: "VALIDATED",
     originalName: "test.mp4",
     expectedSize: BigInt(100),
@@ -356,6 +357,7 @@ async function testOwnershipIsolationAndValidation() {
     id: "asset-1",
     userId: "user-owner",
     provider: "GOOGLE_DRIVE",
+    objectKey: "mock-google-drive-file-id",
     status: "VALIDATED",
     originalName: "test.mp4",
     expectedSize: BigInt(100),
@@ -394,21 +396,31 @@ async function testOwnershipIsolationAndValidation() {
 }
 
 async function testFrameExtractorDiskCleanup() {
-  // We can write a quick unit test for extractor's finally cleanup
-  // Mock asset and create fake temporary file to check it deletes
-  // Create a local source video stub for test
-  const tempTestDir = join(tmpdir(), "fb-extractor-cleanup-test");
-  const tempVideoPath = join(tempTestDir, "stub.mp4");
+  const tempTestDir = join(
+    tmpdir(),
+    "fb-extractor-cleanup-test"
+  );
+  const tempVideoPath = join(
+    tempTestDir,
+    "stub.mp4"
+  );
 
-  // Clean first
-  await rm(tempTestDir, { recursive: true, force: true });
+  await rm(tempTestDir, {
+    recursive: true,
+    force: true,
+  });
+
   fs.mkdirSync(tempTestDir);
-  fs.writeFileSync(tempVideoPath, "stub-bytes");
+  fs.writeFileSync(
+    tempVideoPath,
+    "stub-bytes"
+  );
 
   const mockAsset = {
     id: "asset-1",
     userId: "user-1",
     provider: "GOOGLE_DRIVE",
+    objectKey: "mock-google-drive-file-id",
     status: "VALIDATED",
     originalName: "stub.mp4",
     expectedSize: BigInt(10),
@@ -416,25 +428,67 @@ async function testFrameExtractorDiskCleanup() {
     durationMs: 5000,
   };
 
-  // Run with non-existent ffmpeg to trigger a failure
-  process.env.FFMPEG_PATH = "invalid-ffmpeg-path-xyz";
+  const { GoogleDriveMediaReader } =
+    await import(
+      "../src/lib/google-drive/google-drive-media-reader"
+    );
 
-  // Assert it fails due to FFMPEG_NOT_FOUND or FFMPEG_EXTRACTION_FAILED
-  await assert.rejects(
-    OllamaFrameExtractor.extractFrames({
-      userId: "user-1",
-      asset: mockAsset,
-      frameCount: 5,
-    }),
-    (err: unknown) => {
-      const e = err as any;
-      assert.equal(e.name, "AiVideoAnalysisError");
-      return true;
+  const originalGetDownloadStream =
+    GoogleDriveMediaReader.getDownloadStream;
+
+  const previousFfmpegPath =
+    process.env.FFMPEG_PATH;
+
+  GoogleDriveMediaReader.getDownloadStream =
+    async () => fs.createReadStream(
+      tempVideoPath
+    );
+
+  process.env.FFMPEG_PATH =
+    "invalid-ffmpeg-path-xyz";
+
+  try {
+    await assert.rejects(
+      OllamaFrameExtractor.extractFrames({
+        userId: "user-1",
+        asset: mockAsset,
+        frameCount: 5,
+      }),
+      (err: unknown) => {
+        const error = err as {
+          name?: string;
+          code?: string;
+        };
+
+        assert.equal(
+          error.name,
+          "AiVideoAnalysisError"
+        );
+
+        assert.equal(
+          error.code,
+          "AI_ANALYSIS_FAILED"
+        );
+
+        return true;
+      }
+    );
+  } finally {
+    GoogleDriveMediaReader.getDownloadStream =
+      originalGetDownloadStream;
+
+    if (previousFfmpegPath === undefined) {
+      delete process.env.FFMPEG_PATH;
+    } else {
+      process.env.FFMPEG_PATH =
+        previousFfmpegPath;
     }
-  );
 
-  // Clean up mock video directory
-  await rm(tempTestDir, { recursive: true, force: true });
+    await rm(tempTestDir, {
+      recursive: true,
+      force: true,
+    });
+  }
 }
 
 async function main() {

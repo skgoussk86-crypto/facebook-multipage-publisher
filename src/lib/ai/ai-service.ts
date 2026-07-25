@@ -20,6 +20,7 @@ export interface AiServiceAsset {
   id: string;
   userId: string;
   provider: string;
+  objectKey: string;
   status: string;
   originalName: string;
   expectedSize: bigint;
@@ -108,6 +109,7 @@ export class AiService {
             id: true,
             userId: true,
             provider: true,
+            objectKey: true,
             status: true,
             originalName: true,
             expectedSize: true,

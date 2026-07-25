@@ -52,6 +52,7 @@ async function main() {
     id: "smoke-asset-id-12345",
     userId: "smoke-user-id-54321",
     provider: "GOOGLE_DRIVE",
+    objectKey: "mock-google-drive-file-id",
     status: "VALIDATED",
     originalName: "dummy-video-smoke.mp4",
     expectedSize: BigInt(fs.statSync(dummyVideoPath).size),

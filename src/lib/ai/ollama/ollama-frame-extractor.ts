@@ -121,6 +121,7 @@ export class OllamaFrameExtractor {
       id: string;
       userId: string;
       provider: string;
+      objectKey: string;
       status: string;
       originalName: string;
       expectedSize: bigint;
@@ -165,7 +166,9 @@ export class OllamaFrameExtractor {
       try {
         downloadStream = await GoogleDriveMediaReader.getDownloadStream(
           userId,
-          asset as never
+          asset as unknown as Parameters<
+            typeof GoogleDriveMediaReader.getDownloadStream
+          >[1]
         );
       } catch (err: unknown) {
         throw new AiVideoAnalysisError(
