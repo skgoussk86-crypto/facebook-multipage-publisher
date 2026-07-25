@@ -139,7 +139,7 @@ export async function handleAnalyzeUploadRequest(
 
   const analyzeValidatedAsset =
     dependencies.analyzeValidatedAsset ??
-    AiService.analyzeValidatedAsset;
+    AiService.analyzeValidatedAsset.bind(AiService);
 
   try {
     const analysis = await analyzeValidatedAsset(
