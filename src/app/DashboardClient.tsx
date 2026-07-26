@@ -8,8 +8,8 @@ import { normalizeDashboardJobs } from "../lib/validation";
 import {
   buildGeminiAnalysisUrl,
   getGeminiAnalysisErrorMessage,
-  parseGeminiAnalysisApiResponse,
 } from "../lib/gemini/gemini-dashboard-analysis";
+import { parseAnalysisStream, validateStreamResponseContentType } from "../lib/ai/ai-analysis-stream-client";
 import {
   buildThumbnailGenerationUrl,
   getThumbnailGenerationErrorMessage,
@@ -336,6 +336,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
   const [isBulkGeminiAnalysisRunning, setIsBulkGeminiAnalysisRunning] = useState(false);
   const queueControllerRef = useRef<UploadQueueController | null>(null);
+  const activeAnalysisAborts = useRef<Record<string, AbortController>>({});
+
+  useEffect(() => {
+    const aborts = activeAnalysisAborts.current;
+    return () => {
+      Object.values(aborts).forEach((controller) => {
+        controller.abort();
+      });
+    };
+  }, []);
 
   const pagesRef = useRef(pages);
   useEffect(() => {
@@ -966,7 +976,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       return false;
     }
 
-    if (job.geminiAnalysisStatus === "analyzing") {
+    if (job.geminiAnalysisStatus === "analyzing" || activeAnalysisAborts.current[job.id] !== undefined) {
       return false;
     }
 
@@ -975,21 +985,26 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       geminiAnalysisError: undefined,
     });
 
+    const controller = new AbortController();
+    activeAnalysisAborts.current[job.id] = controller;
+
     try {
       const response = await fetch(
-        buildGeminiAnalysisUrl(job.assetId),
-        { method: "POST" },
+        buildGeminiAnalysisUrl(job.assetId) + "-stream",
+        {
+          method: "POST",
+          signal: controller.signal,
+        }
       );
 
       let payload: unknown = null;
 
-      try {
-        payload = await response.json();
-      } catch {
-        payload = null;
-      }
-
       if (!response.ok) {
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
         throw new Error(
           getGeminiAnalysisErrorMessage(
             response.status,
@@ -998,13 +1013,53 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         );
       }
 
-      const analysis =
-        parseGeminiAnalysisApiResponse(payload);
+      validateStreamResponseContentType(response);
+
+      let analysisResult: unknown = null;
+
+      await parseAnalysisStream(response, {
+        onReady() {
+          // Heartbeats / ready events are not errors
+        },
+        onResult(result) {
+          const res = result as {
+            success: boolean;
+            analysis: {
+              title: string;
+              caption: string;
+              hashtags: string[];
+              thumbnailTimestampSeconds: number;
+              thumbnailReason: string;
+            };
+          };
+          if (res && res.success) {
+            analysisResult = res.analysis;
+          }
+        },
+        onError(err) {
+          const errorObj = err as { message?: string };
+          throw new Error(errorObj?.message || "AI could not analyze this video.");
+        },
+      });
+
+      if (!analysisResult) {
+        throw new Error(
+          "The AI analysis connection ended before completion. Please try again."
+        );
+      }
+
+      const finalResult = analysisResult as {
+        title: string;
+        caption: string;
+        hashtags: string[];
+        thumbnailTimestampSeconds: number;
+        thumbnailReason: string;
+      };
 
       const updates: Partial<VideoJob> = {
-        englishTitle: analysis.title,
-        englishCaption: analysis.caption,
-        hashtags: analysis.hashtagsText,
+        englishTitle: finalResult.title,
+        englishCaption: finalResult.caption,
+        hashtags: finalResult.hashtags.join(" "),
         thumbnailMode: "captured",
         thumbnailAssetId: undefined,
         thumbnailGenerationStatus: "idle",
@@ -1012,9 +1067,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         geminiAnalysisStatus: "complete",
         geminiAnalysisError: undefined,
         geminiThumbnailTimestampSeconds:
-          analysis.thumbnailTimestampSeconds,
+          finalResult.thumbnailTimestampSeconds,
         geminiThumbnailReason:
-          analysis.thumbnailReason,
+          finalResult.thumbnailReason,
         geminiAnalyzedAt: new Date().toISOString(),
       };
 
@@ -1023,7 +1078,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           const capturedThumbnailUrl =
             await captureFrameFromVideoUrl(
               job.localVideoUrl,
-              analysis.thumbnailTimestampSeconds,
+              finalResult.thumbnailTimestampSeconds,
             );
 
           updates.capturedThumbnailUrl =
@@ -1047,18 +1102,22 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           assetId: job.assetId,
           fileName: job.fileName,
           timestampSeconds:
-            analysis.thumbnailTimestampSeconds,
+            finalResult.thumbnailTimestampSeconds,
           source: "GEMINI_FRAME",
         });
 
       addSecurityLog(
         "INFO",
-        `AI generated English content and selected thumbnail timestamp ${analysis.thumbnailTimestampSeconds.toFixed(2)}s for ${job.fileName}.`,
+        `AI generated English content and selected thumbnail timestamp ${finalResult.thumbnailTimestampSeconds.toFixed(2)}s for ${job.fileName}.`,
         job.id,
       );
 
       return thumbnailStored;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return false;
+      }
+
       const message =
         error instanceof Error
           ? error.message
@@ -1076,6 +1135,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       );
 
       return false;
+    } finally {
+      if (activeAnalysisAborts.current[job.id] === controller) {
+        delete activeAnalysisAborts.current[job.id];
+      }
     }
   };
 
@@ -1118,6 +1181,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
   // Delete draft from queue
   const handleDeleteDraft = (id: string) => {
+    if (activeAnalysisAborts.current[id]) {
+      activeAnalysisAborts.current[id].abort();
+      delete activeAnalysisAborts.current[id];
+    }
     setTempJobsQueue((prev) => prev.filter((j) => j.id !== id));
     queueControllerRef.current?.removeItem(id);
   };
@@ -3271,6 +3338,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                         : "Generate with AI"}
                                   </button>
                                 </div>
+
+                                {job.geminiAnalysisStatus === "analyzing" && (
+                                  <div className="mt-2 text-[10px] text-indigo-600 animate-pulse font-semibold">
+                                    Analyzing video with local AI… keep this page open.
+                                  </div>
+                                )}
 
                                 {!job.uploadValidated && (
                                   <div className="mt-2 text-[10px] text-zinc-600">
