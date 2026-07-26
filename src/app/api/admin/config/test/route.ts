@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   createAuditLog,
-  getAppConfiguration
+  getAppConfigurationById
 } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 import {
@@ -18,6 +18,7 @@ interface ConfigurationTestBody {
   facebookAppId?: unknown;
   facebookAppSecret?: unknown;
   liveMetaMode?: unknown;
+  configurationId?: unknown;
 }
 
 function getRequestIp(request: NextRequest): string | null {
@@ -185,6 +186,31 @@ export async function POST(request: NextRequest) {
 
     const sanitizedUrl = parsedUrl.origin;
 
+    // 1. ALWAYS VALIDATE EXPLICIT CONFIGURATION OWNERSHIP
+    const bodyHasConfigId = body.configurationId !== undefined;
+    const queryHasConfigId = request.nextUrl.searchParams.has('configurationId');
+
+    let existingConfiguration: Awaited<ReturnType<typeof getAppConfigurationById>> = null;
+
+    if (bodyHasConfigId || queryHasConfigId) {
+      const rawConfigId = bodyHasConfigId ? body.configurationId : request.nextUrl.searchParams.get('configurationId');
+
+      if (typeof rawConfigId !== 'string') {
+        return validationError('Invalid configuration ID.');
+      }
+
+      const trimmed = rawConfigId.trim();
+      if (!trimmed || trimmed === 'new') {
+        return validationError('Invalid configuration ID.');
+      }
+
+      // Resolve it immediately
+      existingConfiguration = await getAppConfigurationById(user.id, trimmed);
+      if (!existingConfiguration) {
+        return validationError('App configuration not found or access denied.');
+      }
+    }
+
     const secretIsMaskedOrEmpty =
       !facebookAppSecret.trim() ||
       isMaskedSecret(facebookAppSecret);
@@ -192,12 +218,29 @@ export async function POST(request: NextRequest) {
     let secretToTest: string;
 
     if (secretIsMaskedOrEmpty) {
-      const existingConfiguration =
-        await getAppConfiguration(user.id);
-
+      // For a new unsaved configuration, Validate Configuration must require a newly entered nonblank App Secret.
       if (!existingConfiguration) {
-        return validationError(
-          'No existing personal configuration was found. Enter a valid Facebook App Secret.'
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Enter a Facebook App Secret for the new configuration.'
+          },
+          {
+            status: 400
+          }
+        );
+      }
+
+      // 2. PREVENT APP-ID/SECRET MISMATCH DURING MASKED VALIDATION
+      if (facebookAppId !== existingConfiguration.facebookAppId) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Enter the App Secret that belongs to the changed Facebook App ID.'
+          },
+          {
+            status: 400
+          }
         );
       }
 
@@ -205,15 +248,11 @@ export async function POST(request: NextRequest) {
         secretToTest = decryptToken(
           existingConfiguration.encryptedAppSecret
         );
-      } catch (error: unknown) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : String(error);
-
+      } catch {
+        // Do not place decryption exception details in audit logs.
         await createAuditLog(
           'TEST_CONFIG',
-          `Personal Meta configuration validation failed because the stored App Secret could not be decrypted: ${message}`,
+          'Personal Meta configuration validation failed because the stored App Secret could not be decrypted.',
           getRequestIp(request),
           user.id
         );
@@ -239,14 +278,9 @@ export async function POST(request: NextRequest) {
         secretToTest = decryptToken(
           encryptedSecret
         );
-      } catch (error: unknown) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : String(error);
-
+      } catch {
         return validationError(
-          `Facebook App Secret encryption test failed: ${message}`
+          'Facebook App Secret encryption test failed.'
         );
       }
 
@@ -288,22 +322,13 @@ export async function POST(request: NextRequest) {
         liveMetaMode
       }
     });
-  } catch (error: unknown) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : String(error);
-
-    console.error(
-      'Error testing Meta configuration:',
-      error
-    );
+  } catch {
+    console.error('Error testing Meta configuration');
 
     return NextResponse.json(
       {
         success: false,
-        message:
-          `Internal configuration validation error: ${message}`
+        message: 'Unable to validate the Meta App configuration.'
       },
       {
         status: 500

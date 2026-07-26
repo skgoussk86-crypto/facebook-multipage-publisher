@@ -7,6 +7,8 @@ import {
   getFacebookConnections
 } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
+import { prisma } from '@/lib/prisma-client';
+import type { AppConfiguration } from '@prisma/client';
 
 export async function GET(request: NextRequest) {
   try {
@@ -43,6 +45,25 @@ export async function GET(request: NextRequest) {
     const accounts =
       await getFacebookConnections(user.id);
 
+    const configurations = await prisma.appConfiguration.findMany({
+      where: { userId: user.id },
+      orderBy: [
+        { isDefault: 'desc' },
+        { createdAt: 'asc' }
+      ]
+    });
+
+    const sanitizedConfigurations = configurations.map((config: AppConfiguration) => ({
+      id: config.id,
+      configurationName: config.configurationName,
+      publicAppUrl: config.publicAppUrl,
+      facebookAppId: config.facebookAppId,
+      liveMetaMode: config.liveMetaMode,
+      isDefault: config.isDefault,
+      isEnabled: config.isEnabled,
+      secretConfigured: !!config.encryptedAppSecret
+    }));
+
     const primaryAccount = accounts[0] ?? null;
 
     return NextResponse.json({
@@ -54,6 +75,7 @@ export async function GET(request: NextRequest) {
       liveMetaMode:
         configuration.liveMetaMode,
       accounts,
+      configurations: sanitizedConfigurations,
       pages: primaryAccount?.pages ?? [],
       connectionState:
         primaryAccount?.connectionState ??

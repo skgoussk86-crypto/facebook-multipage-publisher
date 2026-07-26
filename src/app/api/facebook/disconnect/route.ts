@@ -7,6 +7,7 @@ import {
   disconnectFacebook
 } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
+import { prisma } from '@/lib/prisma-client';
 
 function getRequestIp(
   request: NextRequest
@@ -63,6 +64,21 @@ export async function POST(
       );
     }
 
+    if (accountId) {
+      const exists = await prisma.facebookAccount.findFirst({
+        where: {
+          id: accountId,
+          userId: user.id
+        }
+      });
+      if (!exists) {
+        return NextResponse.json(
+          { error: 'Facebook account not found.' },
+          { status: 404 }
+        );
+      }
+    }
+
     const disconnected =
       await disconnectFacebook(
         user.id,
@@ -96,21 +112,12 @@ export async function POST(
         ? 'Facebook account disconnected successfully.'
         : 'All Facebook accounts disconnected successfully.'
     });
-  } catch (error: unknown) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : String(error);
-
-    console.error(
-      'Error disconnecting Facebook account:',
-      error
-    );
+  } catch {
+    console.error('Error disconnecting Facebook account');
 
     return NextResponse.json(
       {
-        error:
-          `Unable to disconnect Facebook account: ${message}`
+        error: 'Unable to disconnect the Facebook account.'
       },
       {
         status: 500

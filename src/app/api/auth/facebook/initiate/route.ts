@@ -1,35 +1,63 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { cookies as defaultCookies } from 'next/headers';
 import crypto from 'crypto';
-import { getAppConfiguration } from '@/lib/db';
-import { getSessionUser } from '@/lib/auth';
+import { getAppConfiguration as defaultGetAppConfiguration } from '@/lib/db';
+import { getSessionUser as defaultGetSessionUser } from '@/lib/auth';
 
-export async function GET(request: NextRequest) {
+export async function handleGet(
+  request: NextRequest,
+  deps = {
+    getSessionUser: defaultGetSessionUser,
+    getAppConfiguration: defaultGetAppConfiguration,
+    cookies: defaultCookies
+  }
+) {
   try {
+    const user = await deps.getSessionUser();
+    if (!user) {
+      return NextResponse.redirect(`${request.nextUrl.origin}/login`);
+    }
+
+    const configIdParam = request.nextUrl.searchParams.get('configurationId');
+    let config;
+
+    if (configIdParam) {
+      config = await deps.getAppConfiguration(user.id, configIdParam);
+      if (!config || !config.isEnabled) {
+        return NextResponse.redirect(
+          `${request.nextUrl.origin}/settings/meta-configuration?error=invalid_configuration`
+        );
+      }
+    } else {
+      config = await deps.getAppConfiguration(user.id);
+      if (!config) {
+        return NextResponse.redirect(
+          `${request.nextUrl.origin}/settings/meta-configuration?error=not_configured`
+        );
+      }
+    }
+
     // Generate secure state for CSRF validation
     const state = crypto.randomBytes(16).toString('hex');
-    
-    // Save state in HTTP-only cookie
-    const cookieStore = await cookies();
-    cookieStore.set('fb_oauth_state', state, {
+
+    // Save state and configuration ID in HTTP-only context cookie
+    const cookieStore = await deps.cookies();
+
+    const contextValue = JSON.stringify({
+      state,
+      configurationId: config.id
+    });
+
+    cookieStore.set('fb_oauth_context', contextValue, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      maxAge: 60 * 10, // 10 minutes validation window
+      maxAge: 60 * 10 // 10 minutes validation window
     });
 
-    const user = await getSessionUser();
-    if (!user) {
-      return NextResponse.redirect(`${request.nextUrl.origin}/login`);
-    }
-    const config = await getAppConfiguration(user.id);
-    
-    // When no secure configuration exists, redirect to first-run setup page instead of failing
-    if (!config) {
-      const fallbackBaseUrl = request.nextUrl.origin;
-      return NextResponse.redirect(`${fallbackBaseUrl}/settings/meta-configuration?error=not_configured`);
-    }
+    // Also clean up legacy cookie if present
+    cookieStore.delete('fb_oauth_state');
 
     const appId = config.facebookAppId;
     const isLive = config.liveMetaMode;
@@ -54,3 +82,6 @@ export async function GET(request: NextRequest) {
   }
 }
 
+export async function GET(request: NextRequest) {
+  return handleGet(request);
+}

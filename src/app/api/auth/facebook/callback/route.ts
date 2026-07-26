@@ -1,42 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { cookies as defaultCookies } from 'next/headers';
+import crypto from 'crypto';
 import { encryptToken, decryptToken } from '@/lib/crypto';
-import { saveFacebookAccount, MockFacebookAccount, MockFacebookPage, getAppConfiguration } from '@/lib/db';
-import { getSessionUser } from '@/lib/auth';
+import { saveFacebookAccount as defaultSaveFacebookAccount, MockFacebookAccount, MockFacebookPage } from '@/lib/db';
+import { getSessionUser as defaultGetSessionUser } from '@/lib/auth';
+import { prisma as defaultPrisma } from '@/lib/prisma-client';
 
-export async function GET(request: NextRequest) {
-  const user = await getSessionUser();
+function timingSafeEqual(a: string, b: string): boolean {
+  if (!a || !b || a.length !== b.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+export async function handleGet(
+  request: NextRequest,
+  deps = {
+    getSessionUser: defaultGetSessionUser,
+    prisma: defaultPrisma,
+    saveFacebookAccount: defaultSaveFacebookAccount,
+    cookies: defaultCookies
+  }
+) {
+  const user = await deps.getSessionUser();
   if (!user) {
     const fallbackBaseUrl = request.nextUrl.origin;
     return NextResponse.redirect(`${fallbackBaseUrl}/login`);
   }
-  const config = await getAppConfiguration(user.id);
-  
-  if (!config) {
-    const fallbackBaseUrl = request.nextUrl.origin;
-    return NextResponse.redirect(`${fallbackBaseUrl}/settings/meta-configuration?error=not_configured`);
-  }
 
-  const appId = config.facebookAppId;
-  const isLive = config.liveMetaMode;
-  const publicAppUrl = config.publicAppUrl;
-  const baseUrl = publicAppUrl; // Use stored public App URL as the base URL
+  const cookieStore = await deps.cookies();
+  const contextCookie = cookieStore.get('fb_oauth_context')?.value;
 
-  let appSecret = '';
-  if (isLive) {
-    try {
-      appSecret = decryptToken(config.encryptedAppSecret);
-    } catch (err: unknown) {
-      console.error('Decryption of Facebook App Secret failed during OAuth callback:', err);
-      return NextResponse.redirect(`${baseUrl}/settings/meta-configuration?error=decryption_failed`);
-    }
-  }
-
-  const cookieStore = await cookies();
-  const savedState = cookieStore.get('fb_oauth_state')?.value;
-  
-  // Clear the cookie immediately
+  // Clear the cookies immediately
+  cookieStore.delete('fb_oauth_context');
   cookieStore.delete('fb_oauth_state');
+
+  let parsedContext: { state?: string; configurationId?: string } = {};
+  try {
+    if (contextCookie) {
+      parsedContext = JSON.parse(contextCookie);
+    }
+  } catch (err) {
+    console.error('Failed to parse OAuth context cookie:', err);
+  }
 
   const searchParams = request.nextUrl.searchParams;
   const state = searchParams.get('state');
@@ -44,18 +50,73 @@ export async function GET(request: NextRequest) {
   const error = searchParams.get('error');
   const permissionsGranted = searchParams.get('permissions_granted') || 'all';
 
+  const savedState = parsedContext.state;
+  const configurationId = parsedContext.configurationId;
+
   // 1. CSRF Verification
-  if (!state || state !== savedState) {
-    return NextResponse.redirect(`${baseUrl}/?error=CSRF_validation_failed`);
+  const stateMatches = state && savedState && timingSafeEqual(state, savedState);
+  if (!stateMatches) {
+    return NextResponse.redirect(
+      `${request.nextUrl.origin}/settings/meta-configuration?error=CSRF_validation_failed`
+    );
+  }
+
+  if (!configurationId) {
+    return NextResponse.redirect(
+      `${request.nextUrl.origin}/settings/meta-configuration?error=missing_configuration_context`
+    );
+  }
+
+  // Load and verify configuration
+  const config = await deps.prisma.appConfiguration.findFirst({
+    where: {
+      id: configurationId,
+      userId: user.id
+    }
+  });
+
+  if (!config) {
+    return NextResponse.redirect(
+      `${request.nextUrl.origin}/settings/meta-configuration?error=configuration_not_found`
+    );
+  }
+
+  const baseUrl = config.publicAppUrl;
+
+  if (!config.isEnabled) {
+    return NextResponse.redirect(
+      `${baseUrl}/settings/meta-configuration?error=configuration_disabled&configurationId=${encodeURIComponent(config.id)}`
+    );
+  }
+
+  const appId = config.facebookAppId;
+  const isLive = config.liveMetaMode;
+
+  let appSecret = '';
+  if (isLive) {
+    try {
+      appSecret = decryptToken(config.encryptedAppSecret);
+    } catch {
+      console.error('Decryption of Facebook App Secret failed during OAuth callback');
+      return NextResponse.redirect(
+        `${baseUrl}/settings/meta-configuration?error=decryption_failed&configurationId=${encodeURIComponent(config.id)}`
+      );
+    }
   }
 
   // 2. Handle cancellation/errors from Facebook
   if (error) {
-    return NextResponse.redirect(`${baseUrl}/?error=${error}`);
+    // Treat the Facebook error parameter code as a fixed safe code, sanitizing the internal value.
+    const safeErrorParam = error === 'access_denied' ? 'access_denied' : 'oauth_cancelled';
+    return NextResponse.redirect(
+      `${baseUrl}/settings/meta-configuration?error=${safeErrorParam}&configurationId=${encodeURIComponent(config.id)}`
+    );
   }
 
   if (!code) {
-    return NextResponse.redirect(`${baseUrl}/?error=no_authorization_code`);
+    return NextResponse.redirect(
+      `${baseUrl}/settings/meta-configuration?error=no_authorization_code&configurationId=${encodeURIComponent(config.id)}`
+    );
   }
 
   const redirectUri = `${baseUrl}/api/auth/facebook/callback`;
@@ -68,8 +129,10 @@ export async function GET(request: NextRequest) {
       const tokenExchangeUrl = `https://graph.facebook.com/v20.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`;
       const tokenRes = await fetch(tokenExchangeUrl);
       if (!tokenRes.ok) {
-        const errData = await tokenRes.json();
-        return NextResponse.redirect(`${baseUrl}/?error=token_exchange_failed&details=${encodeURIComponent(errData.error?.message || '')}`);
+        console.error('Exchange for user access token failed');
+        return NextResponse.redirect(
+          `${baseUrl}/settings/meta-configuration?error=token_exchange_failed&configurationId=${encodeURIComponent(config.id)}`
+        );
       }
       const tokenData = await tokenRes.json();
       const shortUserToken = tokenData.access_token;
@@ -78,7 +141,10 @@ export async function GET(request: NextRequest) {
       const longLivedUrl = `https://graph.facebook.com/v20.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${shortUserToken}`;
       const longLivedRes = await fetch(longLivedUrl);
       if (!longLivedRes.ok) {
-        return NextResponse.redirect(`${baseUrl}/?error=long_lived_token_failed`);
+        console.error('Exchange for long-lived access token failed');
+        return NextResponse.redirect(
+          `${baseUrl}/settings/meta-configuration?error=long_lived_token_failed&configurationId=${encodeURIComponent(config.id)}`
+        );
       }
       const longLivedData = await longLivedRes.json();
       const longUserToken = longLivedData.access_token;
@@ -88,7 +154,10 @@ export async function GET(request: NextRequest) {
       // Step C: Fetch User Profile ID and Name
       const meRes = await fetch(`https://graph.facebook.com/v20.0/me?access_token=${longUserToken}`);
       if (!meRes.ok) {
-        return NextResponse.redirect(`${baseUrl}/?error=user_profile_fetch_failed`);
+        console.error('Fetching profile user ID failed');
+        return NextResponse.redirect(
+          `${baseUrl}/settings/meta-configuration?error=user_profile_fetch_failed&configurationId=${encodeURIComponent(config.id)}`
+        );
       }
       const meData = await meRes.json();
       const fbUserId = meData.id;
@@ -97,7 +166,10 @@ export async function GET(request: NextRequest) {
       // Step D: Fetch Pages managed by the User
       const pagesRes = await fetch(`https://graph.facebook.com/v20.0/me/accounts?access_token=${longUserToken}`);
       if (!pagesRes.ok) {
-        return NextResponse.redirect(`${baseUrl}/?error=pages_fetch_failed`);
+        console.error('Fetching user managed pages failed');
+        return NextResponse.redirect(
+          `${baseUrl}/settings/meta-configuration?error=pages_fetch_failed&configurationId=${encodeURIComponent(config.id)}`
+        );
       }
       const pagesData = await pagesRes.json();
       const rawPages = pagesData.data || [];
@@ -109,13 +181,13 @@ export async function GET(request: NextRequest) {
         try {
           const picRes = await fetch(`https://graph.facebook.com/v20.0/${page.id}/picture?redirect=0&type=normal&access_token=${page.access_token}`);
           if (picRes.ok) {
-            const picData = await picRes.json();
+            const picData = await picRes.ok ? await picRes.json() : null;
             if (picData?.data?.url) {
               pictureUrl = picData.data.url;
             }
           }
-        } catch (e) {
-          console.warn(`Could not load profile picture for page ${page.name}:`, e);
+        } catch {
+          console.warn(`Could not load profile picture for page ${page.name}`);
         }
 
         mappedPages.push({
@@ -129,9 +201,6 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // Check if publishing scopes are missing (mock detection based on granted scopes if API provides it)
-      // Standard Graph API doesn't return scope lists in token results directly without debug token query,
-      // so in live mode we default to 'Connected' unless a token error occurs.
       const connectionState = 'Connected';
 
       const accountData: MockFacebookAccount = {
@@ -143,8 +212,10 @@ export async function GET(request: NextRequest) {
         pages: mappedPages
       };
 
-      await saveFacebookAccount(user.id, accountData, connectionState);
-      return NextResponse.redirect(`${baseUrl}/?success=oauth_connected`);
+      await deps.saveFacebookAccount(user.id, accountData, connectionState, config.id);
+      return NextResponse.redirect(
+        `${baseUrl}/settings/meta-configuration?success=oauth_connected&configurationId=${encodeURIComponent(config.id)}`
+      );
 
     } else {
       // --- LOCAL DEVELOPMENT SIMULATION FLOW ---
@@ -195,12 +266,20 @@ export async function GET(request: NextRequest) {
         pages: mockPages
       };
 
-      await saveFacebookAccount(user.id, simulatedAccount, connectionState);
-      return NextResponse.redirect(`${baseUrl}/?success=oauth_simulated`);
+      await deps.saveFacebookAccount(user.id, simulatedAccount, connectionState, config.id);
+      return NextResponse.redirect(
+        `${baseUrl}/settings/meta-configuration?success=oauth_simulated&configurationId=${encodeURIComponent(config.id)}`
+      );
     }
-  } catch (error: unknown) {
-    console.error('OAuth Callback Error:', error);
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return NextResponse.redirect(`${baseUrl}/?error=internal_oauth_error&message=${encodeURIComponent(errorMessage)}`);
+  } catch {
+    console.error('OAuth Callback Error');
+    const errUrl = config?.publicAppUrl || request.nextUrl.origin;
+    return NextResponse.redirect(
+      `${errUrl}/settings/meta-configuration?error=internal_oauth_error&configurationId=${encodeURIComponent(configurationId || '')}`
+    );
   }
+}
+
+export async function GET(request: NextRequest) {
+  return handleGet(request);
 }

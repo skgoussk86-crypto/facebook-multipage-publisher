@@ -266,7 +266,7 @@ export async function POST(
     const accounts =
       await getFacebookConnections(user.id);
 
-    if (accounts.length === 0) {
+    if (!accountId && accounts.length === 0) {
       return NextResponse.json(
         {
           error:
@@ -497,20 +497,12 @@ export async function POST(
       })),
       connectionState
     });
-  } catch (error: unknown) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'Internal Server Error';
-
-    console.error(
-      'Facebook Pages Sync Error:',
-      error
-    );
+  } catch {
+    console.error('Facebook Pages Sync Error');
 
     return NextResponse.json(
       {
-        error: message
+        error: 'Unable to synchronize Facebook Pages.'
       },
       {
         status: 500
