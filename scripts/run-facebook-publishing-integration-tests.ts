@@ -82,11 +82,28 @@ async function runTests() {
     }
   });
 
+  // Set AppConfig liveMode
+  const configId = randomUUID();
+  await prisma.appConfiguration.create({
+    data: {
+      id: configId,
+      userId: testUserId,
+      configurationName: 'Default Meta App',
+      liveMetaMode: true,
+      publicAppUrl: 'http://localhost:3000',
+      facebookAppId: 'dummy-app-id',
+      encryptedAppSecret: 'dummy-app-secret',
+      isDefault: true,
+      isEnabled: true
+    }
+  });
+
   // Create facebook account & page
   await prisma.facebookAccount.create({
     data: {
       id: testAccountId,
       userId: testUserId,
+      appConfigurationId: configId,
       facebookUserId: 'fb-user-123',
       name: 'Test Account',
       encryptedAccessToken: 'dummy',
@@ -108,19 +125,6 @@ async function runTests() {
       pageCategory: 'Mock',
       pagePictureUrl: 'url',
       isSynced: true
-    }
-  });
-
-  // Set AppConfig liveMode
-  await prisma.appConfiguration.upsert({
-    where: { id: 'default' },
-    update: { liveMetaMode: true },
-    create: {
-      id: 'default',
-      liveMetaMode: true,
-      publicAppUrl: 'http://localhost:3000',
-      facebookAppId: 'dummy-app-id',
-      encryptedAppSecret: 'dummy-app-secret'
     }
   });
 
@@ -511,15 +515,17 @@ async function runTests() {
       }
     });
 
-    // Explicitly configure Mock Meta Mode (liveMetaMode: false) for mockUser1
     await prisma.appConfiguration.create({
       data: {
         id: randomUUID(),
         userId: mockUser1,
+        configurationName: 'Default Meta App',
         liveMetaMode: false,
         publicAppUrl: 'http://localhost:3000',
         facebookAppId: 'mock-app-id',
-        encryptedAppSecret: 'mock-app-secret'
+        encryptedAppSecret: 'mock-app-secret',
+        isDefault: true,
+        isEnabled: true
       }
     });
 
@@ -1113,13 +1119,12 @@ async function runTests() {
 
   // Clean up test data
   console.log('Cleaning up test database fixtures...');
-  await prisma.videoJob.deleteMany({ where: { userId: testUserId } });
-  await prisma.uploadAsset.deleteMany({ where: { userId: testUserId } });
-  await prisma.uploadAsset.deleteMany({ where: { userId: otherUserId } });
-  await prisma.facebookPage.deleteMany({ where: { userId: testUserId } });
-  await prisma.facebookAccount.deleteMany({ where: { userId: testUserId } });
-  await prisma.user.delete({ where: { id: testUserId } });
-  await prisma.user.delete({ where: { id: otherUserId } });
+  await prisma.videoJob.deleteMany({ where: { userId: { in: [testUserId, otherUserId] } } });
+  await prisma.uploadAsset.deleteMany({ where: { userId: { in: [testUserId, otherUserId] } } });
+  await prisma.facebookPage.deleteMany({ where: { userId: { in: [testUserId, otherUserId] } } });
+  await prisma.facebookAccount.deleteMany({ where: { userId: { in: [testUserId, otherUserId] } } });
+  await prisma.appConfiguration.deleteMany({ where: { userId: { in: [testUserId, otherUserId] } } });
+  await prisma.user.deleteMany({ where: { id: { in: [testUserId, otherUserId] } } });
 
   console.log(`All ${testCount} scheduling & publishing integration tests completed successfully! 🎉`);
 }

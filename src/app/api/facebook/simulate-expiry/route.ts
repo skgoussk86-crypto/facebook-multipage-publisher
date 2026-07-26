@@ -28,16 +28,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    let allPagesStatus: { id: string, tokenStatus: 'Valid' | 'Expired' }[] = [];
     for (const acc of targetAccounts) {
       const pagesStatus = acc.pages.map(p => ({
         id: p.id,
         tokenStatus: shouldExpire ? ('Expired' as const) : ('Valid' as const)
       }));
-      allPagesStatus = [...allPagesStatus, ...pagesStatus];
+      await updatePagesStatus(user.id, pagesStatus, acc.id);
     }
-
-    await updatePagesStatus(user.id, allPagesStatus);
 
     return NextResponse.json({ success: true, expired: shouldExpire });
   } catch (error: unknown) {

@@ -77,7 +77,7 @@ model User {
   registrationIp        String?                @db.VarChar(45)
   lastLoginAt           DateTime?              @db.Timestamptz
   facebookAccounts      FacebookAccount[]
-  appConfiguration      AppConfiguration?
+  appConfigurations     AppConfiguration[]
   facebookPages         FacebookPage[]
   videoJobs             VideoJob[]
   googleDriveConnection GoogleDriveConnection?
@@ -102,7 +102,12 @@ model FacebookAccount {
   createdAt            DateTime       @default(now()) @db.Timestamptz
   updatedAt            DateTime       @updatedAt @db.Timestamptz
 
-  @@unique([userId, facebookUserId])
+  appConfigurationId String           @db.VarChar(50)
+  appConfiguration   AppConfiguration @relation(fields: [appConfigurationId], references: [id], onDelete: Restrict)
+
+  @@unique([appConfigurationId, facebookUserId])
+  @@index([appConfigurationId])
+  @@index([userId, facebookUserId])
   @@index([facebookUserId])
   @@index([userId])
 }
@@ -123,7 +128,7 @@ model FacebookPage {
   createdAt          DateTime        @default(now()) @db.Timestamptz
   updatedAt          DateTime        @updatedAt @db.Timestamptz
 
-  @@unique([userId, facebookPageId])
+  @@unique([accountId, facebookPageId])
   @@index([facebookPageId])
   @@index([accountId])
   @@index([userId])
@@ -180,15 +185,23 @@ model VideoJob {
 }
 
 model AppConfiguration {
-  id                 String   @id @default("default") @db.VarChar(50)
-  publicAppUrl       String   @db.Text
-  facebookAppId      String   @db.VarChar(255)
-  encryptedAppSecret String   @db.Text
-  liveMetaMode       Boolean  @default(false)
-  userId             String?  @unique @db.Uuid
-  user               User?    @relation(fields: [userId], references: [id])
-  createdAt          DateTime @default(now()) @db.Timestamptz
-  updatedAt          DateTime @updatedAt @db.Timestamptz
+  id                 String            @id @default(uuid()) @db.VarChar(50)
+  publicAppUrl       String            @db.Text
+  facebookAppId      String            @db.VarChar(255)
+  encryptedAppSecret String            @db.Text
+  liveMetaMode       Boolean           @default(false)
+  userId             String?           @db.Uuid
+  user               User?             @relation(fields: [userId], references: [id])
+  createdAt          DateTime          @default(now()) @db.Timestamptz
+  updatedAt          DateTime          @updatedAt @db.Timestamptz
+  configurationName  String            @db.VarChar(100)
+  isDefault          Boolean           @default(false)
+  isEnabled          Boolean           @default(true)
+  facebookAccounts   FacebookAccount[]
+
+  @@unique([userId, facebookAppId])
+  @@index([userId, isDefault])
+  @@index([userId, isEnabled])
 }
 
 model AuditLog {
@@ -281,12 +294,12 @@ model UploadAsset {
   retentionUntil  DateTime? @db.Timestamptz
   objectDeletedAt DateTime? @db.Timestamptz
 
-  videoJobs        VideoJob[]
-  thumbnailAssets  ThumbnailAsset[] @relation("ThumbnailSourceVideo")
-  uploadAttempts   UploadAttempt[]
-  uploadSession  UploadSession?
-  createdAt      DateTime        @default(now()) @db.Timestamptz
-  updatedAt      DateTime        @updatedAt @db.Timestamptz
+  videoJobs       VideoJob[]
+  thumbnailAssets ThumbnailAsset[] @relation("ThumbnailSourceVideo")
+  uploadAttempts  UploadAttempt[]
+  uploadSession   UploadSession?
+  createdAt       DateTime         @default(now()) @db.Timestamptz
+  updatedAt       DateTime         @updatedAt @db.Timestamptz
 
   @@unique([userId, idempotencyKey])
   @@unique([provider, bucket, objectKey])
@@ -299,33 +312,34 @@ model UploadAsset {
 }
 
 model ThumbnailAsset {
-  id                    String          @id @default(uuid()) @db.Uuid
-  userId                String          @db.Uuid
-  user                  User            @relation(fields: [userId], references: [id], onDelete: Restrict)
-  sourceUploadAssetId   String          @db.Uuid
-  sourceUploadAsset     UploadAsset     @relation("ThumbnailSourceVideo", fields: [sourceUploadAssetId], references: [id], onDelete: Restrict)
-  provider              StorageProvider @default(GOOGLE_DRIVE)
-  bucket                String          @db.VarChar(255)
-  objectKey             String          @db.VarChar(512)
-  storageUri            String          @unique @db.Text
-  originalName          String          @db.VarChar(255)
-  mimeType              String          @db.VarChar(100)
-  sizeBytes             BigInt          @db.BigInt
-  checksum              String          @db.VarChar(255)
-  source                ThumbnailSource
-  timestampMs           Int?            @db.Integer
-  idempotencyKey        String          @db.VarChar(255)
-  requestFingerprint    String          @db.VarChar(64)
-  deletedAt             DateTime?       @db.Timestamptz
-  videoJobs             VideoJob[]
-  createdAt             DateTime        @default(now()) @db.Timestamptz
-  updatedAt             DateTime        @updatedAt @db.Timestamptz
+  id                  String          @id @default(uuid()) @db.Uuid
+  userId              String          @db.Uuid
+  user                User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sourceUploadAssetId String          @db.Uuid
+  sourceUploadAsset   UploadAsset     @relation("ThumbnailSourceVideo", fields: [sourceUploadAssetId], references: [id], onDelete: Restrict)
+  provider            StorageProvider @default(GOOGLE_DRIVE)
+  bucket              String          @db.VarChar(255)
+  objectKey           String          @db.VarChar(512)
+  storageUri          String          @unique @db.Text
+  originalName        String          @db.VarChar(255)
+  mimeType            String          @db.VarChar(100)
+  sizeBytes           BigInt          @db.BigInt
+  checksum            String          @db.VarChar(255)
+  source              ThumbnailSource
+  timestampMs         Int?            @db.Integer
+  idempotencyKey      String          @db.VarChar(255)
+  requestFingerprint  String          @db.VarChar(64)
+  deletedAt           DateTime?       @db.Timestamptz
+  videoJobs           VideoJob[]
+  createdAt           DateTime        @default(now()) @db.Timestamptz
+  updatedAt           DateTime        @updatedAt @db.Timestamptz
 
   @@unique([provider, bucket, objectKey])
   @@unique([userId, idempotencyKey])
   @@index([userId, deletedAt])
   @@index([sourceUploadAssetId])
 }
+
 model UploadAttempt {
   id            String      @id @default(uuid()) @db.Uuid
   uploadAssetId String      @db.Uuid

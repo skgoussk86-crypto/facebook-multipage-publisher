@@ -50,6 +50,10 @@ async function runTests() {
   const testPageId = randomUUID();
   const testAccountId = randomUUID();
 
+  let testCount = 0;
+
+  try {
+
   // Create mock user
   await prisma.user.create({
     data: {
@@ -62,11 +66,28 @@ async function runTests() {
     }
   });
 
+  // Set AppConfig liveMode
+  const configId = randomUUID();
+  await prisma.appConfiguration.create({
+    data: {
+      id: configId,
+      userId: testUserId,
+      configurationName: 'Default Meta App',
+      liveMetaMode: true,
+      publicAppUrl: 'http://localhost:3000',
+      facebookAppId: 'app-6l',
+      encryptedAppSecret: 'secret_app_secret_abc',
+      isDefault: true,
+      isEnabled: true
+    }
+  });
+
   // Create facebook account & page
   await prisma.facebookAccount.create({
     data: {
       id: testAccountId,
       userId: testUserId,
+      appConfigurationId: configId,
       facebookUserId: 'fb-user-6l',
       name: 'Test Account 6L',
       encryptedAccessToken: 'dummy',
@@ -91,20 +112,7 @@ async function runTests() {
     }
   });
 
-  // Set AppConfig liveMode
-  await prisma.appConfiguration.upsert({
-    where: { id: 'default' },
-    update: { liveMetaMode: true },
-    create: {
-      id: 'default',
-      liveMetaMode: true,
-      publicAppUrl: 'http://localhost:3000',
-      facebookAppId: 'app-6l',
-      encryptedAppSecret: 'secret_app_secret_abc'
-    }
-  });
 
-  let testCount = 0;
 
   // Helper to create asset
   async function createTestAsset(sizeBytes: number) {
@@ -778,6 +786,16 @@ async function runTests() {
 
     testCount++;
     console.log('✓ Test 18: Security audit verified. Access tokens and configuration secrets never logged.');
+  }
+
+  } finally {
+    console.log('Cleaning up database fixtures...');
+    await prisma.videoJob.deleteMany({ where: { userId: testUserId } });
+    await prisma.uploadAsset.deleteMany({ where: { userId: testUserId } });
+    await prisma.facebookPage.deleteMany({ where: { userId: testUserId } });
+    await prisma.facebookAccount.deleteMany({ where: { userId: testUserId } });
+    await prisma.appConfiguration.deleteMany({ where: { userId: testUserId } });
+    await prisma.user.delete({ where: { id: testUserId } }).catch(() => {});
   }
 
   console.log(`\nAll ${testCount} focused Phase 6L test scenarios completed successfully.`);

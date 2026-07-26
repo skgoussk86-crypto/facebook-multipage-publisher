@@ -55,10 +55,26 @@ async function runTests() {
     }
   });
 
+  const configId = randomUUID();
+  await prisma.appConfiguration.create({
+    data: {
+      id: configId,
+      userId: testUserId,
+      configurationName: 'Default Meta App',
+      publicAppUrl: 'http://localhost:3000',
+      facebookAppId: 'dummy_app_id',
+      encryptedAppSecret: 'dummy_secret',
+      liveMetaMode: false,
+      isDefault: true,
+      isEnabled: true
+    }
+  });
+
   await prisma.facebookAccount.create({
     data: {
       id: testAccountId,
       userId: testUserId,
+      appConfigurationId: configId,
       facebookUserId: 'dummy_fb_user',
       name: 'Test account',
       encryptedAccessToken: 'dummy_token',
@@ -207,6 +223,7 @@ async function runTests() {
   await prisma.videoJob.deleteMany({ where: { userId: testUserId } });
   await prisma.facebookPage.deleteMany({ where: { userId: testUserId } });
   await prisma.facebookAccount.deleteMany({ where: { userId: testUserId } });
+  await prisma.appConfiguration.deleteMany({ where: { userId: testUserId } });
   await prisma.user.delete({ where: { id: testUserId } });
 
   console.log('All Phase 3 integration tests completed successfully! 🎉');

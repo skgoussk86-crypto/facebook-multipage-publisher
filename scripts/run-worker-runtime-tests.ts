@@ -5,6 +5,7 @@ loadEnvConfig(process.cwd());
 
 import { JobStatus, MockScenario, User, UserRole, UserStatus, UserApprovalStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import fs from 'fs';
 import { exec, spawn } from 'child_process';
 import { executeWorkerCycle, startWorkerDaemon, parseIntegerEnv, WorkerController } from '../src/lib/worker-runtime';
 import { prisma } from '../src/lib/prisma-client';
@@ -33,15 +34,89 @@ function assert(cond: boolean, msg: string) {
   }
 }
 
+const generatedWorkerIds: string[] = [];
+function generateWorkerId(): string {
+  const id = randomUUID();
+  generatedWorkerIds.push(id);
+  return id;
+}
+
 async function cleanDatabase() {
   console.log('Cleaning test database tables...');
-  await prisma.workerHeartbeat.deleteMany({});
-  await prisma.videoJob.deleteMany({});
-  await prisma.uploadAsset.deleteMany({});
-  await prisma.googleDriveConnection.deleteMany({});
-  await prisma.facebookPage.deleteMany({});
-  await prisma.facebookAccount.deleteMany({});
-  await prisma.user.deleteMany({});
+
+  // 1. Find all users whose email starts with the distinctive test prefix
+  const prefix = 'phase7-worker-runtime-';
+  const testUsers = await prisma.user.findMany({
+    where: {
+      email: {
+        startsWith: prefix
+      }
+    },
+    select: {
+      id: true
+    }
+  });
+  const testUserIds = testUsers.map((u) => u.id);
+
+  if (testUserIds.length > 0) {
+    // 2. Delete dependent test records in safe dependency order
+    await prisma.videoJob.deleteMany({
+      where: {
+        userId: { in: testUserIds }
+      }
+    });
+
+    await prisma.thumbnailAsset.deleteMany({
+      where: {
+        userId: { in: testUserIds }
+      }
+    });
+
+    await prisma.uploadAsset.deleteMany({
+      where: {
+        userId: { in: testUserIds }
+      }
+    });
+
+    await prisma.facebookPage.deleteMany({
+      where: {
+        userId: { in: testUserIds }
+      }
+    });
+
+    await prisma.facebookAccount.deleteMany({
+      where: {
+        userId: { in: testUserIds }
+      }
+    });
+
+    await prisma.appConfiguration.deleteMany({
+      where: {
+        userId: { in: testUserIds }
+      }
+    });
+
+    await prisma.googleDriveConnection.deleteMany({
+      where: {
+        userId: { in: testUserIds }
+      }
+    });
+
+    await prisma.user.deleteMany({
+      where: {
+        id: { in: testUserIds }
+      }
+    });
+  }
+
+  // 3. Delete WorkerHeartbeats that were generated during worker tests
+  if (generatedWorkerIds.length > 0) {
+    await prisma.workerHeartbeat.deleteMany({
+      where: {
+        workerId: { in: generatedWorkerIds }
+      }
+    });
+  }
 }
 
 async function createTestAsset(userId: string) {
@@ -224,7 +299,20 @@ const mockAuth = {
 
 async function runTests() {
   console.log('Running Expanded Worker Runtime and Observability Tests...');
-  await cleanDatabase();
+
+  // Assert no unscoped deletions in source
+  const sourceCode = fs.readFileSync(__filename, 'utf8');
+  const regex = new RegExp('deleteMany\\(\\s*\\{\\s*\\}\\s*\\)', 'g');
+  const lines = sourceCode.split('\n');
+  const badLines = lines.filter(line => regex.test(line) && !line.includes('new RegExp') && !line.includes('const regex') && !line.includes('badLines'));
+  assert(badLines.length === 0, 'Source code must not contain any unscoped deleteMany' + '(' + '{}' + ')');
+
+  let testUserId: string | undefined = undefined;
+  let configId: string | undefined = undefined;
+  let testBUserId: string | undefined = undefined;
+
+  try {
+    await cleanDatabase();
 
   // ==========================================
   // Test 1: Configuration intervals validation
@@ -277,14 +365,14 @@ async function runTests() {
   assert(cleanError.includes('[REDACTED]'), 'Must include REDACTED markers');
 
   // Setup database fixtures for job execution tests
-  const testUserId = randomUUID();
+  testUserId = randomUUID();
   const testPageId = randomUUID();
   const testAccountId = randomUUID();
 
   await prisma.user.create({
     data: {
       id: testUserId,
-      email: `worker-user-${testUserId.slice(0, 8)}@example.com`,
+      email: `phase7-worker-runtime-${testUserId.slice(0, 8)}@example.com`,
       passwordHash: 'dummy',
       role: 'USER',
       status: 'ACTIVE',
@@ -292,10 +380,26 @@ async function runTests() {
     }
   });
 
+  configId = randomUUID();
+  await prisma.appConfiguration.create({
+    data: {
+      id: configId,
+      userId: testUserId,
+      configurationName: 'Default Meta App',
+      liveMetaMode: false,
+      publicAppUrl: 'http://localhost:3000',
+      facebookAppId: '123',
+      encryptedAppSecret: 'dummy',
+      isDefault: true,
+      isEnabled: true
+    }
+  });
+
   await prisma.facebookAccount.create({
     data: {
       id: testAccountId,
       userId: testUserId,
+      appConfigurationId: configId,
       facebookUserId: 'fb-worker-123',
       name: 'Worker Test Account',
       encryptedAccessToken: 'dummy',
@@ -317,18 +421,6 @@ async function runTests() {
       pageCategory: 'Mock',
       pagePictureUrl: 'url',
       isSynced: true
-    }
-  });
-
-  await prisma.appConfiguration.upsert({
-    where: { id: 'default' },
-    update: { liveMetaMode: false },
-    create: {
-      id: 'default',
-      liveMetaMode: false,
-      publicAppUrl: 'http://localhost:3000',
-      facebookAppId: '123',
-      encryptedAppSecret: 'dummy'
     }
   });
 
@@ -368,7 +460,7 @@ async function runTests() {
     }
   });
 
-  const workerId = randomUUID();
+  const workerId = generateWorkerId();
   const cycleResult = await executeWorkerCycle(workerId);
   assert(cycleResult.processedCount === 1, 'Only the due job must be claimed');
 
@@ -398,7 +490,7 @@ async function runTests() {
 
   // Test 5.1: Repository explicit null update verification
   console.log('  Subtest 5.1: Repository update with explicit null / undefined...');
-  const repoTestWorkerId = randomUUID();
+  const repoTestWorkerId = generateWorkerId();
   await updateWorkerHeartbeat({
     workerId: repoTestWorkerId,
     startedAt: new Date(),
@@ -439,7 +531,7 @@ async function runTests() {
 
   // Test 5.2: Case A - Shutdown after a successful IDLE cycle
   console.log('  Subtest 5.2: Case A - Shutdown after a successful IDLE cycle...');
-  const workerAId = randomUUID();
+  const workerAId = generateWorkerId();
   const controllerA = startWorkerDaemon({
     workerId: workerAId,
     pollIntervalMs: 500,
@@ -466,7 +558,7 @@ async function runTests() {
 
   // Test 5.3: Case B - Shutdown while sleeping between polls (interrupt safety)
   console.log('  Subtest 5.3: Case B - Shutdown while sleeping between polls...');
-  const workerBId = randomUUID();
+  const workerBId = generateWorkerId();
   const controllerB = startWorkerDaemon({
     workerId: workerBId,
     pollIntervalMs: 10000, // Very long sleep
@@ -497,7 +589,7 @@ async function runTests() {
     return null;
   };
 
-  const workerCId = randomUUID();
+  const workerCId = generateWorkerId();
   const controllerC = startWorkerDaemon({
     workerId: workerCId,
     pollIntervalMs: 1000,
@@ -531,7 +623,7 @@ async function runTests() {
 
   // Test 5.5: Case D - Repeated shutdown calls (idempotence)
   console.log('  Subtest 5.5: Case D - Repeated shutdown calls...');
-  const workerCaseDId = randomUUID();
+  const workerCaseDId = generateWorkerId();
   const controllerCaseD = startWorkerDaemon({
     workerId: workerCaseDId,
     pollIntervalMs: 500,
@@ -563,7 +655,7 @@ async function runTests() {
 
   // Test 5.6: Case E - Shutdown after BACKING_OFF
   console.log('  Subtest 5.6: Case E - Shutdown after BACKING_OFF...');
-  const workerEId = randomUUID();
+  const workerEId = generateWorkerId();
 
   // Temporarily force failure inside findMany to trigger error/backing off
   const originalFindManyE = prisma.videoJob.findMany;
@@ -624,7 +716,7 @@ async function runTests() {
     // Safe response excludes raw tokens inside lastError
     await prisma.workerHeartbeat.create({
       data: {
-        workerId: randomUUID(),
+        workerId: generateWorkerId(),
         startedAt: new Date(),
         lastPingAt: new Date(),
         currentStatus: 'FAILED',
@@ -650,7 +742,7 @@ async function runTests() {
     throw new Error('Forced database connection failure containing bearer secret_token');
   };
 
-  const failedWorkerId = randomUUID();
+  const failedWorkerId = generateWorkerId();
   let exceptionCaught = false;
   try {
     await executeWorkerCycle(failedWorkerId);
@@ -711,14 +803,14 @@ async function runTests() {
   // C. Invalid intervals fail before runtime
   const resInvalidInterval = await runWorkerProcess({
     WORKER_ENABLED: 'true',
-    WORKER_ID: randomUUID(),
+    WORKER_ID: generateWorkerId(),
     WORKER_POLL_INTERVAL_MS: 'invalid-interval'
   });
   assert(resInvalidInterval.code === 1, 'Invalid poll interval must fail with exit code 1');
   assert(resInvalidInterval.stderr.includes('Startup configuration error'), 'Invalid interval prints validation error');
 
   // D. Valid configuration matches boundary (fails database connection if URL is missing or reaches database and starts)
-  const validWorkerId = randomUUID();
+  const validWorkerId = generateWorkerId();
   console.log('Awaiting quick boot check for valid daemon configuration (using spawn)...');
 
   const bootRes = await new Promise<{ startupConfirmed: boolean; childExited: boolean; childExitCode: number | null; stdout: string; stderr: string }>(async (resolve) => {
@@ -835,7 +927,7 @@ async function runTests() {
   // Test 11: Successful worker:once process test (Part 4A)
   // ==========================================
   console.log('Test 11: Successful worker:once process test (creates no work)...');
-  const workerOnceId1 = randomUUID();
+  const workerOnceId1 = generateWorkerId();
   const resOnce1 = await runWorkerOnceProcess({
     WORKER_ID: workerOnceId1
   });
@@ -854,8 +946,8 @@ async function runTests() {
   // Test 12: Successful worker:once with one mock eligible item (Part 4B)
   // ==========================================
   console.log('Test 12: Successful worker:once with one mock eligible item...');
-  const workerOnceId2 = randomUUID();
-  await prisma.videoJob.deleteMany({});
+  const workerOnceId2 = generateWorkerId();
+  await prisma.videoJob.deleteMany({ where: { userId: testUserId } });
 
   const dueJobIdOnce = randomUUID();
   await prisma.videoJob.create({
@@ -886,7 +978,7 @@ async function runTests() {
   // Test 13: Failed worker:once (Part 4C)
   // ==========================================
   console.log('Test 13: Failed worker:once...');
-  const workerOnceId3 = randomUUID();
+  const workerOnceId3 = generateWorkerId();
   const resOnce3 = await runWorkerOnceFailedProcess({
     WORKER_ID: workerOnceId3
   });
@@ -905,7 +997,7 @@ async function runTests() {
   // Test 14: Success overrides failure on same worker ID (Part 2 regression test)
   // ==========================================
   console.log('Test 14: Success overrides failure on same worker ID regression test...');
-  const regressionWorkerId = randomUUID();
+  const regressionWorkerId = generateWorkerId();
 
   // 1. Run failed execution
   let regressionErrorCaught = false;
@@ -949,7 +1041,7 @@ async function runTests() {
   // ==========================================
   console.log('Test A: No validating assets (one-shot)...');
   await cleanDatabase();
-  const testAWorkerId = randomUUID();
+  const testAWorkerId = generateWorkerId();
   const resA = await runWorkerOnceProcess({
     WORKER_ID: testAWorkerId
   });
@@ -967,11 +1059,11 @@ async function runTests() {
   // ==========================================
   console.log('Test B: One mock validating asset (context binding)...');
   await cleanDatabase();
-  const testBUserId = randomUUID();
+  testBUserId = randomUUID();
   await prisma.user.create({
     data: {
       id: testBUserId,
-      email: `testb-user-${testBUserId.slice(0, 8)}@example.com`,
+      email: `phase7-worker-runtime-b-${testBUserId.slice(0, 8)}@example.com`,
       passwordHash: 'dummy',
       role: 'USER',
       status: 'ACTIVE',
@@ -1022,7 +1114,7 @@ async function runTests() {
   };
   VideoValidationService.setProbe(mockProbeB);
 
-  const testBWorkerId = randomUUID();
+  const testBWorkerId = generateWorkerId();
   const resB = await executeWorkerCycle(testBWorkerId, new Date(), {
     updateFinalHeartbeat: true,
     validateOneAsset: () => VideoValidationService.validateOneAsset() // arrow wrapper!
@@ -1036,7 +1128,7 @@ async function runTests() {
   // ==========================================
   console.log('Test C: Injected validation failure (one-shot exit code 1)...');
   await cleanDatabase();
-  const testCWorkerId = randomUUID();
+  const testCWorkerId = generateWorkerId();
   // We run the script that we created
   const resC = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
     let childEnv: Record<string, string | undefined>;
@@ -1074,7 +1166,7 @@ async function runTests() {
   // ==========================================
   console.log('Test D: Daemon injected validation failure (BACKING_OFF)...');
   await cleanDatabase();
-  const testDWorkerId = randomUUID();
+  const testDWorkerId = generateWorkerId();
 
   // Temporary mock of claimOneAsset and validateAsset on VideoValidationService
   const originalClaim = VideoValidationService.claimOneAsset;
@@ -1189,6 +1281,31 @@ async function runTests() {
   assert(!errE2.includes('bearer_99999'), 'Credentials must not leak');
 
   console.log('All Expanded Background Worker Runtime and Observability Tests Passed successfully! 🎉');
+  } finally {
+    console.log('Teardown database fixtures...');
+    // final cleanup: delete only the exact testUserId, testBUserId, and exact configId created by the current run
+    if (testUserId) {
+      await prisma.videoJob.deleteMany({ where: { userId: testUserId } });
+      await prisma.uploadAsset.deleteMany({ where: { userId: testUserId } });
+      await prisma.facebookPage.deleteMany({ where: { userId: testUserId } });
+      await prisma.facebookAccount.deleteMany({ where: { userId: testUserId } });
+      await prisma.appConfiguration.deleteMany({ where: { userId: testUserId } });
+      await prisma.googleDriveConnection.deleteMany({ where: { userId: testUserId } });
+      await prisma.user.deleteMany({ where: { id: testUserId } });
+    }
+    if (testBUserId) {
+      await prisma.videoJob.deleteMany({ where: { userId: testBUserId } });
+      await prisma.uploadAsset.deleteMany({ where: { userId: testBUserId } });
+      await prisma.facebookPage.deleteMany({ where: { userId: testBUserId } });
+      await prisma.facebookAccount.deleteMany({ where: { userId: testBUserId } });
+      await prisma.appConfiguration.deleteMany({ where: { userId: testBUserId } });
+      await prisma.googleDriveConnection.deleteMany({ where: { userId: testBUserId } });
+      await prisma.user.deleteMany({ where: { id: testBUserId } });
+    }
+    if (generatedWorkerIds.length > 0) {
+      await prisma.workerHeartbeat.deleteMany({ where: { workerId: { in: generatedWorkerIds } } });
+    }
+  }
 }
 
 runTests()

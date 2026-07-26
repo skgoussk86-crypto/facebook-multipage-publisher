@@ -5,12 +5,12 @@ import {
 import {
   createAuditLog,
   getFacebookConnections,
-  isLiveMetaMode,
   logWarn,
   MockFacebookAccount,
   MockFacebookPage,
   saveFacebookAccount,
-  updatePagesStatus
+  updatePagesStatus,
+  resolveAccountSyncContext
 } from '@/lib/db';
 import { verifyAdminSession } from '@/lib/auth';
 import {
@@ -297,8 +297,20 @@ export async function POST(
       );
     }
 
-    const liveMetaMode =
-      await isLiveMetaMode(user.id);
+    const syncContext = await resolveAccountSyncContext(user.id, targetAccount.id);
+
+    if ('error' in syncContext) {
+      return NextResponse.json(
+        {
+          error: syncContext.error
+        },
+        {
+          status: syncContext.status
+        }
+      );
+    }
+
+    const { databaseAccount, liveMetaMode } = syncContext;
 
     if (!liveMetaMode) {
       await new Promise<void>((resolve) => {
@@ -310,26 +322,6 @@ export async function POST(
         connectionState:
           targetAccount.connectionState
       });
-    }
-
-    const databaseAccount =
-      await prisma.facebookAccount.findFirst({
-        where: {
-          id: targetAccount.id,
-          userId: user.id
-        }
-      });
-
-    if (!databaseAccount) {
-      return NextResponse.json(
-        {
-          error:
-            'The Facebook account does not exist or is not owned by your user account.'
-        },
-        {
-          status: 404
-        }
-      );
     }
 
     const longUserToken = decryptToken(
@@ -359,7 +351,8 @@ export async function POST(
 
         await updatePagesStatus(
           user.id,
-          expiredPages
+          expiredPages,
+          databaseAccount.id
         );
       }
 
@@ -447,7 +440,8 @@ export async function POST(
       accountToSave,
       updatedPages.length > 0
         ? 'Connected'
-        : 'Permission Missing'
+        : 'Permission Missing',
+      databaseAccount.appConfigurationId
     );
 
     const synchronizedPageIds =

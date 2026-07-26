@@ -36,7 +36,8 @@
     "test:thumbnail-generation-service": "node --conditions=react-server --import tsx scripts/run-thumbnail-generation-service-tests.ts",
     "test:thumbnail-generation-api": "node --conditions=react-server --import tsx scripts/run-thumbnail-generation-api-tests.ts",
     "test:thumbnail-job-linkage": "node --conditions=react-server --import tsx scripts/run-thumbnail-job-linkage-tests.ts",
-    "test:facebook-thumbnail-publishing": "node --conditions=react-server --import tsx scripts/run-facebook-thumbnail-publishing-tests.ts"
+    "test:facebook-thumbnail-publishing": "node --conditions=react-server --import tsx scripts/run-facebook-thumbnail-publishing-tests.ts",
+    "test:phase7a": "tsx scripts/run-phase7a-tests.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1086.0",

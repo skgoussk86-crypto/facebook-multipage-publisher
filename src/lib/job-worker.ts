@@ -3,7 +3,10 @@ import {
   JobStatus,
   FailureClassification,
   MockScenario,
-  VideoJob
+  VideoJob,
+  FacebookPage,
+  FacebookAccount,
+  AppConfiguration
 } from '@prisma/client';
 import {
   claimScheduledJob,
@@ -217,6 +220,57 @@ export async function runQueueWorker(
   return logs;
 }
 
+interface PublishingContext {
+  page: FacebookPage;
+  account: FacebookAccount;
+  configuration: AppConfiguration;
+  isLive: boolean;
+}
+
+export async function resolvePublishingContext(job: VideoJob): Promise<PublishingContext> {
+  const page = await prisma.facebookPage.findUnique({
+    where: { id: job.pageId }
+  });
+  if (!page) {
+    throw new Error('FACEBOOK_PAGE_NOT_FOUND');
+  }
+
+  const account = await prisma.facebookAccount.findUnique({
+    where: { id: page.accountId }
+  });
+  if (!account) {
+    throw new Error('FACEBOOK_ACCOUNT_NOT_FOUND');
+  }
+
+  const configuration = await prisma.appConfiguration.findUnique({
+    where: { id: account.appConfigurationId }
+  });
+  if (!configuration) {
+    throw new Error('APP_CONFIGURATION_NOT_FOUND');
+  }
+
+  // Verification checks:
+  if (page.userId !== job.userId) {
+    throw new Error('OWNERSHIP_MISMATCH: Page ownership does not match job ownership.');
+  }
+  if (account.userId !== job.userId) {
+    throw new Error('OWNERSHIP_MISMATCH: Account ownership does not match job ownership.');
+  }
+  if (configuration.userId !== job.userId) {
+    throw new Error('OWNERSHIP_MISMATCH: Configuration ownership does not match job ownership.');
+  }
+  if (!configuration.isEnabled) {
+    throw new Error('CONFIGURATION_DISABLED: The resolved AppConfiguration is disabled.');
+  }
+
+  return {
+    page,
+    account,
+    configuration,
+    isLive: configuration.liveMetaMode === true
+  };
+}
+
 /**
  * Handles processing steps for a claimed job in PREPARING status.
  */
@@ -233,14 +287,10 @@ async function processClaimedJob(
     if (job.providerProcessingId) {
       log(`Reconciliation active for Job ${job.id}. Checking providerProcessingId: ${job.providerProcessingId}`);
 
-      const appConfig = await prisma.appConfiguration.findUnique({ where: { id: 'default' } });
-      if (appConfig?.liveMetaMode === true) {
-        const page = await prisma.facebookPage.findUnique({
-          where: { id: job.pageId }
-        });
-        if (!page) throw new Error('FACEBOOK_PAGE_NOT_FOUND');
+      const context = await resolvePublishingContext(job);
+      if (context.isLive) {
         const { decryptToken } = await import('./crypto');
-        const pageToken = decryptToken(page.encryptedPageToken);
+        const pageToken = decryptToken(context.page.encryptedPageToken);
 
         const { FacebookPublishingService } = await import('./facebook/facebook-publishing-service');
         const checkResult = await FacebookPublishingService.checkVideoStatus(job.providerProcessingId, pageToken);
@@ -288,19 +338,12 @@ async function processClaimedJob(
       }
     }
 
-    const appConfig = await prisma.appConfiguration.findUnique({
-      where: { id: 'default' }
-    });
-    const isLive = appConfig?.liveMetaMode === true;
+    const context = await resolvePublishingContext(job);
+    const isLive = context.isLive;
 
     if (isLive) {
       log(`[PREPARING] Live Meta Mode active. Resolving page credentials...`);
-      const page = await prisma.facebookPage.findUnique({
-        where: { id: job.pageId }
-      });
-      if (!page) {
-        throw new Error('FACEBOOK_PAGE_NOT_FOUND');
-      }
+      const page = context.page;
 
       let pageToken: string;
       try {
@@ -1003,19 +1046,12 @@ async function resumeMetaProcessingCheck(
   try {
     log(`[META_PROCESSING] Resuming check for Meta Video ID: ${job.providerProcessingId}`);
 
-    const appConfig = await prisma.appConfiguration.findUnique({
-      where: { id: 'default' }
-    });
-    const isLive = appConfig?.liveMetaMode === true;
+    const context = await resolvePublishingContext(job);
+    const isLive = context.isLive;
 
     if (isLive) {
       log(`[META_PROCESSING] Live Meta Mode active. Checking transcoding status...`);
-      const page = await prisma.facebookPage.findUnique({
-        where: { id: job.pageId }
-      });
-      if (!page) {
-        throw new Error('FACEBOOK_PAGE_NOT_FOUND');
-      }
+      const page = context.page;
 
       let pageToken: string;
       try {
