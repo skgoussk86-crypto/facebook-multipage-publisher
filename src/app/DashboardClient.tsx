@@ -660,10 +660,25 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   // Drag and Drop/Picker File Selection handler
   const handleBulkFilesSelect = (filesList: FileList) => {
     setFileUploadError(null);
+
+    if (!bulkPageId || !pages.some((page) => page.id === bulkPageId)) {
+      setFileUploadError(
+        "Select a connected Facebook Page before adding files. Every newly selected file will inherit that page.",
+      );
+      return;
+    }
+
     const filesArray = Array.from(filesList);
+    if (filesArray.length === 0) {
+      return;
+    }
 
     if (queueControllerRef.current) {
-      queueControllerRef.current.addFiles(filesArray, pages[0]?.id || "", maxFileSizeMB);
+      queueControllerRef.current.addFiles(
+        filesArray,
+        bulkPageId,
+        maxFileSizeMB,
+      );
     }
   };
 
@@ -672,6 +687,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     if (e.target.files) {
       handleBulkFilesSelect(e.target.files);
     }
+
+    // Permit selecting the same file again after removing its previous card.
+    e.target.value = "";
   };
 
   // Drag over handler
@@ -1460,6 +1478,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   };
 
   const handleApplyPageToAll = () => {
+    if (!bulkPageId || !pages.some((page) => page.id === bulkPageId)) {
+      alert("Select a connected Facebook Page first.");
+      return;
+    }
+
     setTempJobsQueue((prev) => prev.map((j) => ({ ...j, pageId: bulkPageId })));
     tempJobsQueue.forEach((job) => {
       queueControllerRef.current?.updateJobFields(job.id, { pageId: bulkPageId });
@@ -2895,23 +2918,63 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         Select multiple **MP4** or **MOV** files from your machine. Max configured file size limits are verified on selection.
                       </p>
 
+                      <div className="mb-5 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                          <div className="flex-1">
+                            <label
+                              htmlFor="publisher-default-page"
+                              className="mb-2 block text-[10px] font-mono font-bold uppercase tracking-wider text-indigo-800"
+                            >
+                              Default Facebook Page for New Uploads
+                            </label>
+                            <select
+                              id="publisher-default-page"
+                              value={bulkPageId || ""}
+                              onChange={(e) => {
+                                setBulkPageId(e.target.value);
+                                setFileUploadError(null);
+                              }}
+                              disabled={pages.length === 0}
+                              className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2.5 text-xs font-semibold text-zinc-900 focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400"
+                            >
+                              <option value="">Select a page before uploading...</option>
+                              {pages.map((page) => (
+                                <option key={page.id} value={page.id}>
+                                  {page.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="max-w-sm text-[10px] leading-4 text-indigo-800">
+                            Every file selected next inherits this page automatically. Existing cards remain unchanged unless you use Apply Page to All.
+                          </div>
+                        </div>
+                      </div>
+
                       <div
                         onDragOver={handleDragOver}
                         onDrop={handleDrop}
-                        className="border-2 border-dashed border-zinc-300 hover:border-zinc-400 rounded-xl py-10 px-8 text-center bg-zinc-50 cursor-pointer relative group transition"
+                        className={`border-2 border-dashed rounded-xl py-10 px-8 text-center relative group transition ${
+                          bulkPageId && pages.some((page) => page.id === bulkPageId)
+                            ? "border-zinc-300 hover:border-zinc-400 bg-zinc-50 cursor-pointer"
+                            : "border-amber-300 bg-amber-50 cursor-not-allowed"
+                        }`}
                       >
                         <input
                           type="file"
                           multiple
                           accept="video/mp4,video/quicktime"
                           onChange={triggerPickerChange}
-                          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                          disabled={!bulkPageId || !pages.some((page) => page.id === bulkPageId)}
+                          className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed w-full h-full"
                         />
                         <svg className="h-10 w-10 text-zinc-400 group-hover:text-zinc-500 mx-auto mb-3 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                         </svg>
                         <span className="block text-sm text-zinc-750 font-semibold mb-1 group-hover:text-zinc-900 transition">
-                          Drag & Drop MP4/MOV Videos or Click to Browse
+                          {bulkPageId && pages.some((page) => page.id === bulkPageId)
+                            ? "Drag & Drop MP4/MOV Videos or Click to Browse"
+                            : "Select a Facebook Page Above to Enable Uploads"}
                         </span>
                         <span className="block text-xs text-zinc-500 font-mono">
                           Local upload engine validation. Limits applied dynamically.
@@ -3051,9 +3114,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           </select>
                           <button
                             onClick={handleApplyPageToAll}
-                            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 rounded transition text-[10px]"
+                            disabled={!bulkPageId}
+                            className="bg-indigo-600 hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-300 text-white font-bold px-3 rounded transition text-[10px]"
                           >
-                            Apply
+                            Apply All
                           </button>
                         </div>
                       </div>

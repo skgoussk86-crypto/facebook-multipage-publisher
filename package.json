@@ -40,7 +40,8 @@
     "test:phase7a": "tsx scripts/run-phase7a-tests.ts",
     "test:phase7b": "tsx scripts/run-phase7b-tests.ts",
     "test:ai-analysis-streaming": "node --conditions=react-server --import tsx scripts/run-ai-analysis-streaming-tests.ts",
-    "test:ai-analysis-batch-streaming": "node --conditions=react-server --import tsx scripts/run-ai-analysis-batch-streaming-tests.ts"
+    "test:ai-analysis-batch-streaming": "node --conditions=react-server --import tsx scripts/run-ai-analysis-batch-streaming-tests.ts",
+    "test:phase7-default-page": "node --conditions=react-server --import tsx scripts/run-phase7-default-page-tests.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1086.0",
