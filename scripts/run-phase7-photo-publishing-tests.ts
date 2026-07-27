@@ -577,7 +577,7 @@ function testDashboardAndWorkerIntegration(): void {
   const aiService = readFileSync('src/lib/ai/ai-service.ts', 'utf8');
 
   assert.match(dashboard, /const isPhoto = job\.contentType === "PHOTO"/);
-  assert.match(dashboard, /AI generated English title, caption, and five hashtags/);
+  assert.match(dashboard, /AI generated title, caption, and five hashtags/);
   assert.match(dashboard, /Facebook Photo/);
   assert.match(dashboard, /isPhoto \? "PHOTO" : isReel \? "REEL" : "VIDEO"/);
   assert.match(worker, /FacebookPublishingService\.publishPhoto/);

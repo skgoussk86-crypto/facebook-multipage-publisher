@@ -1,7 +1,29 @@
-export function isEnglishOnly(str: string): boolean {
-  // Permits basic English characters, numbers, punctuation, whitespace, and emojis
-  const englishRegex = /^[a-zA-Z0-9\s.,!?'"()#@_\-+*/\\%&$:;<>=\[\]{}~`|\u00a9\u00ae\u2122\u200d\u2600-\u27bf\u1f300-\u1f9ff\u1f600-\u1f64f]*$/;
-  return englishRegex.test(str);
+const UNSAFE_CONTROL_CHARACTER_PATTERN =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u;
+
+const LINE_BREAK_PATTERN =
+  /[\r\n\u2028\u2029]/u;
+
+export function countUnicodeCharacters(value: string): number {
+  return Array.from(value).length;
+}
+
+export function containsUnsafeControlCharacters(
+  value: string,
+): boolean {
+  return UNSAFE_CONTROL_CHARACTER_PATTERN.test(value);
+}
+
+export function isSingleLineMetadataText(
+  value: string,
+): boolean {
+  return !LINE_BREAK_PATTERN.test(value);
+}
+
+export function isMetadataTextSafe(
+  value: string,
+): boolean {
+  return !containsUnsafeControlCharacters(value);
 }
 
 export function validateJobInput(data: {
@@ -13,23 +35,47 @@ export function validateJobInput(data: {
 }): string[] {
   const errors: string[] = [];
 
-  if (!data.englishTitle || data.englishTitle.trim() === '') {
-    errors.push('English Title is required.');
+  if (
+    typeof data.englishTitle !== 'string' ||
+    data.englishTitle.trim() === ''
+  ) {
+    errors.push('Title is required.');
   } else {
-    if (data.englishTitle.length > 255) {
-      errors.push('English Title must not exceed 255 characters.');
+    if (countUnicodeCharacters(data.englishTitle) > 255) {
+      errors.push('Title must not exceed 255 Unicode characters.');
     }
-    if (!isEnglishOnly(data.englishTitle)) {
-      errors.push('English Title must contain only English characters, standard punctuation, and emojis.');
+
+    if (!isSingleLineMetadataText(data.englishTitle)) {
+      errors.push('Title must be a single line.');
+    }
+
+    if (!isMetadataTextSafe(data.englishTitle)) {
+      errors.push('Title contains unsupported control characters.');
     }
   }
 
-  if (data.englishCaption && !isEnglishOnly(data.englishCaption)) {
-    errors.push('English Caption must contain only English characters, standard punctuation, and emojis.');
+  if (
+    data.englishCaption !== undefined &&
+    typeof data.englishCaption !== 'string'
+  ) {
+    errors.push('Caption must be text.');
+  } else if (
+    data.englishCaption &&
+    !isMetadataTextSafe(data.englishCaption)
+  ) {
+    errors.push('Caption contains unsupported control characters.');
   }
 
-  if (data.hashtags && !isEnglishOnly(data.hashtags)) {
-    errors.push('Hashtags must contain only English characters, standard punctuation, and emojis.');
+  if (
+    data.hashtags !== undefined &&
+    typeof data.hashtags !== 'string'
+  ) {
+    errors.push('Hashtags must be text.');
+  } else if (
+    data.hashtags &&
+    !isMetadataTextSafe(data.hashtags)
+  ) {
+    errors.push('Hashtags contain unsupported control characters.');
   }
 
   const date = new Date(data.scheduledTimeUTC);

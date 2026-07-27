@@ -10,7 +10,12 @@ import {
   getSupportedMediaDescriptor,
   type UploadContentType,
 } from "../lib/uploads/media-file-types";
-import { normalizeDashboardJobs } from "../lib/validation";
+import {
+  containsUnsafeControlCharacters,
+  countUnicodeCharacters,
+  isSingleLineMetadataText,
+  normalizeDashboardJobs,
+} from "../lib/validation";
 import {
   buildGeminiAnalysisUrl,
   getGeminiAnalysisErrorMessage,
@@ -588,11 +593,6 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     setSecurityLogs((prev) => [newLog, ...prev]);
   };
 
-  const isEnglishOnly = (text: string): boolean => {
-    const englishRegex = /^[a-zA-Z0-9\s.,!@#$&*()_\-+=\[\]{}|\\\/;:'"?%]*$/;
-    return englishRegex.test(text);
-  };
-
   // Validate single job
   const getJobValidationErrors = (job: VideoJob, currentQueue: VideoJob[]): string[] => {
     const errors: string[] = [];
@@ -600,15 +600,20 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     // Title checks
     if (!job.englishTitle.trim()) {
       errors.push("Title is required.");
-    } else if (job.englishTitle.length > 255) {
-      errors.push("Title exceeds Meta limit of 255 characters.");
-    } else if (!isEnglishOnly(job.englishTitle)) {
-      errors.push("Title must be in English characters only.");
+    } else if (countUnicodeCharacters(job.englishTitle) > 255) {
+      errors.push("Title exceeds the 255 Unicode-character limit.");
+    } else if (!isSingleLineMetadataText(job.englishTitle)) {
+      errors.push("Title must be a single line.");
+    } else if (containsUnsafeControlCharacters(job.englishTitle)) {
+      errors.push("Title contains unsupported control characters.");
     }
 
     // Caption checks
-    if (job.englishCaption && !isEnglishOnly(job.englishCaption)) {
-      errors.push("Caption must contain English text only.");
+    if (
+      job.englishCaption &&
+      containsUnsafeControlCharacters(job.englishCaption)
+    ) {
+      errors.push("Caption contains unsupported control characters.");
     }
 
     // File type limits
@@ -1174,7 +1179,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       if (isPhoto) {
         addSecurityLog(
           "INFO",
-          `AI generated English title, caption, and five hashtags for ${job.fileName}.`,
+          `AI generated title, caption, and five hashtags for ${job.fileName}.`,
           job.id,
         );
         return true;
@@ -1208,7 +1213,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
       addSecurityLog(
         "INFO",
-        `AI generated English content and selected thumbnail timestamp ${finalResult.thumbnailTimestampSeconds.toFixed(2)}s for ${job.fileName}.`,
+        `AI generated content and selected thumbnail timestamp ${finalResult.thumbnailTimestampSeconds.toFixed(2)}s for ${job.fileName}.`,
         job.id,
       );
 
@@ -1450,7 +1455,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             if (isPhoto) {
               addSecurityLog(
                 "INFO",
-                `AI generated English title, caption, and five hashtags for ${targetJob.fileName}.`,
+                `AI generated title, caption, and five hashtags for ${targetJob.fileName}.`,
                 targetJob.id,
               );
             } else if (applyOllamaThumbnail) {
@@ -1465,7 +1470,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   });
                   addSecurityLog(
                     "INFO",
-                    `AI generated English content and selected thumbnail timestamp ${finalResult.thumbnailTimestampSeconds.toFixed(2)}s for ${targetJob.fileName}.`,
+                    `AI generated content and selected thumbnail timestamp ${finalResult.thumbnailTimestampSeconds.toFixed(2)}s for ${targetJob.fileName}.`,
                     targetJob.id
                   );
                 } catch (persistError) {
@@ -2118,13 +2123,20 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         // Validation - Empty title
         if (!title) {
           errorsThisRow.push("Title cannot be empty.");
-        } else if (!isEnglishOnly(title)) {
-          errorsThisRow.push("Title must be in English characters.");
+        } else if (countUnicodeCharacters(title) > 255) {
+          errorsThisRow.push("Title exceeds the 255 Unicode-character limit.");
+        } else if (!isSingleLineMetadataText(title)) {
+          errorsThisRow.push("Title must be a single line.");
+        } else if (containsUnsafeControlCharacters(title)) {
+          errorsThisRow.push("Title contains unsupported control characters.");
         }
 
         // Validation - Caption
-        if (caption && !isEnglishOnly(caption)) {
-          errorsThisRow.push("Caption must be in English characters.");
+        if (
+          caption &&
+          containsUnsafeControlCharacters(caption)
+        ) {
+          errorsThisRow.push("Caption contains unsupported control characters.");
         }
 
         // Validation - Timezone
@@ -3326,7 +3338,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                       {/* Bulk Caption Editor */}
                       <div>
-                        <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-2">Configure English Caption</label>
+                        <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-2">Configure Caption</label>
                         <div className="flex gap-2">
                           <input
                             type="text"
@@ -3681,7 +3693,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                         <div>Duration: <span className="text-zinc-800">{job.durationSeconds ? `${job.durationSeconds}s` : "Scanning..."}</span></div>
                                       )}
                                       <div>Media Type: <span className="text-indigo-600 font-semibold">{job.contentType === "PHOTO" ? "Image" : "Video"}</span></div>
-                                      <div>Language: <span className="text-indigo-600 font-semibold">English (Fixed)</span></div>
+                                      <div>Language: <span className="text-indigo-600 font-semibold">Any language + emoji</span></div>
                                     </div>
                                   </>
                                 );
@@ -3882,7 +3894,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                       AI Content + Optional Ollama Thumbnail
                                     </div>
                                     <p className="mt-1 text-[10px] leading-relaxed text-indigo-700/80">
-                                      Generates the English title, caption, and exactly five hashtags. It changes the thumbnail only when Ollama Best is selected; Manual Frame and Facebook Auto remain protected.
+                                      Generates a title, caption, and exactly five hashtags in English by default. You may edit the title and caption in any language and use emojis or Unicode symbols. Thumbnail behavior is unchanged.
                                     </p>
                                   </div>
                                   <button
@@ -3961,27 +3973,27 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   )}
                               </div>
 
-                              {/* English Title input */}
+                              {/* Title input */}
                               <div>
-                                <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-1">English Title</label>
+                                <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-1">Title</label>
                                 <input
                                   type="text"
                                   value={job.englishTitle}
                                   onChange={(e) => handleUpdateTempJobField(job.id, "englishTitle", e.target.value)}
                                   className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition placeholder-zinc-400"
-                                  placeholder="Video title in English"
+                                  placeholder="Title in any language — emojis supported"
                                 />
                               </div>
 
-                              {/* English Caption text area */}
+                              {/* Caption text area */}
                               <div>
-                                <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-1">English Caption</label>
+                                <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-1">Caption</label>
                                 <textarea
                                   value={job.englishCaption}
                                   rows={2}
                                   onChange={(e) => handleUpdateTempJobField(job.id, "englishCaption", e.target.value)}
                                   className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition placeholder-zinc-400"
-                                  placeholder="Explain your video..."
+                                  placeholder="Caption in any language — emojis supported"
                                 />
                               </div>
 
