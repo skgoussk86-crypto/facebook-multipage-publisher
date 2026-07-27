@@ -7,6 +7,8 @@ import {
 } from "./ai-types";
 import { OllamaClient } from "./ollama/ollama-client";
 import { OllamaFrameExtractor } from "./ollama/ollama-frame-extractor";
+import { OllamaImageReader } from "./ollama/ollama-image-reader";
+import { getMediaKindFromMimeType } from "../uploads/media-file-types";
 
 export class Semaphore {
   private activePermits = 0;
@@ -139,6 +141,19 @@ export interface AiServiceDependencies {
     base64Frames: string[];
     abortSignal?: AbortSignal;
   }) => Promise<GeneratedVideoContent>;
+  readImage?: (params: {
+    userId: string;
+    asset: AiServiceAsset;
+    abortSignal?: AbortSignal;
+  }) => Promise<{
+    mimeType: "image/jpeg" | "image/png" | "image/webp";
+    base64Image: string;
+  }>;
+  generateOllamaImageMetadata?: (params: {
+    mimeType: "image/jpeg" | "image/png" | "image/webp";
+    base64Image: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<GeneratedVideoContent>;
   rejectIfBusy?: boolean;
 }
 
@@ -158,20 +173,28 @@ export class AiService {
   }
 
   /**
-   * Central orchestrator for video asset analysis
+   * Central orchestrator for validated video or image asset analysis
    */
   public static async analyzeValidatedAsset(
     userId: string,
     assetId: string,
     dependencies: AiServiceDependencies = {}
   ): Promise<GeneratedVideoContent> {
-    const { abortSignal, findAsset, extractFrames, generateOllamaMetadata, rejectIfBusy } = dependencies;
+    const {
+      abortSignal,
+      findAsset,
+      extractFrames,
+      generateOllamaMetadata,
+      readImage,
+      generateOllamaImageMetadata,
+      rejectIfBusy,
+    } = dependencies;
 
     // 1. Concurrency control: acquire permit from global semaphore
     if (rejectIfBusy && aiSemaphore.getActiveCount() >= aiSemaphore.getMaxPermits()) {
       throw new AiVideoAnalysisError(
         "AI_BUSY",
-        "The local AI service is currently busy processing another video. Please try again."
+        "The local AI service is currently busy processing another media file. Please try again."
       );
     }
 
@@ -180,7 +203,7 @@ export class AiService {
     } catch {
       throw new AiVideoAnalysisError(
         "AI_BUSY",
-        "The local AI service is currently busy processing another video. Please try again."
+        "The local AI service is currently busy processing another media file. Please try again."
       );
     }
 
@@ -216,21 +239,21 @@ export class AiService {
       if (!asset || asset.userId !== userId) {
         throw new AiVideoAnalysisError(
           "UPLOAD_ASSET_NOT_FOUND",
-          "The requested video upload asset was not found or is inaccessible."
+          "The requested media upload asset was not found or is inaccessible."
         );
       }
 
       if (asset.status !== "VALIDATED") {
         throw new AiVideoAnalysisError(
           "UPLOAD_ASSET_NOT_VALIDATED",
-          "The video file must complete upload validation before running analysis."
+          "The media file must complete upload validation before running analysis."
         );
       }
 
       if (asset.objectDeletedAt) {
         throw new AiVideoAnalysisError(
           "UPLOAD_ASSET_DELETED",
-          "The video file is no longer available."
+          "The media file is no longer available."
         );
       }
 
@@ -241,23 +264,77 @@ export class AiService {
         );
       }
 
-      if (!asset.durationMs || asset.durationMs <= 0) {
+      const mimeType = (
+        asset.detectedMimeType ||
+        asset.declaredMimeType
+      ).trim().toLowerCase();
+      const mediaKind = getMediaKindFromMimeType(mimeType);
+      const isImage = mediaKind === "image";
+      const isVideo = mediaKind === "video";
+
+      if (!mediaKind) {
+        throw new AiVideoAnalysisError(
+          mimeType.startsWith("image/")
+            ? "INVALID_IMAGE_METADATA"
+            : "INVALID_VIDEO_METADATA",
+          "The upload asset contains an unsupported media MIME type."
+        );
+      }
+
+      const durationMs = asset.durationMs;
+      if (isVideo && (!durationMs || durationMs <= 0)) {
         throw new AiVideoAnalysisError(
           "INVALID_VIDEO_METADATA",
           "The validated video does not contain a valid duration."
         );
       }
 
-      const mimeType = asset.detectedMimeType || asset.declaredMimeType;
-      if (!mimeType.startsWith("video/")) {
-        throw new AiVideoAnalysisError(
-          "INVALID_VIDEO_METADATA",
-          "The upload asset contains an unsupported non-video MIME type."
-        );
-      }
-
       // 4. Delegate to the selected provider
       if (config.provider === "OLLAMA") {
+        if (isImage) {
+          const readerFn =
+            readImage ??
+            OllamaImageReader.readImage.bind(
+              OllamaImageReader,
+            );
+
+          const image = await readerFn({
+            userId,
+            asset: {
+              ...asset,
+              expectedSize: BigInt(asset.expectedSize),
+            },
+            abortSignal,
+          });
+
+          if (!image.base64Image) {
+            throw new AiVideoAnalysisError(
+              "AI_ANALYSIS_FAILED",
+              "Could not read the validated image for analysis.",
+            );
+          }
+
+          if (generateOllamaImageMetadata) {
+            return await generateOllamaImageMetadata({
+              mimeType: image.mimeType,
+              base64Image: image.base64Image,
+              abortSignal,
+            });
+          }
+
+          const ollamaClient = new OllamaClient({
+            baseUrl: config.ollamaBaseUrl,
+            model: config.ollamaModel,
+            timeoutMs: config.ollamaRequestTimeoutMs,
+          });
+
+          return await ollamaClient.generateImageMetadata({
+            mimeType: image.mimeType,
+            base64Image: image.base64Image,
+            abortSignal,
+          });
+        }
+
         // Step 4A: Frame extraction on the local disk
         const extractorFn =
           extractFrames ??
@@ -285,7 +362,7 @@ export class AiService {
         let analysis: GeneratedVideoContent;
         if (generateOllamaMetadata) {
           analysis = await generateOllamaMetadata({
-            durationSeconds: asset.durationMs / 1000,
+            durationSeconds: durationMs! / 1000,
             timestamps,
             base64Frames,
             abortSignal,
@@ -297,7 +374,7 @@ export class AiService {
             timeoutMs: config.ollamaRequestTimeoutMs,
           });
           analysis = await ollamaClient.generateVideoMetadata({
-            durationSeconds: asset.durationMs / 1000,
+            durationSeconds: durationMs! / 1000,
             timestamps,
             base64Frames,
             abortSignal,
@@ -306,7 +383,14 @@ export class AiService {
 
         return analysis;
       } else if (config.provider === "GEMINI") {
-        // Keep Gemini implementation available but isolated
+        if (isImage) {
+          throw new AiVideoAnalysisError(
+            "AI_NOT_CONFIGURED",
+            "Image analysis is currently available through the configured local Ollama provider.",
+          );
+        }
+
+        // Keep Gemini video implementation available but isolated
         const { GeminiVideoAnalysisService } = await import(
           "../gemini/gemini-video-analysis-service"
         );

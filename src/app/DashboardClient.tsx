@@ -1017,7 +1017,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   ): Promise<boolean> => {
     if (!job.uploadValidated || !job.assetId) {
       alert(
-        "Wait until this video finishes uploading and validation.",
+        "Wait until this media file finishes uploading and validation.",
       );
       return false;
     }
@@ -1084,7 +1084,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         },
         onError(err) {
           const errorObj = err as { message?: string };
-          throw new Error(errorObj?.message || "AI could not analyze this video.");
+          throw new Error(errorObj?.message || "AI could not analyze this media file.");
         },
       });
 
@@ -1102,24 +1102,29 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         thumbnailReason: string;
       };
 
+      const isPhoto = job.contentType === "PHOTO";
       const updates: Partial<VideoJob> = {
         englishTitle: finalResult.title,
         englishCaption: finalResult.caption,
         hashtags: finalResult.hashtags.join(" "),
-        thumbnailMode: "captured",
-        thumbnailAssetId: undefined,
-        thumbnailGenerationStatus: "idle",
-        thumbnailGenerationError: undefined,
         geminiAnalysisStatus: "complete",
         geminiAnalysisError: undefined,
-        geminiThumbnailTimestampSeconds:
-          finalResult.thumbnailTimestampSeconds,
-        geminiThumbnailReason:
-          finalResult.thumbnailReason,
         geminiAnalyzedAt: new Date().toISOString(),
+        ...(isPhoto
+          ? {}
+          : {
+              thumbnailMode: "captured" as const,
+              thumbnailAssetId: undefined,
+              thumbnailGenerationStatus: "idle" as const,
+              thumbnailGenerationError: undefined,
+              geminiThumbnailTimestampSeconds:
+                finalResult.thumbnailTimestampSeconds,
+              geminiThumbnailReason:
+                finalResult.thumbnailReason,
+            }),
       };
 
-      if (job.localVideoUrl) {
+      if (!isPhoto && job.localVideoUrl) {
         try {
           const capturedThumbnailUrl =
             await captureFrameFromVideoUrl(
@@ -1141,6 +1146,15 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       }
 
       updateTempJobFields(job.id, updates);
+
+      if (isPhoto) {
+        addSecurityLog(
+          "INFO",
+          `AI generated English title, caption, and five hashtags for ${job.fileName}.`,
+          job.id,
+        );
+        return true;
+      }
 
       const thumbnailStored =
         await handleGeneratePersistedThumbnail({
@@ -1167,7 +1181,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       const message =
         error instanceof Error
           ? error.message
-          : "AI could not analyze this video.";
+          : "AI could not analyze this media file.";
 
       updateTempJobFields(job.id, {
         geminiAnalysisStatus: "error",
@@ -1207,12 +1221,12 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     });
 
     if (eligibleJobs.length === 0) {
-      alert("No validated videos are ready for AI analysis.");
+      alert("No validated media files are ready for AI analysis.");
       return;
     }
 
     if (regenerate) {
-      if (!confirm("Are you sure you want to regenerate AI content for all validated videos? This will overwrite existing AI content.")) {
+      if (!confirm("Are you sure you want to regenerate AI content for all validated media files? This will overwrite existing AI content.")) {
         return;
       }
     }
@@ -1309,23 +1323,28 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           const targetJob = eligibleJobs.find((j) => j.assetId === assetId);
           if (targetJob) {
             const finalResult = analysis;
+            const isPhoto = targetJob.contentType === "PHOTO";
             const updates: Partial<VideoJob> = {
               englishTitle: finalResult.title,
               englishCaption: finalResult.caption,
               hashtags: finalResult.hashtags.join(" "),
-              thumbnailMode: "captured",
-              thumbnailAssetId: undefined,
-              thumbnailGenerationStatus: "idle",
-              thumbnailGenerationError: undefined,
               geminiAnalysisStatus: "complete",
               geminiAnalysisError: undefined,
-              geminiThumbnailTimestampSeconds: finalResult.thumbnailTimestampSeconds,
-              geminiThumbnailReason: finalResult.thumbnailReason || "AI recommended thumbnail frame.",
               geminiAnalyzedAt: new Date().toISOString(),
+              ...(isPhoto
+                ? {}
+                : {
+                    thumbnailMode: "captured" as const,
+                    thumbnailAssetId: undefined,
+                    thumbnailGenerationStatus: "idle" as const,
+                    thumbnailGenerationError: undefined,
+                    geminiThumbnailTimestampSeconds: finalResult.thumbnailTimestampSeconds,
+                    geminiThumbnailReason: finalResult.thumbnailReason || "AI recommended thumbnail frame.",
+                  }),
             };
 
             const localVideoUrl = targetJob.localVideoUrl;
-            if (localVideoUrl) {
+            if (!isPhoto && localVideoUrl) {
               void (async () => {
                 try {
                   const capturedThumbnailUrl = await captureFrameFromVideoUrl(
@@ -1347,24 +1366,32 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
             updateTempJobFields(targetJob.id, updates);
 
-            void (async () => {
-              try {
-                await handleGeneratePersistedThumbnail({
-                  jobId: targetJob.id,
-                  assetId: targetJob.assetId!,
-                  fileName: targetJob.fileName,
-                  timestampSeconds: finalResult.thumbnailTimestampSeconds,
-                  source: "GEMINI_FRAME",
-                });
-                addSecurityLog(
-                  "INFO",
-                  `AI generated English content and selected thumbnail timestamp ${finalResult.thumbnailTimestampSeconds.toFixed(2)}s for ${targetJob.fileName}.`,
-                  targetJob.id
-                );
-              } catch (persistError) {
-                console.error("Failed to generate permanent thumbnail:", persistError);
-              }
-            })();
+            if (isPhoto) {
+              addSecurityLog(
+                "INFO",
+                `AI generated English title, caption, and five hashtags for ${targetJob.fileName}.`,
+                targetJob.id,
+              );
+            } else {
+              void (async () => {
+                try {
+                  await handleGeneratePersistedThumbnail({
+                    jobId: targetJob.id,
+                    assetId: targetJob.assetId!,
+                    fileName: targetJob.fileName,
+                    timestampSeconds: finalResult.thumbnailTimestampSeconds,
+                    source: "GEMINI_FRAME",
+                  });
+                  addSecurityLog(
+                    "INFO",
+                    `AI generated English content and selected thumbnail timestamp ${finalResult.thumbnailTimestampSeconds.toFixed(2)}s for ${targetJob.fileName}.`,
+                    targetJob.id
+                  );
+                } catch (persistError) {
+                  console.error("Failed to generate permanent thumbnail:", persistError);
+                }
+              })();
+            }
           }
 
           setBulkStatus((prev) => {
@@ -1420,7 +1447,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           });
           addSecurityLog(
             "INFO",
-            `AI bulk analysis completed for ${data.succeeded} of ${data.total} validated videos.`,
+            `AI bulk analysis completed for ${data.succeeded} of ${data.total} validated media files.`,
           );
         },
         onError(err: unknown) {
@@ -1613,7 +1640,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   const handleOpenFrameCaptureModal = (job: VideoJob) => {
     if (!job.uploadValidated || !job.assetId) {
       alert(
-        "Wait until this video finishes uploading and validation.",
+        "Wait until this media file finishes uploading and validation.",
       );
       return;
     }
@@ -1798,7 +1825,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
     if (!job?.assetId || !job.uploadValidated) {
       alert(
-        "Wait until this video finishes uploading and validation.",
+        "Wait until this media file finishes uploading and validation.",
       );
       return;
     }
@@ -1875,8 +1902,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     const headers = "filename,title,caption,hashtags,page_id,content_type,publish_time,timezone\n";
     const example1 = `ai_trends_2026.mp4,Top 5 AI Tools of 2026 You Must Use,Explore modern AI integrations,#AITools #Tech,1029384756,Video,2026-07-13 10:00,Asia/Kolkata\n`;
     const example2 = `gaming_highlights_ep12.mp4,Insane 1v4 Outplay,Clutch matches highlight clip,#Gaming #Clutch,5647382910,Reel,2026-07-13 14:00,Asia/Kolkata\n`;
+    const example3 = `product_launch.jpg,First Look at Our New Launch,See the details in this new photo,#ProductLaunch #NewArrival,1029384756,Photo,2026-07-13 16:00,Asia/Kolkata\n`;
 
-    const blob = new Blob([headers + example1 + example2], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob([headers + example1 + example2 + example3], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
@@ -1987,7 +2015,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         const jobQueueIndex = updatedQueue.findIndex(j => j.fileName === filename);
 
         if (jobQueueIndex === -1) {
-          errorsAccumulator.push(`Row ${r + 1} (${filename}): Filename not found in current publisher upload queue. Select the video file first.`);
+          errorsAccumulator.push(`Row ${r + 1} (${filename}): Filename not found in current publisher upload queue. Select the media file first.`);
           continue;
         }
 
@@ -2021,8 +2049,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         // Validation - Content Type
         const isReel = contentTypeRaw === "REEL" || contentTypeRaw === "FACEBOOK REEL";
         const isVideo = contentTypeRaw === "VIDEO" || contentTypeRaw === "FACEBOOK VIDEO";
-        if (!isReel && !isVideo) {
-          errorsThisRow.push(`Invalid content type '${contentTypeRaw}'. Must be 'Video' or 'Reel'.`);
+        const isPhoto = contentTypeRaw === "PHOTO" || contentTypeRaw === "FACEBOOK PHOTO";
+        if (!isReel && !isVideo && !isPhoto) {
+          errorsThisRow.push(`Invalid content type '${contentTypeRaw}'. Must be 'Video', 'Reel', or 'Photo'.`);
+        }
+
+        const queuedMediaKind = getSupportedMediaDescriptor(filename)?.kind;
+        if (isPhoto && queuedMediaKind !== "image") {
+          errorsThisRow.push("Photo rows require a JPG, JPEG, PNG, or WebP file.");
+        } else if ((isVideo || isReel) && queuedMediaKind !== "video") {
+          errorsThisRow.push("Video and Reel rows require an MP4 or MOV file.");
         }
 
         // Validation - Date parsing
@@ -2050,7 +2086,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             englishCaption: caption || "",
             hashtags: hashtags || "",
             pageId: pageId,
-            contentType: isReel ? "REEL" : "VIDEO",
+            contentType: isPhoto ? "PHOTO" : isReel ? "REEL" : "VIDEO",
             scheduledTimeKolkata: dateKolkata,
             scheduledTimeUTC: convertKolkataToUTC(dateKolkata),
           };
@@ -2072,7 +2108,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   // ==========================================
   const handleSaveTrigger = () => {
     if (tempJobsQueue.length === 0) {
-      alert("No video items in the queue to save.");
+      alert("No media items in the queue to save.");
       return;
     }
 
@@ -2108,6 +2144,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           pageId: job.pageId,
           uploadAssetId: job.assetId,
           thumbnailAssetId:
+            job.contentType !== "PHOTO" &&
             job.thumbnailMode === "captured"
               ? job.thumbnailAssetId
               : undefined,
@@ -2127,7 +2164,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       });
 
       if (res.ok) {
-        addSecurityLog("INFO", `Scheduled ${jobsToSave.length} new bulk videos into database state queue.`);
+        addSecurityLog("INFO", `Scheduled ${jobsToSave.length} new bulk media jobs into the database state queue.`);
         setTempJobsQueue([]);
         queueControllerRef.current?.clearAll();
         setIsConfirmationOpen(false);
@@ -2783,7 +2820,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                           <span className="text-xs text-zinc-500">{job.fileSize}</span>
                                           <span className="text-[10px] text-zinc-300">•</span>
                                           <span className="text-[10px] font-semibold text-indigo-600 font-mono tracking-wider">
-                                            {job.contentType === "REEL" ? "Facebook Reel" : "Facebook Video"}
+                                            {job.contentType === "PHOTO" ? "Facebook Photo" : job.contentType === "REEL" ? "Facebook Reel" : "Facebook Video"}
                                           </span>
                                         </div>
                                       </td>
@@ -2897,7 +2934,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   <div className="bg-white border border-zinc-200 rounded-xl p-6 flex flex-col flex-1 h-full">
                     <h3 className="text-base font-bold text-zinc-900 mb-2">Worker Simulation Log</h3>
                     <p className="text-xs text-zinc-500 mb-4 leading-relaxed">
-                      Watch background steps execute, including token decryption and mock video publishing chunk updates.
+                      Watch background steps execute, including token decryption and mock media publishing updates.
                     </p>
 
                     <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-4 font-mono text-[11px] leading-relaxed text-zinc-700 flex-1 min-h-[300px] overflow-y-auto max-h-[450px]">
@@ -3385,7 +3422,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   <div className="flex items-center justify-between mb-6 border-b border-zinc-200 pb-4">
                     <div>
                       <h3 className="text-base font-bold text-zinc-900 mb-0.5">Publisher Upload Cards</h3>
-                      <p className="text-xs text-zinc-500">Configure parameters for local videos awaiting scheduling confirmation.</p>
+                      <p className="text-xs text-zinc-500">Configure parameters for uploaded media awaiting scheduling confirmation.</p>
                     </div>
                     {tempJobsQueue.length > 0 && (
                       <div className="flex flex-col gap-4">
@@ -4024,7 +4061,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             </svg>
                             <div>
                               <span className="font-bold block">Token Expiring Soon</span>
-                              <span>The Facebook API access token will expire in less than 7 days. Reconnection is recommended to prevent scheduled video publishing failures. Publishing will be blocked if expired.</span>
+                              <span>The Facebook API access token will expire in less than 7 days. Reconnection is recommended to prevent scheduled media publishing failures. Publishing will be blocked if expired.</span>
                             </div>
                           </div>
                         )}
@@ -4244,7 +4281,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                     return (
                       <tr key={job.id} className="hover:bg-zinc-50/50">
                         <td className="p-3.5 text-zinc-900 font-sans font-medium truncate max-w-[150px]">{job.fileName}</td>
-                        <td className="p-3.5 font-bold text-indigo-600 text-[10px]">{job.contentType === "REEL" ? "Facebook Reel" : "Facebook Video"}</td>
+                        <td className="p-3.5 font-bold text-indigo-600 text-[10px]">{job.contentType === "PHOTO" ? "Facebook Photo" : job.contentType === "REEL" ? "Facebook Reel" : "Facebook Video"}</td>
                         <td className="p-3.5 text-zinc-700 font-sans font-medium">{targetPage?.name || "Unassigned"}</td>
                         <td className="p-3.5 text-zinc-700">{formatDateTime(job.scheduledTimeKolkata)}</td>
                         <td className="p-3.5 text-zinc-500 break-all">{formatDateTime(job.scheduledTimeUTC)}Z</td>

@@ -282,4 +282,133 @@ export class OllamaClient {
       `Ollama returned invalid metadata or schema violations after retry: ${lastErrorMsg}`
     );
   }
+
+  public async generateImageMetadata(params: {
+    mimeType: "image/jpeg" | "image/png" | "image/webp";
+    base64Image: string;
+    abortSignal?: AbortSignal;
+  }): Promise<GeneratedVideoContent> {
+    const { mimeType, base64Image, abortSignal } = params;
+
+    if (!base64Image.trim()) {
+      throw new AiVideoAnalysisError(
+        "INVALID_IMAGE_METADATA",
+        "The image payload is empty.",
+      );
+    }
+
+    const systemInstructions =
+      "You are an AI assistant specialized in accurate Facebook image post metadata. " +
+      "You must output ONLY one valid raw JSON object matching the requested schema. " +
+      "Never invent names, locations, causes, quotes, outcomes, or facts that are not clearly visible. " +
+      "Never wrap the JSON in markdown and never include explanatory prose.";
+
+    const promptText =
+      `Analyze this ${mimeType} image carefully and generate accurate English metadata for a Facebook photo post. ` +
+      `Return exactly one JSON object with these keys:\n` +
+      `{\n` +
+      `  "title": "engaging single-line title, 3-255 characters",\n` +
+      `  "caption": "accurate engaging caption, 10-2200 characters",\n` +
+      `  "hashtags": ["exactly", "five", "unique", "relevant", "hashtags"],\n` +
+      `  "thumbnailTimestampSeconds": 0\n` +
+      `}\n` +
+      `Every hashtag must begin with #, use only letters, numbers, or underscores, and all five must be unique. ` +
+      `thumbnailTimestampSeconds must be exactly 0 because this is a still image.`;
+
+    const messages: OllamaMessage[] = [
+      { role: "system", content: systemInstructions },
+      {
+        role: "user",
+        content: promptText,
+        images: [base64Image],
+      },
+    ];
+
+    let attempt = 1;
+    let lastErrorMsg = "";
+
+    while (attempt <= 2) {
+      try {
+        const responseJsonStr = await this.executeFetch(
+          "/api/chat",
+          {
+            model: this.model,
+            messages,
+            stream: false,
+            options: {
+              temperature: 0.0,
+              num_ctx: 8192,
+            },
+            think: false,
+          },
+          abortSignal,
+        );
+
+        const parsedResponse = JSON.parse(
+          responseJsonStr,
+        ) as OllamaChatResponse;
+
+        const modelOutputText =
+          parsedResponse.message?.content;
+
+        if (!modelOutputText?.trim()) {
+          throw new Error(
+            "Ollama returned an empty image-analysis message.",
+          );
+        }
+
+        const rawJsonBlock =
+          this.extractJsonBlock(modelOutputText);
+        const parsedContent = JSON.parse(rawJsonBlock);
+        const validated =
+          generatedVideoContentSchema.parse(parsedContent);
+
+        if (validated.thumbnailTimestampSeconds !== 0) {
+          throw new Error(
+            "Image metadata must use thumbnailTimestampSeconds equal to 0.",
+          );
+        }
+
+        return validated;
+      } catch (error: unknown) {
+        if (
+          error instanceof AiVideoAnalysisError &&
+          (
+            error.code === "AI_TIMEOUT" ||
+            error.code === "AI_PROVIDER_UNAVAILABLE" ||
+            error.code === "AI_NOT_CONFIGURED"
+          )
+        ) {
+          throw error;
+        }
+
+        lastErrorMsg =
+          error instanceof Error
+            ? error.message
+            : String(error);
+
+        if (attempt === 1) {
+          attempt += 1;
+          messages.push({
+            role: "assistant",
+            content: `Invalid response: ${lastErrorMsg}`,
+          });
+          messages.push({
+            role: "user",
+            content:
+              "Regenerate only the raw JSON object. Use exactly five unique hashtags and set thumbnailTimestampSeconds to 0.",
+          });
+          continue;
+        }
+
+        break;
+      }
+    }
+
+    throw new AiVideoAnalysisError(
+      "AI_INVALID_RESPONSE",
+      `Ollama returned invalid image metadata after retry: ${lastErrorMsg}`,
+    );
+  }
+
 }

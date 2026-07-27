@@ -721,12 +721,13 @@ async function runTests() {
       // Restore original mock DB content
       fs.writeFileSync(MOCK_DB_PATH, originalMockDb, 'utf8');
 
-      // Clean up mockUser1 Prisma rows
-      await prisma.appConfiguration.deleteMany({ where: { userId: mockUser1 } });
+      // Clean up mockUser1 Prisma rows in dependency order.
       await prisma.videoJob.deleteMany({ where: { userId: mockUser1 } });
+      await prisma.thumbnailAsset.deleteMany({ where: { userId: mockUser1 } });
       await prisma.uploadAsset.deleteMany({ where: { userId: mockUser1 } });
       await prisma.facebookPage.deleteMany({ where: { userId: mockUser1 } });
       await prisma.facebookAccount.deleteMany({ where: { userId: mockUser1 } });
+      await prisma.appConfiguration.deleteMany({ where: { userId: mockUser1 } });
       await prisma.user.deleteMany({ where: { id: mockUser1 } });
     }
 

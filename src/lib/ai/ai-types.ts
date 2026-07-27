@@ -64,8 +64,11 @@ export type AiVideoAnalysisErrorCode =
   | "UPLOAD_ASSET_DELETED"
   | "UNSUPPORTED_STORAGE_PROVIDER"
   | "INVALID_VIDEO_METADATA"
+  | "INVALID_IMAGE_METADATA"
   | "VIDEO_TOO_LARGE"
-  | "VIDEO_DOWNLOAD_FAILED";
+  | "VIDEO_DOWNLOAD_FAILED"
+  | "IMAGE_TOO_LARGE"
+  | "IMAGE_DOWNLOAD_FAILED";
 
 export class AiVideoAnalysisError extends Error {
   constructor(

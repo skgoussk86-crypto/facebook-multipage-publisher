@@ -1125,7 +1125,12 @@ export async function getVideoJobs(userId: string) {
         userId
       },
       include: {
-        facebookPage: true
+        facebookPage: true,
+        uploadAsset: {
+          select: {
+            originalName: true,
+          },
+        },
       },
       orderBy: {
         createdAt: 'desc'

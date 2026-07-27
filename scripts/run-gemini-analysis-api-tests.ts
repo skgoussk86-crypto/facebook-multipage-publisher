@@ -251,7 +251,7 @@ async function testUnknownError(): Promise<void> {
     );
     assert.equal(
       body.message,
-      "An unexpected error occurred while analyzing the video.",
+      "An unexpected error occurred while analyzing the media file.",
     );
     assert.equal(
       JSON.stringify(body).includes(

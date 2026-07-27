@@ -6,7 +6,8 @@ import {
   VideoJob,
   FacebookPage,
   FacebookAccount,
-  AppConfiguration
+  AppConfiguration,
+  UploadAsset
 } from '@prisma/client';
 import {
   claimScheduledJob,
@@ -16,6 +17,7 @@ import {
 } from './job-state-machine';
 import { randomUUID } from 'crypto';
 import { Readable } from 'stream';
+import { getMediaKindFromMimeType } from './uploads/media-file-types';
 
 // Generates a unique UUID token for the worker execution run
 export function generateWorkerToken(): string {
@@ -227,6 +229,41 @@ interface PublishingContext {
   isLive: boolean;
 }
 
+async function openAssetMediaStream(
+  userId: string,
+  asset: UploadAsset,
+): Promise<Readable> {
+  if (asset.provider === 'GOOGLE_DRIVE') {
+    const { GoogleDriveMediaReader } = await import(
+      './google-drive/google-drive-media-reader'
+    );
+
+    return await GoogleDriveMediaReader.getDownloadStream(
+      userId,
+      asset,
+    );
+  }
+
+  if (asset.provider === 'R2' || asset.provider === 'GCS') {
+    const { getStorageAdapter } = await import('./storage');
+    const adapter = getStorageAdapter();
+
+    return await adapter.createReadStream(
+      asset.bucket,
+      asset.objectKey,
+    );
+  }
+
+  throw new Error(`UNSUPPORTED_PROVIDER: ${asset.provider}`);
+}
+
+function getAssetMimeType(asset: UploadAsset): string {
+  return (
+    asset.detectedMimeType ||
+    asset.declaredMimeType
+  ).trim().toLowerCase();
+}
+
 export async function resolvePublishingContext(job: VideoJob): Promise<PublishingContext> {
   const page = await prisma.facebookPage.findUnique({
     where: { id: job.pageId }
@@ -286,6 +323,28 @@ async function processClaimedJob(
     // 1. Reconciliation Check (duplicate-post prevention)
     if (job.providerProcessingId) {
       log(`Reconciliation active for Job ${job.id}. Checking providerProcessingId: ${job.providerProcessingId}`);
+
+      if (job.contentType?.toUpperCase() === 'PHOTO') {
+        await prisma.$transaction(async (tx) => {
+          await transitionJobState(
+            tx,
+            job.id,
+            workerUuid,
+            JobStatus.PUBLISHED,
+            job.userId!,
+            {
+              completedAt: new Date(),
+              metaPostId:
+                job.metaPostId ||
+                job.providerProcessingId,
+              errorLog:
+                'Reconciled: Photo publishing returned a Meta object ID before the worker lease ended.',
+            },
+          );
+        });
+        log(`Photo Job ${job.id} reconciled successfully as PUBLISHED.`);
+        return;
+      }
 
       const context = await resolvePublishingContext(job);
       if (context.isLive) {
@@ -384,8 +443,132 @@ async function processClaimedJob(
         throw new Error('INVALID_ASSET_SIZE');
       }
 
-      const isReel =
-        job.contentType?.toUpperCase() === 'REEL';
+      const normalizedContentType =
+        job.contentType?.toUpperCase() || 'VIDEO';
+      const isPhoto = normalizedContentType === 'PHOTO';
+      const isReel = normalizedContentType === 'REEL';
+      const assetMimeType = getAssetMimeType(asset);
+
+      const assetMediaKind =
+        getMediaKindFromMimeType(assetMimeType);
+
+      if (isPhoto && assetMediaKind !== 'image') {
+        throw new Error(
+          'PHOTO_ASSET_MIME_MISMATCH: PHOTO jobs require a validated JPEG, PNG, or WebP image asset.',
+        );
+      }
+
+      if (!isPhoto && assetMediaKind !== 'video') {
+        throw new Error(
+          'VIDEO_ASSET_MIME_MISMATCH: VIDEO and REEL jobs require a validated MP4 or MOV video asset.',
+        );
+      }
+
+      const { FacebookPublishingService } =
+        await import(
+          './facebook/facebook-publishing-service'
+        );
+
+      if (isPhoto) {
+        log(
+          `[PREPARING] Image metadata validation successful. Initializing Meta Page photo publishing...`,
+        );
+
+        const photoOperationReference =
+          job.providerReference ||
+          `photo-upload-${randomUUID()}`;
+
+        if (job.status !== JobStatus.UPLOADING_TO_META) {
+          await prisma.$transaction(async (tx) => {
+            await transitionJobState(
+              tx,
+              job.id,
+              workerUuid,
+              JobStatus.UPLOADING_TO_META,
+              job.userId!,
+              {
+                providerReference:
+                  photoOperationReference,
+              },
+            );
+          });
+        }
+
+        let photoStream: Readable | null = null;
+
+        try {
+          photoStream = await openAssetMediaStream(
+            job.userId!,
+            asset,
+          );
+
+          const result =
+            await FacebookPublishingService.publishPhoto({
+              pageId: page.facebookPageId,
+              pageToken,
+              title: job.englishTitle,
+              caption: job.englishCaption,
+              hashtags: job.hashtags,
+              fileName: asset.originalName,
+              mimeType:
+                assetMimeType as
+                  | 'image/jpeg'
+                  | 'image/png'
+                  | 'image/webp',
+              fileSize,
+              stream: photoStream,
+            });
+
+          const metaPostId =
+            result.postId || result.photoId;
+
+          // Persist the Meta object IDs before the terminal transition. If the
+          // worker stops after Meta accepts the photo, lease recovery can
+          // reconcile this job without uploading the same photo again.
+          await prisma.$transaction(async (tx) => {
+            const persisted = await tx.videoJob.updateMany({
+              where: {
+                id: job.id,
+                lockToken: workerUuid,
+                status: JobStatus.UPLOADING_TO_META,
+              },
+              data: {
+                providerProcessingId: result.photoId,
+                metaPostId,
+              },
+            });
+
+            if (persisted.count !== 1) {
+              throw new Error(
+                `PHOTO_RESULT_PERSISTENCE_CONFLICT: Meta accepted Photo ID ${result.photoId}, but the result could not be attached to the claimed job.`,
+              );
+            }
+          });
+
+          await prisma.$transaction(async (tx) => {
+            await transitionJobState(
+              tx,
+              job.id,
+              workerUuid,
+              JobStatus.PUBLISHED,
+              job.userId!,
+              {
+                completedAt: new Date(),
+                providerProcessingId:
+                  result.photoId,
+                metaPostId,
+              },
+            );
+          });
+
+          log(
+            `[PUBLISHED] Photo published successfully. Meta Photo ID: ${result.photoId}; Post ID: ${metaPostId}.`,
+          );
+          return;
+        } finally {
+          photoStream?.destroy();
+        }
+      }
 
       log(
         `[PREPARING] Video metadata validation successful. Initializing Meta ${isReel ? 'Reel' : 'video'} upload session...`,
@@ -395,11 +578,6 @@ async function processClaimedJob(
       let videoId = isReel ? job.providerProcessingId : null;
       let startOffset = 0;
       let endOffset = 0;
-
-      const { FacebookPublishingService } =
-        await import(
-          './facebook/facebook-publishing-service'
-        );
 
       if (!uploadReference || !videoId) {
         try {
@@ -521,100 +699,10 @@ async function processClaimedJob(
         `[UPLOADING_TO_META] Retrieving download stream from ${asset.provider}...`,
       );
 
-      let mediaStream: Readable;
-
-      if (asset.provider === 'GOOGLE_DRIVE') {
-        const { GoogleDriveMediaReader } =
-          await import(
-            './google-drive/google-drive-media-reader'
-          );
-
-        try {
-          mediaStream =
-            await GoogleDriveMediaReader.getDownloadStream(
-              job.userId,
-              asset,
-            );
-        } catch (err: unknown) {
-          const error = err as Error;
-
-          if (
-            error.message ===
-            'GOOGLE_DRIVE_CONNECTION_REVOKED'
-          ) {
-            await prisma.$transaction(
-              async (tx) => {
-                await transitionJobState(
-                  tx,
-                  job.id,
-                  workerUuid,
-                  JobStatus.FAILED_PERMANENT,
-                  job.userId!,
-                  {
-                    failedAt: new Date(),
-                    lastErrorCode:
-                      'GOOGLE_DRIVE_CONNECTION_REVOKED',
-                    lastErrorMessage:
-                      'Google Drive refresh token is missing or has been revoked.',
-                    failureClassification:
-                      FailureClassification.REVOKED_TOKEN,
-                  },
-                );
-              },
-            );
-
-            return;
-          }
-
-          if (
-            error.message ===
-            'GOOGLE_DRIVE_FILE_NOT_FOUND'
-          ) {
-            await prisma.$transaction(
-              async (tx) => {
-                await transitionJobState(
-                  tx,
-                  job.id,
-                  workerUuid,
-                  JobStatus.FAILED_PERMANENT,
-                  job.userId!,
-                  {
-                    failedAt: new Date(),
-                    lastErrorCode:
-                      'GOOGLE_DRIVE_FILE_NOT_FOUND',
-                    lastErrorMessage:
-                      'The linked Google Drive file was not found (404) or was trashed.',
-                    failureClassification:
-                      FailureClassification.INVALID_MEDIA,
-                  },
-                );
-              },
-            );
-
-            return;
-          }
-
-          throw error;
-        }
-      } else if (
-        asset.provider === 'R2' ||
-        asset.provider === 'GCS'
-      ) {
-        const { getStorageAdapter } =
-          await import('./storage');
-
-        const adapter = getStorageAdapter();
-
-        mediaStream =
-          await adapter.createReadStream(
-            asset.bucket,
-            asset.objectKey,
-          );
-      } else {
-        throw new Error(
-          `UNSUPPORTED_PROVIDER: ${asset.provider}`,
-        );
-      }
+      const mediaStream = await openAssetMediaStream(
+        job.userId!,
+        asset,
+      );
 
       if (isReel) {
         try {
@@ -866,7 +954,99 @@ async function processClaimedJob(
       }
     } else {
       // Mock Publishing scenario flow
-      log(`[PREPARING] Running video formatting and size validations...`);
+      const isPhoto =
+        job.contentType?.toUpperCase() === 'PHOTO';
+
+      log(
+        `[PREPARING] Running ${isPhoto ? 'photo' : 'video'} formatting and size validations...`,
+      );
+
+      if (isPhoto) {
+        if (scenario === MockScenario.REVOKED_FACEBOOK_TOKEN) {
+          await prisma.$transaction(async (tx) => {
+            const page = await tx.facebookPage.findUnique({ where: { id: job.pageId } });
+            if (page) {
+              await tx.facebookPage.updateMany({
+                where: { accountId: page.accountId },
+                data: { isSynced: false },
+              });
+            }
+
+            await transitionJobState(
+              tx,
+              job.id,
+              workerUuid,
+              JobStatus.FACEBOOK_RECONNECT_REQUIRED,
+              job.userId!,
+              {
+                failedAt: new Date(),
+                lastErrorCode: 'REVOKED_TOKEN',
+                lastErrorMessage: 'Meta Page token was revoked.',
+                failureClassification: FailureClassification.REVOKED_TOKEN,
+              },
+            );
+          });
+          return;
+        }
+
+        if (scenario === MockScenario.MISSING_FACEBOOK_PERMISSION) {
+          await prisma.$transaction(async (tx) => {
+            await transitionJobState(
+              tx,
+              job.id,
+              workerUuid,
+              JobStatus.FAILED_PERMANENT,
+              job.userId!,
+              {
+                failedAt: new Date(),
+                lastErrorCode: 'MISSING_PERMISSION',
+                lastErrorMessage: 'Meta Graph API Error: permission pages_manage_posts is missing.',
+                failureClassification: FailureClassification.MISSING_PERMISSION,
+              },
+            );
+          });
+          return;
+        }
+
+        await prisma.$transaction(async (tx) => {
+          await transitionJobState(
+            tx,
+            job.id,
+            workerUuid,
+            JobStatus.UPLOADING_TO_META,
+            job.userId!,
+            {
+              providerReference: `mock-photo-${randomUUID().slice(0, 8)}`,
+            },
+          );
+        });
+
+        if (scenario === MockScenario.TEMPORARY_NETWORK_FAILURE) {
+          throw new Error('Connection lost during photo upload.');
+        }
+
+        const mockPhotoId = Math.floor(
+          100000000000 + Math.random() * 900000000000,
+        ).toString();
+
+        await prisma.$transaction(async (tx) => {
+          await transitionJobState(
+            tx,
+            job.id,
+            workerUuid,
+            JobStatus.PUBLISHED,
+            job.userId!,
+            {
+              completedAt: new Date(),
+              providerProcessingId: mockPhotoId,
+              metaPostId: mockPhotoId,
+            },
+          );
+        });
+
+        log(`[PUBLISHED] Mock photo published successfully under Meta ID ${mockPhotoId}.`);
+        return;
+      }
 
       if (scenario === MockScenario.INVALID_MEDIA_FORMAT) {
         await prisma.$transaction(async (tx) => {
@@ -964,24 +1144,72 @@ async function processClaimedJob(
     } else if (err.message?.includes('THUMBNAIL_PUBLISHING_') || err.message?.includes('META_THUMBNAIL_')) {
       classification = FailureClassification.INVALID_MEDIA;
       errorCode = 'THUMBNAIL_PUBLISHING_FAILED';
+    } else if (
+      err.message?.includes('META_PHOTO_INVALID_INPUT') ||
+      err.message?.includes('META_PHOTO_SIZE_MISMATCH') ||
+      err.message?.includes('PHOTO_ASSET_MIME_MISMATCH') ||
+      err.message?.includes('VIDEO_ASSET_MIME_MISMATCH')
+    ) {
+      classification = FailureClassification.INVALID_MEDIA;
+      errorCode = 'INVALID_MEDIA_FORMAT';
+    } else if (err.message?.includes('PHOTO_RESULT_PERSISTENCE_CONFLICT')) {
+      classification = FailureClassification.UNKNOWN_ERROR;
+      errorCode = 'PHOTO_RESULT_PERSISTENCE_FAILED';
     } else if (err.message?.includes('META_UPLOAD_')) {
       classification = FailureClassification.NETWORK_ERROR;
       errorCode = 'META_UPLOAD_FAILED';
+    } else if (err.message?.includes('META_PERMISSION_ERROR')) {
+      classification = FailureClassification.MISSING_PERMISSION;
+      errorCode = 'MISSING_PERMISSION';
     } else if (err.message?.includes('META_AUTH_ERROR')) {
       classification = FailureClassification.REVOKED_TOKEN;
       errorCode = 'REVOKED_TOKEN';
-    } else if (err.message?.includes('META_API_ERROR') || err.message?.includes('timeout') || err.message?.includes('Connection lost') || err.message?.includes('fetch')) {
+    } else if (err.message?.includes('META_API_ERROR') || err.message?.includes('META_NETWORK_ERROR') || err.message?.includes('timeout') || err.message?.includes('Connection lost') || err.message?.includes('fetch')) {
       classification = FailureClassification.NETWORK_ERROR;
       errorCode = 'NET_TIMEOUT';
     }
 
     try {
+      if (errorCode === 'REVOKED_TOKEN') {
+        await prisma.$transaction(async (tx) => {
+          const affectedPage = await tx.facebookPage.findUnique({
+            where: { id: job.pageId },
+            select: { accountId: true },
+          });
+
+          if (affectedPage) {
+            await tx.facebookPage.updateMany({
+              where: { accountId: affectedPage.accountId },
+              data: { isSynced: false },
+            });
+          }
+
+          await transitionJobState(
+            tx,
+            job.id,
+            workerUuid,
+            JobStatus.FACEBOOK_RECONNECT_REQUIRED,
+            job.userId!,
+            {
+              failedAt: new Date(),
+              lastErrorCode: errorCode,
+              lastErrorMessage: errorMessage,
+              failureClassification: classification,
+            },
+          );
+        });
+        return;
+      }
+
       const isExhausted = job.attemptCount >= job.maxAttempts;
       const isTerminal = isExhausted ||
         errorCode === 'GOOGLE_DRIVE_CONNECTION_REVOKED' ||
         errorCode === 'GOOGLE_DRIVE_FILE_NOT_FOUND' ||
         errorCode === 'GOOGLE_DRIVE_DECRYPTION_FAILED' ||
-        errorCode === 'THUMBNAIL_PUBLISHING_FAILED';
+        errorCode === 'THUMBNAIL_PUBLISHING_FAILED' ||
+        errorCode === 'INVALID_MEDIA_FORMAT' ||
+        errorCode === 'PHOTO_RESULT_PERSISTENCE_FAILED' ||
+        errorCode === 'MISSING_PERMISSION';
 
       if (isTerminal) {
         await prisma.$transaction(async (tx) => {

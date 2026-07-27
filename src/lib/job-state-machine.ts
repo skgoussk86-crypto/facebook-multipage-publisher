@@ -26,6 +26,7 @@ export function canTransition(current: JobStatus, next: JobStatus): boolean {
     [JobStatus.UPLOADING_TO_META]: [
       JobStatus.META_PROCESSING,
       JobStatus.PUBLISHING,
+      JobStatus.PUBLISHED,
       JobStatus.FAILED_RETRYABLE,
       JobStatus.FAILED_PERMANENT,
       JobStatus.FACEBOOK_RECONNECT_REQUIRED
@@ -405,6 +406,40 @@ export async function recoverExpiredLease(
       }
     });
   } else if (
+    (job.status === JobStatus.UPLOADING_TO_META ||
+      job.status === JobStatus.PUBLISHING) &&
+    job.contentType?.toUpperCase() === 'PHOTO' &&
+    job.providerProcessingId
+  ) {
+    // Page photo publishing is synchronous. A persisted Meta photo ID proves
+    // the provider accepted the upload, so an expired lease can be finalized
+    // without sending the same photo again.
+    await tx.videoJob.update({
+      where: { id: jobId },
+      data: {
+        status: JobStatus.PUBLISHED,
+        metaPostId: job.metaPostId || job.providerProcessingId,
+        completedAt: job.completedAt || now,
+        failedAt: null,
+        nextAttemptAt: null,
+        lockToken: null,
+        lockedAt: null,
+        lockExpiresAt: null,
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        failureClassification: null,
+        attempts: attemptsArr,
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        action: 'JOB_PHOTO_LEASE_RECONCILED',
+        details: `Recovered photo Job ${jobId} with persisted Meta Photo ID ${job.providerProcessingId}. Marked PUBLISHED without re-uploading.`,
+        userId: job.userId,
+      },
+    });
+  } else if (
     job.status === JobStatus.UPLOADING_TO_META ||
     job.status === JobStatus.PUBLISHING
   ) {
@@ -711,7 +746,7 @@ export interface BulkCreateScheduledJobsTx {
 }
 
 /**
- * Validates, schedules, and logs bulk video publishing jobs inside a single transaction.
+ * Validates, schedules, and logs bulk media publishing jobs inside a single transaction.
  * status assignment is controlled internally.
  */
 export async function bulkCreateScheduledJobs(
@@ -875,7 +910,7 @@ export async function bulkCreateScheduledJobs(
   await tx.auditLog.create({
     data: {
       action: 'BULK_JOB_CREATE',
-      details: `User scheduled ${createdJobs.length} new video publishing jobs.`,
+      details: `User scheduled ${createdJobs.length} new media publishing jobs.`,
       userId
     }
   });

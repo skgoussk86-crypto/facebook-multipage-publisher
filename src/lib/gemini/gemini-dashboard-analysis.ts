@@ -188,15 +188,15 @@ export function getGeminiAnalysisErrorMessage(
   }
 
   if (status === 409) {
-    return "The video must finish uploading and validation before the AI can analyze it.";
+    return "The media file must finish uploading and validation before the AI can analyze it.";
   }
 
   if (status === 413) {
-    return "This video is larger than the configured AI analysis limit.";
+    return "This media file is larger than the configured AI analysis limit.";
   }
 
   if (status === 429) {
-    return "The local AI service is currently busy processing another video. Please wait and try again.";
+    return "The local AI service is currently busy processing another media file. Please wait and try again.";
   }
 
   if (status === 502) {
@@ -211,5 +211,5 @@ export function getGeminiAnalysisErrorMessage(
     return "AI analysis timed out. Try again in a few moments.";
   }
 
-  return "The AI service could not analyze this video. Try again later.";
+  return "The AI service could not analyze this media file. Try again later.";
 }

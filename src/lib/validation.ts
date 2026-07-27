@@ -101,7 +101,7 @@ export interface NormalizedDashboardJob {
   uploadProgress: number;
   pageId: string;
   pageName?: string;
-  contentType: 'VIDEO' | 'REEL';
+  contentType: 'VIDEO' | 'REEL' | 'PHOTO';
   englishTitle: string;
   englishCaption: string;
   hashtags: string;
@@ -196,16 +196,28 @@ export function normalizeDashboardJobs(data: unknown): NormalizedDashboardJob[] 
       }
     }
 
+    const normalizedContentType =
+      j.contentType === 'PHOTO'
+        ? ('PHOTO' as const)
+        : j.contentType === 'REEL'
+          ? ('REEL' as const)
+          : ('VIDEO' as const);
+
     return {
       id: j.id,
-      fileName: typeof j.fileName === 'string' ? j.fileName : 'video.mp4',
+      fileName:
+        typeof j.fileName === 'string'
+          ? j.fileName
+          : normalizedContentType === 'PHOTO'
+            ? 'image.jpg'
+            : 'video.mp4',
       fileSize: typeof j.fileSize === 'string' ? j.fileSize : 'N/A',
       fileSizeBytes: typeof j.fileSizeBytes === 'number' ? j.fileSizeBytes : 0,
       durationSeconds: typeof j.durationSeconds === 'number' ? j.durationSeconds : 0,
       uploadProgress: typeof j.uploadProgress === 'number' ? j.uploadProgress : 100,
       pageId: j.pageId,
       pageName: typeof j.pageName === 'string' ? j.pageName : undefined,
-      contentType: j.contentType === 'REEL' ? ('REEL' as const) : ('VIDEO' as const),
+      contentType: normalizedContentType,
       englishTitle: j.englishTitle,
       englishCaption: typeof j.englishCaption === 'string' ? j.englishCaption : '',
       hashtags: typeof j.hashtags === 'string' ? j.hashtags : '',

@@ -461,7 +461,10 @@ async function runTests() {
   });
 
   const workerId = generateWorkerId();
-  const cycleResult = await executeWorkerCycle(workerId);
+  // This test covers queue scheduling only. Isolate unrelated asset-validation work.
+  const cycleResult = await executeWorkerCycle(workerId, new Date(), {
+    validateOneAsset: async () => null,
+  });
   assert(cycleResult.processedCount === 1, 'Only the due job must be claimed');
 
   const updatedDue = await prisma.videoJob.findUnique({ where: { id: dueJobId } });

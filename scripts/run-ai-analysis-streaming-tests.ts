@@ -220,7 +220,7 @@ async function runTests() {
 
         assert.strictEqual(errors.length, 1);
         assert.strictEqual(errors[0].error, "INTERNAL_SERVER_ERROR");
-        assert.strictEqual(errors[0].message, "An unexpected error occurred while analyzing the video.");
+        assert.strictEqual(errors[0].message, "An unexpected error occurred while analyzing the media file.");
 
         // Assert console logging sanitization
         assert.strictEqual(loggedArgs.length, 1);

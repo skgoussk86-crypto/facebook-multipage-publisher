@@ -12,6 +12,18 @@ export interface MetaPublishInput {
   mockScenario: MockScenario | null;
 }
 
+export interface MetaPhotoPublishInput {
+  readonly pageId: string;
+  readonly pageToken: string;
+  readonly title: string;
+  readonly caption: string;
+  readonly hashtags: string | null;
+  readonly fileName: string;
+  readonly mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
+  readonly fileSize: number;
+  readonly stream: Readable;
+}
+
 export interface ExperimentalMetaThumbnailInput {
   readonly fileName: string;
   readonly mimeType: "image/jpeg";
@@ -38,6 +50,8 @@ type MetaResponseBody = {
   end_offset?: string | number;
   upload_url?: string;
   success?: boolean;
+  id?: string;
+  post_id?: string;
   status?: {
     video_status?: string;
     uploading_phase?: {
@@ -131,14 +145,21 @@ export class FacebookPublishingService {
         : null,
     ].filter((value): value is string => Boolean(value));
 
+    const isPermissionError =
+      metaError?.code === 10 ||
+      metaError?.code === 200 ||
+      metaError?.code === 283;
+
     const isAuthError =
+      metaError?.code === 190 ||
       response.status === 401 ||
-      response.status === 403 ||
-      metaError?.code === 190;
+      (response.status === 403 && !isPermissionError);
 
     const prefix = isAuthError
       ? 'META_AUTH_ERROR'
-      : 'META_API_ERROR';
+      : isPermissionError
+        ? 'META_PERMISSION_ERROR'
+        : 'META_API_ERROR';
 
     return new Error(
       `${prefix}: ${message} (${details.join(', ')})`,
@@ -250,6 +271,220 @@ export class FacebookPublishingService {
       throw new Error(`META_OFFSET_INVALID: Invalid offset value: ${String(val)}`);
     }
     return num;
+  }
+
+  static async publishPhoto(
+    input: MetaPhotoPublishInput,
+  ): Promise<{ photoId: string; postId: string | null }> {
+    if (!/^\d{5,30}$/.test(input.pageId)) {
+      throw new Error(
+        'META_PHOTO_INVALID_INPUT: Meta Page ID is invalid.',
+      );
+    }
+
+    if (!input.pageToken.trim()) {
+      throw new Error(
+        'META_PHOTO_INVALID_INPUT: Meta Page access token is missing.',
+      );
+    }
+
+    const allowedMimeTypes = new Set([
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+    ]);
+
+    if (!allowedMimeTypes.has(input.mimeType)) {
+      throw new Error(
+        'META_PHOTO_INVALID_INPUT: Photo MIME type must be JPEG, PNG, or WebP.',
+      );
+    }
+
+    if (
+      !Number.isSafeInteger(input.fileSize) ||
+      input.fileSize <= 0 ||
+      input.fileSize > 500 * 1024 * 1024
+    ) {
+      throw new Error(
+        'META_PHOTO_INVALID_INPUT: Photo size must be between 1 byte and 500 MiB.',
+      );
+    }
+
+    if (
+      !input.fileName ||
+      input.fileName.length > 255 ||
+      /[\x00-\x1F\x7F]/.test(input.fileName) ||
+      input.fileName.includes('/') ||
+      input.fileName.includes('\\') ||
+      input.fileName.includes('"')
+    ) {
+      throw new Error(
+        'META_PHOTO_INVALID_INPUT: Photo filename is invalid.',
+      );
+    }
+
+    const message = [
+      input.title.trim(),
+      input.caption.trim(),
+      input.hashtags?.trim() || '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    const boundary =
+      `----FbPublisherPhoto${randomBytes(18).toString('hex')}`;
+
+    const fieldBuffers = [
+      this.createMultipartField(
+        boundary,
+        'access_token',
+        input.pageToken,
+      ),
+      this.createMultipartField(
+        boundary,
+        'published',
+        'true',
+      ),
+      this.createMultipartField(
+        boundary,
+        'message',
+        message,
+      ),
+    ];
+
+    const fileHeader = Buffer.from(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="source"; filename="${input.fileName}"\r\n` +
+        `Content-Type: ${input.mimeType}\r\n\r\n`,
+      'utf8',
+    );
+
+    const footer = Buffer.from(
+      `\r\n--${boundary}--\r\n`,
+      'utf8',
+    );
+
+    const contentLength =
+      fieldBuffers.reduce(
+        (total, field) => total + field.length,
+        0,
+      ) +
+      fileHeader.length +
+      input.fileSize +
+      footer.length;
+
+    const bodyStream = Readable.from(
+      (async function* () {
+        for (const field of fieldBuffers) {
+          yield field;
+        }
+
+        yield fileHeader;
+
+        let streamedBytes = 0;
+        try {
+          for await (const chunk of input.stream) {
+            const buffer = Buffer.isBuffer(chunk)
+              ? chunk
+              : Buffer.from(chunk);
+
+            streamedBytes += buffer.length;
+
+            if (streamedBytes > input.fileSize) {
+              throw new Error(
+                'META_PHOTO_SIZE_MISMATCH: Photo stream exceeded its validated size.',
+              );
+            }
+
+            yield buffer;
+          }
+        } finally {
+          input.stream.destroy();
+        }
+
+        if (streamedBytes !== input.fileSize) {
+          throw new Error(
+            'META_PHOTO_SIZE_MISMATCH: Photo stream size did not match validated metadata.',
+          );
+        }
+
+        yield footer;
+      })(),
+    );
+
+    const request: RequestInit & { duplex: 'half' } = {
+      method: 'POST',
+      headers: {
+        'Content-Type':
+          `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': contentLength.toString(),
+        'User-Agent': 'FB-Multi-Page-Publisher/1.0',
+      },
+      body: Readable.toWeb(
+        bodyStream,
+      ) as unknown as BodyInit,
+      duplex: 'half',
+    };
+
+    let response: Response;
+
+    try {
+      response = await fetch(
+        `${this.getBaseUrl()}/${input.pageId}/photos`,
+        request,
+      );
+    } catch (error: unknown) {
+      const errorRecord =
+        error && typeof error === 'object'
+          ? error as { message?: unknown; cause?: unknown }
+          : null;
+      const causeRecord =
+        errorRecord?.cause && typeof errorRecord.cause === 'object'
+          ? errorRecord.cause as { message?: unknown }
+          : null;
+      const candidateMessages = [
+        errorRecord?.message,
+        causeRecord?.message,
+      ].filter((value): value is string => typeof value === 'string');
+      const photoStreamError = candidateMessages.find((message) =>
+        message.startsWith('META_PHOTO_'),
+      );
+
+      if (photoStreamError) {
+        throw new Error(photoStreamError);
+      }
+
+      throw new Error(
+        'META_NETWORK_ERROR: Photo upload request failed.',
+      );
+    }
+
+    const responseBody =
+      await this.readResponseBody(response);
+
+    if (!response.ok) {
+      const metaError = this.createMetaError(
+        'Meta Page photo publishing',
+        response,
+        responseBody,
+      );
+      metaError.message = metaError.message.replaceAll(
+        input.pageToken,
+        '[REDACTED]',
+      );
+      throw metaError;
+    }
+
+    if (!responseBody.id) {
+      throw new Error(
+        'META_INVALID_RESPONSE: Photo publishing response is missing id.',
+      );
+    }
+
+    return {
+      photoId: responseBody.id,
+      postId: responseBody.post_id || null,
+    };
   }
 
   // Existing regular Facebook Video resumable-upload flow.

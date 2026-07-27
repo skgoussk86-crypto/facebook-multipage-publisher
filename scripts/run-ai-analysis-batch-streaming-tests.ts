@@ -288,11 +288,15 @@ async function runTests() {
       }
       assert.strictEqual(resolvers.length, 2); // 1 remaining + 1 new started
 
-      // Clean up remaining
-      for (const r of resolvers) {
-        r.resolve({ title: "T", caption: "C", hashtags: [], thumbnailTimestampSeconds: 1 });
+      // Drain the stream while resolving every newly started queued analysis.
+      while (true) {
+        const pending = resolvers.splice(0);
+        for (const r of pending) {
+          r.resolve({ title: "T", caption: "C", hashtags: [], thumbnailTimestampSeconds: 1 });
+        }
+        const { done } = await reader.read();
+        if (done) break;
       }
-      reader.releaseLock();
       console.log("✓ Test 9: At most two analyses active simultaneously with default configuration.");
     }
 
@@ -318,10 +322,15 @@ async function runTests() {
         await new Promise((r) => setTimeout(r, 10));
       }
       assert.strictEqual(resolvers.length, 5);
-      for (const r of resolvers) {
-        r.resolve({ title: "T", caption: "C", hashtags: [], thumbnailTimestampSeconds: 1 });
+      // Drain the stream while resolving the sixth queued analysis when it starts.
+      while (true) {
+        const pending = resolvers.splice(0);
+        for (const r of pending) {
+          r.resolve({ title: "T", caption: "C", hashtags: [], thumbnailTimestampSeconds: 1 });
+        }
+        const { done } = await reader.read();
+        if (done) break;
       }
-      reader.releaseLock();
       console.log("✓ Test 10: At most five active when concurrency 5 is requested.");
     }
 
@@ -850,6 +859,7 @@ async function runTests() {
     console.log("\n======================================================");
     console.log("ALL BATCH STREAMING TESTS PASSED SUCCESSFULLY");
     console.log("======================================================");
+    process.exit(0);
   } catch (error) {
     console.error("Test execution failed:", error);
     process.exit(1);

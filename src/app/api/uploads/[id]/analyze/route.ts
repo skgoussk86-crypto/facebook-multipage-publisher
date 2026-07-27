@@ -42,8 +42,11 @@ const AI_ERROR_STATUS_BY_CODE: Record<AiVideoAnalysisErrorCode, number> = {
   UPLOAD_ASSET_DELETED: 409,
   UNSUPPORTED_STORAGE_PROVIDER: 422,
   INVALID_VIDEO_METADATA: 422,
+  INVALID_IMAGE_METADATA: 422,
   VIDEO_TOO_LARGE: 413,
   VIDEO_DOWNLOAD_FAILED: 502,
+  IMAGE_TOO_LARGE: 413,
+  IMAGE_DOWNLOAD_FAILED: 502,
 };
 
 const GEMINI_ERROR_STATUS_BY_CODE: Record<GeminiVideoAnalysisErrorCode, number> = {
@@ -100,7 +103,7 @@ export function mapGeminiAnalysisError(
     body: {
       error: "INTERNAL_SERVER_ERROR",
       message:
-        "An unexpected error occurred while analyzing the video.",
+        "An unexpected error occurred while analyzing the media file.",
     },
   };
 }

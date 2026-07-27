@@ -23,18 +23,21 @@ export function mapSafeStreamingError(error: unknown): SafeStreamingErrorRespons
       AI_TIMEOUT: "The local AI service took too long to respond. Please try again.",
       AI_BUSY: "The local AI service is busy. Please try again.",
       AI_INVALID_RESPONSE: "The local AI service returned an invalid response. Please try again.",
-      AI_ANALYSIS_FAILED: "The video could not be analyzed. Please try again.",
-      UPLOAD_ASSET_NOT_FOUND: "The uploaded video could not be found.",
-      UPLOAD_ASSET_NOT_VALIDATED: "Wait until the video finishes validation.",
-      UPLOAD_ASSET_DELETED: "The uploaded video is no longer available.",
-      UNSUPPORTED_STORAGE_PROVIDER: "This video's storage provider is not supported for AI analysis.",
+      AI_ANALYSIS_FAILED: "The media file could not be analyzed. Please try again.",
+      UPLOAD_ASSET_NOT_FOUND: "The uploaded media file could not be found.",
+      UPLOAD_ASSET_NOT_VALIDATED: "Wait until the media file finishes validation.",
+      UPLOAD_ASSET_DELETED: "The uploaded media file is no longer available.",
+      UNSUPPORTED_STORAGE_PROVIDER: "This media file's storage provider is not supported for AI analysis.",
       INVALID_VIDEO_METADATA: "The uploaded video metadata is invalid.",
+      INVALID_IMAGE_METADATA: "The uploaded image metadata is invalid.",
       VIDEO_TOO_LARGE: "The video is too large for AI analysis.",
       VIDEO_DOWNLOAD_FAILED: "The video could not be prepared for AI analysis. Please try again.",
+      IMAGE_TOO_LARGE: "The image is too large for local AI analysis.",
+      IMAGE_DOWNLOAD_FAILED: "The image could not be prepared for AI analysis. Please try again.",
     };
     return {
       error: error.code,
-      message: messages[error.code] || "The video could not be analyzed. Please try again.",
+      message: messages[error.code] || "The media file could not be analyzed. Please try again.",
       ...(isRetryable ? { retryable: true } : {}),
     };
   }
@@ -59,14 +62,14 @@ export function mapSafeStreamingError(error: unknown): SafeStreamingErrorRespons
     };
     return {
       error: error.code,
-      message: messages[error.code] || "The video could not be analyzed. Please try again.",
+      message: messages[error.code] || "The media file could not be analyzed. Please try again.",
       ...(isRetryable ? { retryable: true } : {}),
     };
   }
 
   return {
     error: "INTERNAL_SERVER_ERROR",
-    message: "An unexpected error occurred while analyzing the video.",
+    message: "An unexpected error occurred while analyzing the media file.",
   };
 }
 

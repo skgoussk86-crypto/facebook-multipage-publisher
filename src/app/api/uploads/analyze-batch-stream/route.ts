@@ -91,7 +91,7 @@ export async function handleAnalyzeBatchStreamRequest(
     return NextResponse.json(
       {
         error: "INVALID_REQUEST",
-        message: "A batch cannot exceed 50 videos.",
+        message: "A batch cannot exceed 50 media files.",
       },
       { status: 400 }
     );
@@ -121,7 +121,7 @@ export async function handleAnalyzeBatchStreamRequest(
       return NextResponse.json(
         {
           error: "UPLOAD_ASSET_NOT_FOUND",
-          message: "One or more requested video assets were not found.",
+          message: "One or more requested media assets were not found.",
         },
         { status: 404 }
       );
@@ -130,7 +130,7 @@ export async function handleAnalyzeBatchStreamRequest(
       return NextResponse.json(
         {
           error: "UPLOAD_ASSET_NOT_VALIDATED",
-          message: `Video asset ${assetId} must complete validation.`,
+          message: `Media asset ${assetId} must complete validation.`,
         },
         { status: 400 }
       );
@@ -139,7 +139,7 @@ export async function handleAnalyzeBatchStreamRequest(
       return NextResponse.json(
         {
           error: "UPLOAD_ASSET_DELETED",
-          message: `Video asset ${assetId} is deleted.`,
+          message: `Media asset ${assetId} is deleted.`,
         },
         { status: 400 }
       );

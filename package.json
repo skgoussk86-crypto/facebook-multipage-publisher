@@ -42,7 +42,8 @@
     "test:ai-analysis-streaming": "node --conditions=react-server --import tsx scripts/run-ai-analysis-streaming-tests.ts",
     "test:ai-analysis-batch-streaming": "node --conditions=react-server --import tsx scripts/run-ai-analysis-batch-streaming-tests.ts",
     "test:phase7-default-page": "node --conditions=react-server --import tsx scripts/run-phase7-default-page-tests.ts",
-    "test:phase7-image-upload": "node --conditions=react-server --import tsx scripts/run-phase7-image-upload-tests.ts"
+    "test:phase7-image-upload": "node --conditions=react-server --import tsx scripts/run-phase7-image-upload-tests.ts",
+    "test:phase7-photo-publishing": "node --conditions=react-server --import tsx scripts/run-phase7-photo-publishing-tests.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1086.0",

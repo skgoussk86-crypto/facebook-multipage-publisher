@@ -6,6 +6,7 @@ import { MockScenario } from '@prisma/client';
 import { prisma } from '@/lib/prisma-client';
 import { bulkCreateScheduledJobs } from '@/lib/job-state-machine';
 import { resolveStorageReference } from '@/lib/storage';
+import { getMediaKindFromMimeType } from '@/lib/uploads/media-file-types';
 
 interface SchedulableThumbnailAsset {
   id: string;
@@ -59,7 +60,12 @@ export interface JobsRouteDependencies {
   verifyAdminSession: typeof verifyAdminSession;
   getVideoJobs: (
     userId: string
-  ) => Promise<Array<import('@prisma/client').VideoJob & { facebookPage?: import('@prisma/client').FacebookPage | null }>>;
+  ) => Promise<Array<
+    import('@prisma/client').VideoJob & {
+      facebookPage?: import('@prisma/client').FacebookPage | null;
+      uploadAsset?: { originalName: string } | null;
+    }
+  >>;
   findUploadAsset: (id: string) => Promise<{
     id: string;
     userId: string;
@@ -67,6 +73,9 @@ export interface JobsRouteDependencies {
     provider: string;
     bucket: string;
     objectKey: string;
+    originalName?: string;
+    declaredMimeType?: string;
+    detectedMimeType?: string | null;
     objectDeletedAt?: Date | null;
   } | null>;
   findThumbnailAsset?: (id: string) => Promise<SchedulableThumbnailAsset | null>;
@@ -124,7 +133,12 @@ export async function handleJobsGet(
     const jobs = await dependencies.getVideoJobs(user.id);
     const safeJobs = jobs.map((job) => {
       const uri = job.storageUri ?? job.gcsVideoUri;
-      const fileName = uri?.split("/").pop() || "video.mp4";
+      const fileName =
+        job.uploadAsset?.originalName ||
+        uri?.split("/").pop() ||
+        (job.contentType?.toUpperCase() === "PHOTO"
+          ? "image.jpg"
+          : "video.mp4");
       const pageName = job.facebookPage?.pageName || null;
       return {
         id: job.id,
@@ -171,7 +185,7 @@ export async function handleJobsPost(
     const { jobs } = body;
 
     if (!Array.isArray(jobs) || jobs.length === 0) {
-      return NextResponse.json({ error: 'No video jobs provided.' }, { status: 400 });
+      return NextResponse.json({ error: 'No media jobs provided.' }, { status: 400 });
     }
 
     // Pre-verify page ownership via dependencies
@@ -193,7 +207,7 @@ export async function handleJobsPost(
       const job = jobs[index];
 
       if (!job || typeof job !== 'object' || Array.isArray(job)) {
-        results[index] = { index, status: 'FAILED', error: 'Each video job must be an object.' };
+        results[index] = { index, status: 'FAILED', error: 'Each media job must be an object.' };
         continue;
       }
 
@@ -227,6 +241,14 @@ export async function handleJobsPost(
 
       // Fetch UploadAsset using uploadAssetId
       const asset = await dependencies.findUploadAsset(assetId);
+      const requestedContentType =
+        typeof job.contentType === 'string'
+          ? job.contentType.trim().toUpperCase()
+          : 'VIDEO';
+
+      if (!['VIDEO', 'REEL', 'PHOTO'].includes(requestedContentType)) {
+        errors.push('contentType must be VIDEO, REEL, or PHOTO.');
+      }
 
       if (!asset) {
         errors.push("Upload asset not found.");
@@ -243,6 +265,22 @@ export async function handleJobsPost(
         if (asset.provider !== 'GOOGLE_DRIVE' && asset.provider !== 'R2' && asset.provider !== 'GCS') {
           errors.push(`Unsupported storage provider "${asset.provider}".`);
         }
+
+        const assetMimeType =
+          asset.detectedMimeType || asset.declaredMimeType;
+
+        if (assetMimeType) {
+          const assetKind =
+            getMediaKindFromMimeType(assetMimeType);
+
+          if (!assetKind) {
+            errors.push('Upload asset has an unsupported validated MIME type.');
+          } else if (requestedContentType === 'PHOTO' && assetKind !== 'image') {
+            errors.push('PHOTO jobs require a validated JPEG, PNG, or WebP image asset.');
+          } else if (requestedContentType !== 'PHOTO' && assetKind !== 'video') {
+            errors.push('VIDEO and REEL jobs require a validated MP4 or MOV video asset.');
+          }
+        }
       }
 
       for (const field of FORBIDDEN_BROWSER_THUMBNAIL_FIELDS) {
@@ -255,7 +293,13 @@ export async function handleJobsPost(
       let thumbnailAssetId: string | null = null;
       const requestedThumbnailAssetId = job.thumbnailAssetId;
 
-      if (requestedThumbnailAssetId !== undefined && requestedThumbnailAssetId !== null) {
+      if (
+        requestedContentType === 'PHOTO' &&
+        requestedThumbnailAssetId !== undefined &&
+        requestedThumbnailAssetId !== null
+      ) {
+        errors.push('PHOTO jobs do not accept a separate thumbnail asset.');
+      } else if (requestedThumbnailAssetId !== undefined && requestedThumbnailAssetId !== null) {
         if (typeof requestedThumbnailAssetId !== 'string' || !isUuid(requestedThumbnailAssetId.trim())) {
           errors.push('thumbnailAssetId must be a valid UUID.');
         } else if (!asset) {
@@ -315,7 +359,7 @@ export async function handleJobsPost(
           hashtags: job.hashtags ?? null,
           scheduledTimeUTC: new Date(job.scheduledTimeUTC),
           mockScenario: mockScenarioVal,
-          contentType: job.contentType ?? 'VIDEO'
+          contentType: requestedContentType
         });
       }
     }
