@@ -8,13 +8,105 @@ import {
 import { OllamaClient } from "./ollama/ollama-client";
 import { OllamaFrameExtractor } from "./ollama/ollama-frame-extractor";
 
-// Global process-level mutex to enforce concurrency limit
-const activeAiAnalysisSymbol = Symbol.for("fb-publisher-active-ai-analysis");
-const globalObject = globalThis as unknown as Record<symbol, boolean>;
+export class Semaphore {
+  private activePermits = 0;
+  private maxPermits: number;
+  private waiters: Array<{
+    resolve: () => void;
+    reject: (err: Error) => void;
+    abortSignal?: AbortSignal;
+    onAbort?: () => void;
+  }> = [];
 
-if (globalObject[activeAiAnalysisSymbol] === undefined) {
-  globalObject[activeAiAnalysisSymbol] = false;
+  constructor(maxPermits = 3) {
+    this.maxPermits = maxPermits;
+  }
+
+  public setMaxPermits(count: number) {
+    this.maxPermits = Math.max(1, Math.min(5, Math.floor(count)));
+    this.triggerNext();
+  }
+
+  public getMaxPermits(): number {
+    return this.maxPermits;
+  }
+
+  public getActiveCount(): number {
+    return this.activePermits;
+  }
+
+  public getQueueLength(): number {
+    return this.waiters.length;
+  }
+
+  public async acquire(abortSignal?: AbortSignal): Promise<void> {
+    if (abortSignal?.aborted) {
+      throw new Error("Acquisition aborted");
+    }
+
+    if (this.activePermits < this.maxPermits) {
+      this.activePermits++;
+      return;
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const waiter: {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        abortSignal?: AbortSignal;
+        onAbort?: () => void;
+      } = {
+        resolve,
+        reject,
+        abortSignal,
+      };
+
+      if (abortSignal) {
+        const onAbort = () => {
+          const idx = this.waiters.indexOf(waiter);
+          if (idx !== -1) {
+            this.waiters.splice(idx, 1);
+            reject(new Error("Acquisition aborted"));
+          }
+        };
+        abortSignal.addEventListener("abort", onAbort);
+        waiter.onAbort = onAbort;
+      }
+
+      this.waiters.push(waiter);
+    });
+  }
+
+  public release(): void {
+    if (this.activePermits > 0) {
+      this.activePermits--;
+    }
+    this.triggerNext();
+  }
+
+  private triggerNext(): void {
+    while (this.waiters.length > 0 && this.activePermits < this.maxPermits) {
+      const next = this.waiters.shift();
+      if (next) {
+        if (next.abortSignal && next.onAbort) {
+          next.abortSignal.removeEventListener("abort", next.onAbort);
+        }
+        this.activePermits++;
+        next.resolve();
+      }
+    }
+  }
 }
+
+// Global process-level semaphore shared via globalThis
+const semaphoreSymbol = Symbol.for("fb-publisher-ai-semaphore");
+const globalObject = globalThis as unknown as Record<symbol, unknown>;
+
+if (globalObject[semaphoreSymbol] === undefined) {
+  globalObject[semaphoreSymbol] = new Semaphore(3);
+}
+
+export const aiSemaphore = globalObject[semaphoreSymbol] as Semaphore;
 
 export interface AiServiceAsset {
   id: string;
@@ -39,6 +131,7 @@ export interface AiServiceDependencies {
     userId: string;
     asset: AiServiceAsset;
     frameCount: number;
+    abortSignal?: AbortSignal;
   }) => Promise<{ timestamps: number[]; base64Frames: string[] }>;
   generateOllamaMetadata?: (params: {
     durationSeconds: number;
@@ -46,32 +139,22 @@ export interface AiServiceDependencies {
     base64Frames: string[];
     abortSignal?: AbortSignal;
   }) => Promise<GeneratedVideoContent>;
+  rejectIfBusy?: boolean;
 }
 
 export class AiService {
   /**
-   * Helper to check if analysis is active
+   * Helper to check if analysis is active / busy
    */
   public static isBusy(): boolean {
-    return !!globalObject[activeAiAnalysisSymbol];
+    return aiSemaphore.getActiveCount() >= aiSemaphore.getMaxPermits();
   }
 
   /**
-   * Safe process-local acquire lock
-   */
-  private static acquireLock(): boolean {
-    if (globalObject[activeAiAnalysisSymbol]) {
-      return false;
-    }
-    globalObject[activeAiAnalysisSymbol] = true;
-    return true;
-  }
-
-  /**
-   * Safe process-local release lock
+   * Safe process-local release lock for backward compatibility
    */
   public static releaseLock(): void {
-    globalObject[activeAiAnalysisSymbol] = false;
+    aiSemaphore.release();
   }
 
   /**
@@ -82,11 +165,19 @@ export class AiService {
     assetId: string,
     dependencies: AiServiceDependencies = {}
   ): Promise<GeneratedVideoContent> {
-    const { abortSignal, findAsset, extractFrames, generateOllamaMetadata } = dependencies;
+    const { abortSignal, findAsset, extractFrames, generateOllamaMetadata, rejectIfBusy } = dependencies;
 
-    // 1. Concurrency control: check and acquire lock
-    const lockAcquired = this.acquireLock();
-    if (!lockAcquired) {
+    // 1. Concurrency control: acquire permit from global semaphore
+    if (rejectIfBusy && aiSemaphore.getActiveCount() >= aiSemaphore.getMaxPermits()) {
+      throw new AiVideoAnalysisError(
+        "AI_BUSY",
+        "The local AI service is currently busy processing another video. Please try again."
+      );
+    }
+
+    try {
+      await aiSemaphore.acquire(abortSignal);
+    } catch {
       throw new AiVideoAnalysisError(
         "AI_BUSY",
         "The local AI service is currently busy processing another video. Please try again."
@@ -180,6 +271,7 @@ export class AiService {
             expectedSize: BigInt(asset.expectedSize),
           },
           frameCount: config.ollamaFrameCount,
+          abortSignal, // Pass the abortSignal down
         });
 
         if (base64Frames.length === 0) {
@@ -246,8 +338,8 @@ export class AiService {
         );
       }
     } finally {
-      // 5. Release lock in finally block
-      this.releaseLock();
+      // 5. Release permit in finally block
+      aiSemaphore.release();
     }
   }
 }

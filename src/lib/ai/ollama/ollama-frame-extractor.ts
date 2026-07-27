@@ -58,6 +58,7 @@ export class OllamaFrameExtractor {
     outputPath: string;
     timestampSeconds: number;
     timeoutMs: number;
+    abortSignal?: AbortSignal;
   }): Promise<void> {
     const args = [
       "-hide_banner",
@@ -87,6 +88,7 @@ export class OllamaFrameExtractor {
           timeout: params.timeoutMs,
           maxBuffer: 1024 * 1024,
           windowsHide: true,
+          signal: params.abortSignal,
         },
         (error, _stdout, stderr) => {
           if (!error) {
@@ -129,8 +131,9 @@ export class OllamaFrameExtractor {
       durationMs: number | null;
     };
     frameCount: number;
+    abortSignal?: AbortSignal;
   }): Promise<FrameExtractionResult> {
-    const { userId, asset, frameCount } = params;
+    const { userId, asset, frameCount, abortSignal } = params;
 
     if (!asset.durationMs || asset.durationMs <= 0) {
       throw new AiVideoAnalysisError(
@@ -181,7 +184,8 @@ export class OllamaFrameExtractor {
         await pipeline(
           downloadStream,
           new ByteLimitTransform(MAX_VIDEO_BYTES),
-          createWriteStream(sourcePath)
+          createWriteStream(sourcePath),
+          { signal: abortSignal }
         );
       } catch (err: unknown) {
         if (err instanceof AiVideoAnalysisError) {
@@ -193,7 +197,7 @@ export class OllamaFrameExtractor {
         );
       }
 
-      // Verify downladed file size
+      // Verify downloaded file size
       const videoStats = await stat(sourcePath);
       if (!videoStats.isFile() || videoStats.size <= 0) {
         throw new AiVideoAnalysisError(
@@ -216,6 +220,7 @@ export class OllamaFrameExtractor {
             outputPath: frameOutputPath,
             timestampSeconds: timestamp,
             timeoutMs: 20000, // 20 seconds timeout per frame
+            abortSignal,
           });
         } catch (err: unknown) {
           const msg = (err as Error).message;

@@ -10,6 +10,7 @@ import {
   AiService,
   generatedVideoContentSchema,
 } from "../src/lib/ai";
+import { aiSemaphore } from "../src/lib/ai/ai-service";
 import { OllamaClient } from "../src/lib/ai/ollama/ollama-client";
 import { OllamaFrameExtractor } from "../src/lib/ai/ollama/ollama-frame-extractor";
 process.env.AI_PROVIDER = "OLLAMA";
@@ -292,6 +293,8 @@ async function testOllamaClientJsonRepair() {
 async function testAiServiceConcurrency() {
   // Clear any existing locks
   AiService.releaseLock();
+  const originalMax = aiSemaphore.getMaxPermits();
+  aiSemaphore.setMaxPermits(1);
 
   const mockAsset = {
     id: "asset-1",
@@ -336,6 +339,7 @@ async function testAiServiceConcurrency() {
       findAsset: async () => mockAsset,
       extractFrames: async () => ({ timestamps: [], base64Frames: [] }),
       generateOllamaMetadata: mockOllamaMeta,
+      rejectIfBusy: true,
     }),
     (err: unknown) => {
       const e = err as any;
@@ -348,6 +352,7 @@ async function testAiServiceConcurrency() {
   const result = await firstPromise;
   assert.equal(result.title, "Simulated Success");
   assert.equal(AiService.isBusy(), false); // Lock must be released
+  aiSemaphore.setMaxPermits(originalMax);
 }
 
 async function testOwnershipIsolationAndValidation() {

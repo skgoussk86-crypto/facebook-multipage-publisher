@@ -2,6 +2,14 @@ export interface AnalysisStreamCallbacks {
   onReady?: (status: unknown) => void;
   onResult?: (result: unknown) => void;
   onError?: (error: unknown) => void;
+
+  // Batch event callbacks
+  onBatchReady?: (data: unknown) => void;
+  onItemQueued?: (data: unknown) => void;
+  onItemStarted?: (data: unknown) => void;
+  onItemResult?: (data: unknown) => void;
+  onItemError?: (data: unknown) => void;
+  onBatchComplete?: (data: unknown) => void;
 }
 
 export class AnalysisRequestRegistry {
@@ -103,6 +111,21 @@ export async function parseAnalysisStream(
             } else if (currentEventName === "error") {
               callbacks.onError?.(parsedData);
               eventDispatched = true;
+            } else if (currentEventName === "batch-ready") {
+              callbacks.onBatchReady?.(parsedData);
+            } else if (currentEventName === "item-queued") {
+              callbacks.onItemQueued?.(parsedData);
+            } else if (currentEventName === "item-started") {
+              callbacks.onItemStarted?.(parsedData);
+            } else if (currentEventName === "item-result") {
+              callbacks.onItemResult?.(parsedData);
+              eventDispatched = true;
+            } else if (currentEventName === "item-error") {
+              callbacks.onItemError?.(parsedData);
+              eventDispatched = true;
+            } else if (currentEventName === "batch-complete") {
+              callbacks.onBatchComplete?.(parsedData);
+              eventDispatched = true;
             }
 
             currentEventName = "";
@@ -176,6 +199,21 @@ export async function parseAnalysisStream(
           eventDispatched = true;
         } else if (currentEventName === "error") {
           callbacks.onError?.(parsedData);
+          eventDispatched = true;
+        } else if (currentEventName === "batch-ready") {
+          callbacks.onBatchReady?.(parsedData);
+        } else if (currentEventName === "item-queued") {
+          callbacks.onItemQueued?.(parsedData);
+        } else if (currentEventName === "item-started") {
+          callbacks.onItemStarted?.(parsedData);
+        } else if (currentEventName === "item-result") {
+          callbacks.onItemResult?.(parsedData);
+          eventDispatched = true;
+        } else if (currentEventName === "item-error") {
+          callbacks.onItemError?.(parsedData);
+          eventDispatched = true;
+        } else if (currentEventName === "batch-complete") {
+          callbacks.onBatchComplete?.(parsedData);
           eventDispatched = true;
         }
       }

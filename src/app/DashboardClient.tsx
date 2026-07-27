@@ -96,9 +96,11 @@ interface VideoJob {
   uploadValidated?: boolean;
   geminiAnalysisStatus?:
     | "idle"
+    | "queued"
     | "analyzing"
     | "complete"
-    | "error";
+    | "error"
+    | "cancelled";
   geminiAnalysisError?: string;
   geminiThumbnailTimestampSeconds?: number;
   geminiThumbnailReason?: string;
@@ -335,6 +337,15 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   const [tempJobsQueue, setTempJobsQueue] = useState<VideoJob[]>([]);
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
   const [isBulkGeminiAnalysisRunning, setIsBulkGeminiAnalysisRunning] = useState(false);
+  const [bulkStatus, setBulkStatus] = useState<{
+    active: number;
+    completed: number;
+    failed: number;
+    total: number;
+    cancelled: number;
+  } | null>(null);
+  const [activeBatchAssetIds, setActiveBatchAssetIds] = useState<string[]>([]);
+  const batchAbortControllerRef = useRef<AbortController | null>(null);
   const queueControllerRef = useRef<UploadQueueController | null>(null);
   const activeAnalysisAborts = useRef<Record<string, AbortController>>({});
 
@@ -344,6 +355,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       Object.values(aborts).forEach((controller) => {
         controller.abort();
       });
+      batchAbortControllerRef.current?.abort();
     };
   }, []);
 
@@ -1142,41 +1154,262 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     }
   };
 
-  const handleAnalyzeAllValidated = async () => {
+  const handleCancelBulkAnalysis = () => {
+    if (batchAbortControllerRef.current) {
+      batchAbortControllerRef.current.abort();
+      batchAbortControllerRef.current = null;
+    }
+  };
+
+  const handleAnalyzeAllValidated = async (regenerate = false) => {
     if (isBulkGeminiAnalysisRunning) return;
 
-    const eligibleJobs = tempJobsQueue.filter(
-      (job) =>
-        job.uploadValidated &&
-        job.assetId &&
-        job.geminiAnalysisStatus !== "analyzing",
-    );
+    const eligibleJobs = tempJobsQueue.filter((job) => {
+      const isEligible = job.uploadValidated && job.assetId;
+      if (!isEligible) return false;
+      if (job.geminiAnalysisStatus === "analyzing" || job.geminiAnalysisStatus === "queued") return false;
+      if (!regenerate && job.geminiAnalysisStatus === "complete") return false;
+      return true;
+    });
 
     if (eligibleJobs.length === 0) {
-      alert(
-        "No validated videos are ready for AI analysis.",
-      );
+      alert("No validated videos are ready for AI analysis.");
       return;
     }
 
-    setIsBulkGeminiAnalysisRunning(true);
+    if (regenerate) {
+      if (!confirm("Are you sure you want to regenerate AI content for all validated videos? This will overwrite existing AI content.")) {
+        return;
+      }
+    }
 
-    let completedCount = 0;
+    setIsBulkGeminiAnalysisRunning(true);
+    setActiveBatchAssetIds(eligibleJobs.map((j) => j.assetId!));
+    setBulkStatus({
+      active: 0,
+      completed: 0,
+      failed: 0,
+      total: eligibleJobs.length,
+      cancelled: 0,
+    });
+
+    eligibleJobs.forEach((job) => {
+      updateTempJobFields(job.id, {
+        geminiAnalysisStatus: "queued",
+        geminiAnalysisError: undefined,
+      });
+    });
+
+    const controller = new AbortController();
+    batchAbortControllerRef.current = controller;
 
     try {
-      for (const job of eligibleJobs) {
-        if (await handleAnalyzeJobWithGemini(job)) {
-          completedCount += 1;
-        }
+      const response = await fetch("/api/uploads/analyze-batch-stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          assetIds: eligibleJobs.map((j) => j.assetId),
+          regenerateCompleted: regenerate,
+          concurrency: 3,
+        }),
+        signal: controller.signal,
+      });
+
+      validateStreamResponseContentType(response);
+
+      await parseAnalysisStream(response, {
+        onBatchReady(raw: unknown) {
+          const data = raw as { total: number };
+          setBulkStatus((prev) => {
+            if (!prev) return null;
+            return { ...prev, total: data.total };
+          });
+        },
+        onItemQueued(raw: unknown) {
+          const data = raw as { assetId: string };
+          const targetJob = eligibleJobs.find((j) => j.assetId === data.assetId);
+          if (targetJob) {
+            updateTempJobFields(targetJob.id, {
+              geminiAnalysisStatus: "queued",
+              geminiAnalysisError: undefined,
+            });
+          }
+        },
+        onItemStarted(raw: unknown) {
+          const data = raw as { assetId: string; active: number; completed: number; failed: number; total: number };
+          const targetJob = eligibleJobs.find((j) => j.assetId === data.assetId);
+          if (targetJob) {
+            updateTempJobFields(targetJob.id, {
+              geminiAnalysisStatus: "analyzing",
+              geminiAnalysisError: undefined,
+            });
+          }
+          setBulkStatus((prev) => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              active: data.active,
+              completed: data.completed,
+              failed: data.failed,
+              total: data.total,
+            };
+          });
+        },
+        onItemResult(raw: unknown) {
+          const data = raw as {
+            assetId: string;
+            analysis: {
+              title: string;
+              caption: string;
+              hashtags: string[];
+              thumbnailTimestampSeconds: number;
+              thumbnailReason?: string;
+            };
+            completed: number;
+            failed: number;
+            total: number;
+          };
+          const { assetId, analysis, completed, failed, total } = data;
+          const targetJob = eligibleJobs.find((j) => j.assetId === assetId);
+          if (targetJob) {
+            const finalResult = analysis;
+            const updates: Partial<VideoJob> = {
+              englishTitle: finalResult.title,
+              englishCaption: finalResult.caption,
+              hashtags: finalResult.hashtags.join(" "),
+              thumbnailMode: "captured",
+              thumbnailAssetId: undefined,
+              thumbnailGenerationStatus: "idle",
+              thumbnailGenerationError: undefined,
+              geminiAnalysisStatus: "complete",
+              geminiAnalysisError: undefined,
+              geminiThumbnailTimestampSeconds: finalResult.thumbnailTimestampSeconds,
+              geminiThumbnailReason: finalResult.thumbnailReason || "AI recommended thumbnail frame.",
+              geminiAnalyzedAt: new Date().toISOString(),
+            };
+
+            const localVideoUrl = targetJob.localVideoUrl;
+            if (localVideoUrl) {
+              void (async () => {
+                try {
+                  const capturedThumbnailUrl = await captureFrameFromVideoUrl(
+                    localVideoUrl,
+                    finalResult.thumbnailTimestampSeconds
+                  );
+                  updateTempJobFields(targetJob.id, { capturedThumbnailUrl });
+                } catch (captureError) {
+                  addSecurityLog(
+                    "WARN",
+                    captureError instanceof Error
+                      ? captureError.message
+                      : "The AI-selected local frame could not be captured.",
+                    targetJob.id
+                  );
+                }
+              })();
+            }
+
+            updateTempJobFields(targetJob.id, updates);
+
+            void (async () => {
+              try {
+                await handleGeneratePersistedThumbnail({
+                  jobId: targetJob.id,
+                  assetId: targetJob.assetId!,
+                  fileName: targetJob.fileName,
+                  timestampSeconds: finalResult.thumbnailTimestampSeconds,
+                  source: "GEMINI_FRAME",
+                });
+                addSecurityLog(
+                  "INFO",
+                  `AI generated English content and selected thumbnail timestamp ${finalResult.thumbnailTimestampSeconds.toFixed(2)}s for ${targetJob.fileName}.`,
+                  targetJob.id
+                );
+              } catch (persistError) {
+                console.error("Failed to generate permanent thumbnail:", persistError);
+              }
+            })();
+          }
+
+          setBulkStatus((prev) => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              completed,
+              failed,
+              total,
+              active: Math.max(0, prev.active - 1),
+            };
+          });
+        },
+        onItemError(raw: unknown) {
+          const data = raw as { assetId: string; code: string; message: string; completed: number; failed: number; total: number };
+          const { assetId, code, message, completed, failed, total } = data;
+          const targetJob = eligibleJobs.find((j) => j.assetId === assetId);
+          if (targetJob) {
+            updateTempJobFields(targetJob.id, {
+              geminiAnalysisStatus: "error",
+              geminiAnalysisError: message,
+            });
+            addSecurityLog(
+              "ERROR",
+              `AI analysis failed for ${targetJob.fileName}: ${message} (${code})`,
+              targetJob.id
+            );
+          }
+
+          setBulkStatus((prev) => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              completed,
+              failed,
+              total,
+              active: Math.max(0, prev.active - 1),
+            };
+          });
+        },
+        onBatchComplete(raw: unknown) {
+          const data = raw as { succeeded: number; failed: number; total: number; cancelled: number };
+          setBulkStatus((prev) => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              completed: data.succeeded,
+              failed: data.failed,
+              total: data.total,
+              cancelled: data.cancelled,
+              active: 0,
+            };
+          });
+          addSecurityLog(
+            "INFO",
+            `AI bulk analysis completed for ${data.succeeded} of ${data.total} validated videos.`,
+          );
+        },
+        onError(err: unknown) {
+          console.error("Batch stream error:", err);
+        },
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        eligibleJobs.forEach((job) => {
+          if (job.geminiAnalysisStatus === "queued" || job.geminiAnalysisStatus === "analyzing") {
+            updateTempJobFields(job.id, {
+              geminiAnalysisStatus: "cancelled",
+            });
+          }
+        });
+      } else {
+        alert(error instanceof Error ? error.message : "An error occurred during bulk analysis.");
       }
     } finally {
       setIsBulkGeminiAnalysisRunning(false);
+      setActiveBatchAssetIds([]);
+      batchAbortControllerRef.current = null;
     }
-
-    addSecurityLog(
-      "INFO",
-      `AI bulk analysis completed for ${completedCount} of ${eligibleJobs.length} validated videos.`,
-    );
   };
 
   // Delete draft from queue
@@ -1417,7 +1650,6 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         fetchJobs();
       }, 0);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   const fetchConnectionAndPages = async () => {
@@ -1503,7 +1735,6 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     }, 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCaptureFrameAction = async () => {
@@ -3043,29 +3274,69 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                       <p className="text-xs text-zinc-500">Configure parameters for local videos awaiting scheduling confirmation.</p>
                     </div>
                     {tempJobsQueue.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          onClick={handleAnalyzeAllValidated}
-                          disabled={
-                            isBulkGeminiAnalysisRunning ||
-                            !tempJobsQueue.some(
-                              (job) =>
-                                job.uploadValidated &&
-                                job.assetId,
-                            )
-                          }
-                          className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:cursor-not-allowed text-white font-bold text-xs py-2 px-4 rounded-lg transition"
-                        >
-                          {isBulkGeminiAnalysisRunning
-                            ? "Analyzing Videos..."
-                            : "Generate All with Gemini"}
-                        </button>
-                        <button
-                          onClick={handleSaveTrigger}
-                          className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-lg transition shadow-md shadow-emerald-600/10"
-                        >
-                          Confirm Scheduled Queue
-                        </button>
+                      <div className="flex flex-col gap-4">
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => handleAnalyzeAllValidated(false)}
+                            disabled={
+                              isBulkGeminiAnalysisRunning ||
+                              !tempJobsQueue.some(
+                                (job) =>
+                                  job.uploadValidated &&
+                                  job.assetId &&
+                                  job.geminiAnalysisStatus !== "complete" &&
+                                  job.geminiAnalysisStatus !== "analyzing"
+                              )
+                            }
+                            className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:cursor-not-allowed text-white font-bold text-xs py-2 px-4 rounded-lg transition"
+                          >
+                            {isBulkGeminiAnalysisRunning && bulkStatus
+                              ? `Analyzing ${bulkStatus.completed + bulkStatus.failed} of ${bulkStatus.total}`
+                              : "Generate All with Gemini"}
+                          </button>
+                          <button
+                            onClick={() => handleAnalyzeAllValidated(true)}
+                            disabled={
+                              isBulkGeminiAnalysisRunning ||
+                              !tempJobsQueue.some(
+                                (job) =>
+                                  job.uploadValidated &&
+                                  job.assetId &&
+                                  job.geminiAnalysisStatus !== "analyzing"
+                              )
+                            }
+                            className="bg-purple-600 hover:bg-purple-500 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:cursor-not-allowed text-white font-bold text-xs py-2 px-4 rounded-lg transition"
+                          >
+                            Regenerate All with AI
+                          </button>
+                          <button
+                            onClick={handleSaveTrigger}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-lg transition shadow-md shadow-emerald-600/10"
+                          >
+                            Confirm Scheduled Queue
+                          </button>
+                        </div>
+                        {bulkStatus && (
+                          <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-4 flex flex-wrap gap-6 items-center justify-between text-xs text-zinc-700">
+                            <div className="flex gap-4">
+                              <div><span className="font-bold text-zinc-900">Total:</span> {bulkStatus.total}</div>
+                              <div><span className="font-bold text-zinc-900">Active:</span> {bulkStatus.active}</div>
+                              <div><span className="font-bold text-zinc-900">Completed:</span> {bulkStatus.completed}</div>
+                              <div><span className="font-bold text-zinc-900">Failed:</span> {bulkStatus.failed}</div>
+                              {bulkStatus.cancelled > 0 && (
+                                <div><span className="font-bold text-zinc-900">Cancelled:</span> {bulkStatus.cancelled}</div>
+                              )}
+                            </div>
+                            {isBulkGeminiAnalysisRunning && (
+                              <button
+                                onClick={handleCancelBulkAnalysis}
+                                className="bg-red-600 hover:bg-red-500 text-white font-bold py-1 px-3 rounded text-[10px] transition"
+                              >
+                                Cancel Bulk Analysis
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -3327,7 +3598,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                     disabled={
                                       !job.uploadValidated ||
                                       !job.assetId ||
-                                      job.geminiAnalysisStatus === "analyzing"
+                                      job.geminiAnalysisStatus === "analyzing" ||
+                                      job.geminiAnalysisStatus === "queued" ||
+                                      (isBulkGeminiAnalysisRunning && activeBatchAssetIds.includes(job.assetId))
                                     }
                                     className="shrink-0 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:cursor-not-allowed px-4 py-2 text-[10px] font-bold text-white transition"
                                   >
@@ -3339,24 +3612,42 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   </button>
                                 </div>
 
-                                {job.geminiAnalysisStatus === "analyzing" && (
-                                  <div className="mt-2 text-[10px] text-indigo-600 animate-pulse font-semibold">
-                                    Analyzing video with local AI… keep this page open.
+                                {job.geminiAnalysisStatus === "queued" && (
+                                  <div className="mt-2 text-[10px] text-amber-600 animate-pulse font-semibold">
+                                    Queued for AI analysis…
                                   </div>
                                 )}
 
-                                {!job.uploadValidated && (
-                                  <div className="mt-2 text-[10px] text-zinc-600">
-                                    Available after the upload reaches Validated status.
+                                {job.geminiAnalysisStatus === "analyzing" && (
+                                  <div className="mt-2 text-[10px] text-indigo-600 animate-pulse font-semibold">
+                                    Analyzing video with local AI…
+                                  </div>
+                                )}
+
+                                {job.geminiAnalysisStatus === "complete" && (
+                                  <div className="mt-2 text-[10px] text-emerald-700 font-semibold">
+                                    AI content generated successfully.
+                                  </div>
+                                )}
+
+                                {job.geminiAnalysisStatus === "cancelled" && (
+                                  <div className="mt-2 text-[10px] text-zinc-500 font-semibold">
+                                    AI analysis cancelled.
                                   </div>
                                 )}
 
                                 {job.geminiAnalysisStatus === "error" &&
                                   job.geminiAnalysisError && (
                                     <div className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[10px] text-rose-700">
-                                      {job.geminiAnalysisError}
+                                      AI analysis failed: {job.geminiAnalysisError}
                                     </div>
                                   )}
+
+                                {!job.uploadValidated && (
+                                  <div className="mt-2 text-[10px] text-zinc-600">
+                                    Available after the upload reaches Validated status.
+                                  </div>
+                                )}
 
                                 {job.geminiAnalysisStatus === "complete" &&
                                   typeof job.geminiThumbnailTimestampSeconds === "number" && (
