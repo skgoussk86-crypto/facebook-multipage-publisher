@@ -172,6 +172,10 @@ export class OllamaClient {
       `The video duration is exactly ${durationSeconds.toFixed(3)} seconds. ` +
       `The frames were extracted at these specific timestamps (in seconds): [${timestamps.join(", ")}]. ` +
       `Choose one of these timestamps as the thumbnailTimestampSeconds. ` +
+      `Evaluate every candidate for sharpness, low motion blur, useful brightness, an unobstructed main subject, clean composition, and immediate visual appeal. ` +
+      `Reject black frames, transition frames, near-duplicates, partially formed actions, obstructed subjects, and frames where the main subject is too small. ` +
+      `For food, product, craft, or demonstration videos, prefer a clearly completed or most informative view of the main item. ` +
+      `Do not default to the same ordinal frame across videos; choose only from the visible quality of this video's candidates. ` +
       `You must output exactly one valid JSON object with the following keys:\n` +
       `{\n` +
       `  "title": "catchy title, single line (3-255 characters)",\n` +

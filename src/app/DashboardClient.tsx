@@ -22,6 +22,9 @@ import {
   parseThumbnailGenerationResponse,
   type DashboardThumbnailSource,
 } from "../lib/thumbnails/thumbnail-dashboard-client";
+import {
+  shouldApplyOllamaThumbnail,
+} from "../lib/thumbnails/thumbnail-selection";
 
 // Types
 interface FacebookPage {
@@ -648,7 +651,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
     if (job.contentType !== "PHOTO" && job.thumbnailMode === "custom") {
       errors.push(
-        "Custom image thumbnails are not yet available for permanent scheduling. Use Facebook Auto or Capture Frame.",
+        "Custom image thumbnails are not yet available for permanent scheduling. Use Facebook Auto, Ollama Best, or Manual Frame.",
       );
     }
 
@@ -1014,6 +1017,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
   const handleAnalyzeJobWithGemini = async (
     job: VideoJob,
+    options?: {
+      forceThumbnailSelection?: boolean;
+    },
   ): Promise<boolean> => {
     if (!job.uploadValidated || !job.assetId) {
       alert(
@@ -1103,6 +1109,13 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       };
 
       const isPhoto = job.contentType === "PHOTO";
+      const applyOllamaThumbnail =
+        !isPhoto &&
+        shouldApplyOllamaThumbnail({
+          thumbnailMode: job.thumbnailMode,
+          thumbnailSource: job.thumbnailSource,
+          force: options?.forceThumbnailSelection,
+        });
       const updates: Partial<VideoJob> = {
         englishTitle: finalResult.title,
         englishCaption: finalResult.caption,
@@ -1110,21 +1123,32 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         geminiAnalysisStatus: "complete",
         geminiAnalysisError: undefined,
         geminiAnalyzedAt: new Date().toISOString(),
-        ...(isPhoto
-          ? {}
-          : {
+        geminiThumbnailTimestampSeconds:
+          isPhoto
+            ? undefined
+            : finalResult.thumbnailTimestampSeconds,
+        geminiThumbnailReason:
+          isPhoto
+            ? undefined
+            : finalResult.thumbnailReason,
+        ...(applyOllamaThumbnail
+          ? {
               thumbnailMode: "captured" as const,
               thumbnailAssetId: undefined,
               thumbnailGenerationStatus: "idle" as const,
               thumbnailGenerationError: undefined,
-              geminiThumbnailTimestampSeconds:
+              thumbnailTimestampSeconds:
                 finalResult.thumbnailTimestampSeconds,
-              geminiThumbnailReason:
-                finalResult.thumbnailReason,
-            }),
+              thumbnailSource:
+                "GEMINI_FRAME" as const,
+            }
+          : {}),
       };
 
-      if (!isPhoto && job.localVideoUrl) {
+      if (
+        applyOllamaThumbnail &&
+        job.localVideoUrl
+      ) {
         try {
           const capturedThumbnailUrl =
             await captureFrameFromVideoUrl(
@@ -1151,6 +1175,22 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         addSecurityLog(
           "INFO",
           `AI generated English title, caption, and five hashtags for ${job.fileName}.`,
+          job.id,
+        );
+        return true;
+      }
+
+      if (!applyOllamaThumbnail) {
+        const preservedSelection =
+          job.thumbnailMode === "custom"
+            ? "the custom JPG selection"
+            : job.thumbnailSource === "MANUAL_FRAME"
+              ? "the manual frame selection"
+              : "Facebook Auto";
+
+        addSecurityLog(
+          "INFO",
+          `AI updated English content for ${job.fileName} and preserved ${preservedSelection}.`,
           job.id,
         );
         return true;
@@ -1200,6 +1240,26 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         delete activeAnalysisAborts.current[job.id];
       }
     }
+  };
+
+  const handleUseOllamaBestFrame = async (
+    job: VideoJob,
+  ): Promise<void> => {
+    updateTempJobFields(job.id, {
+      thumbnailMode: "captured",
+      thumbnailAssetId: undefined,
+      thumbnailGenerationStatus: "idle",
+      thumbnailGenerationError: undefined,
+      thumbnailTimestampSeconds: undefined,
+      thumbnailSource: "GEMINI_FRAME",
+    });
+
+    await handleAnalyzeJobWithGemini(
+      job,
+      {
+        forceThumbnailSelection: true,
+      },
+    );
   };
 
   const handleCancelBulkAnalysis = () => {
@@ -1324,6 +1384,14 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           if (targetJob) {
             const finalResult = analysis;
             const isPhoto = targetJob.contentType === "PHOTO";
+            const applyOllamaThumbnail =
+              !isPhoto &&
+              shouldApplyOllamaThumbnail({
+                thumbnailMode:
+                  targetJob.thumbnailMode,
+                thumbnailSource:
+                  targetJob.thumbnailSource,
+              });
             const updates: Partial<VideoJob> = {
               englishTitle: finalResult.title,
               englishCaption: finalResult.caption,
@@ -1331,20 +1399,33 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               geminiAnalysisStatus: "complete",
               geminiAnalysisError: undefined,
               geminiAnalyzedAt: new Date().toISOString(),
-              ...(isPhoto
-                ? {}
-                : {
+              geminiThumbnailTimestampSeconds:
+                isPhoto
+                  ? undefined
+                  : finalResult.thumbnailTimestampSeconds,
+              geminiThumbnailReason:
+                isPhoto
+                  ? undefined
+                  : finalResult.thumbnailReason || "AI recommended thumbnail frame.",
+              ...(applyOllamaThumbnail
+                ? {
                     thumbnailMode: "captured" as const,
                     thumbnailAssetId: undefined,
                     thumbnailGenerationStatus: "idle" as const,
                     thumbnailGenerationError: undefined,
-                    geminiThumbnailTimestampSeconds: finalResult.thumbnailTimestampSeconds,
-                    geminiThumbnailReason: finalResult.thumbnailReason || "AI recommended thumbnail frame.",
-                  }),
+                    thumbnailTimestampSeconds:
+                      finalResult.thumbnailTimestampSeconds,
+                    thumbnailSource:
+                      "GEMINI_FRAME" as const,
+                  }
+                : {}),
             };
 
             const localVideoUrl = targetJob.localVideoUrl;
-            if (!isPhoto && localVideoUrl) {
+            if (
+              applyOllamaThumbnail &&
+              localVideoUrl
+            ) {
               void (async () => {
                 try {
                   const capturedThumbnailUrl = await captureFrameFromVideoUrl(
@@ -1372,7 +1453,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 `AI generated English title, caption, and five hashtags for ${targetJob.fileName}.`,
                 targetJob.id,
               );
-            } else {
+            } else if (applyOllamaThumbnail) {
               void (async () => {
                 try {
                   await handleGeneratePersistedThumbnail({
@@ -1391,6 +1472,19 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   console.error("Failed to generate permanent thumbnail:", persistError);
                 }
               })();
+            } else {
+              const preservedSelection =
+                targetJob.thumbnailMode === "custom"
+                  ? "the custom JPG selection"
+                  : targetJob.thumbnailSource === "MANUAL_FRAME"
+                    ? "the manual frame selection"
+                    : "Facebook Auto";
+
+              addSecurityLog(
+                "INFO",
+                `AI updated English content for ${targetJob.fileName} and preserved ${preservedSelection}.`,
+                targetJob.id,
+              );
             }
           }
 
@@ -3443,7 +3537,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                           >
                             {isBulkGeminiAnalysisRunning && bulkStatus
                               ? `Analyzing ${bulkStatus.completed + bulkStatus.failed} of ${bulkStatus.total}`
-                              : "Generate All with Gemini"}
+                              : "Generate All with AI"}
                           </button>
                           <button
                             onClick={() => handleAnalyzeAllValidated(true)}
@@ -3598,7 +3692,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                 <div className="border-t border-zinc-200 pt-3.5 space-y-2 text-xs">
                                 <label className="block font-mono text-zinc-500 uppercase tracking-wider text-[10px]">Assign Thumbnail</label>
 
-                                <div className="flex gap-2">
+                                <div className="grid grid-cols-2 gap-2">
                                   <button
                                     onClick={() =>
                                       updateTempJobFields(job.id, {
@@ -3613,11 +3707,34 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                     disabled={
                                       job.thumbnailGenerationStatus === "generating"
                                     }
-                                    className={`flex-1 py-1 border rounded text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    className={`py-1.5 border rounded text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
                                       job.thumbnailMode === "auto" ? "bg-zinc-200 border-zinc-300 text-zinc-900" : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                                     }`}
                                   >
                                     Facebook Auto
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      void handleUseOllamaBestFrame(job);
+                                    }}
+                                    disabled={
+                                      !job.uploadValidated ||
+                                      !job.assetId ||
+                                      job.geminiAnalysisStatus === "analyzing" ||
+                                      job.geminiAnalysisStatus === "queued" ||
+                                      job.thumbnailGenerationStatus === "generating"
+                                    }
+                                    className={`py-1.5 border rounded text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                      job.thumbnailMode === "captured" &&
+                                      job.thumbnailSource === "GEMINI_FRAME"
+                                        ? "bg-indigo-100 border-indigo-300 text-indigo-800"
+                                        : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
+                                    }`}
+                                  >
+                                    {job.geminiAnalysisStatus === "analyzing" &&
+                                    job.thumbnailSource === "GEMINI_FRAME"
+                                      ? "Ollama Finding..."
+                                      : "Ollama Best"}
                                   </button>
                                   <button
                                     onClick={() => handleOpenFrameCaptureModal(job)}
@@ -3626,18 +3743,21 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                       !job.assetId ||
                                       job.thumbnailGenerationStatus === "generating"
                                     }
-                                    className={`flex-1 py-1 border rounded text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                                      job.thumbnailMode === "captured" ? "bg-zinc-200 border-zinc-300 text-zinc-900" : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
+                                    className={`py-1.5 border rounded text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                      job.thumbnailMode === "captured" &&
+                                      job.thumbnailSource === "MANUAL_FRAME"
+                                        ? "bg-emerald-100 border-emerald-300 text-emerald-800"
+                                        : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                                     }`}
                                   >
-                                    Capture Frame
+                                    Manual Frame
                                   </button>
-                                  <div className="relative flex-1">
+                                  <div className="relative">
                                     <button
                                       disabled={
                                         job.thumbnailGenerationStatus === "generating"
                                       }
-                                      className={`w-full py-1 border rounded text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                      className={`w-full py-1.5 border rounded text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
                                         job.thumbnailMode === "custom" ? "bg-zinc-200 border-zinc-300 text-zinc-900" : "border-zinc-200 text-zinc-500 hover:bg-zinc-50"
                                       }`}
                                     >
@@ -3678,7 +3798,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                       alt="Captured Frame Preview"
                                       className="aspect-video w-full rounded border border-zinc-200 object-cover"
                                     />
-                                    <span className="text-[9px] text-zinc-500 mt-1 block">Local video frame capture</span>
+                                    <span className="text-[9px] text-zinc-500 mt-1 block">
+                                      {job.thumbnailSource === "GEMINI_FRAME"
+                                        ? "Ollama-selected video frame"
+                                        : "Manually selected video frame"}
+                                    </span>
                                   </div>
                                 )}
                                 {job.thumbnailMode === "custom" && job.customThumbnailUrl && (
@@ -3709,7 +3833,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                   job.thumbnailGenerationStatus === "complete" &&
                                   job.thumbnailAssetId && (
                                     <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[9px] text-emerald-800">
-                                      Permanent thumbnail ready
+                                      {job.thumbnailSource === "GEMINI_FRAME"
+                                        ? "Ollama thumbnail ready"
+                                        : "Manual thumbnail ready"}
                                       {typeof job.thumbnailTimestampSeconds === "number"
                                         ? ` at ${job.thumbnailTimestampSeconds.toFixed(2)}s`
                                         : ""}.
@@ -3753,10 +3879,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                                   <div>
                                     <div className="text-[10px] font-mono uppercase tracking-wider text-indigo-700 font-bold">
-                                      AI Auto Content + Frame Selection
+                                      AI Content + Optional Ollama Thumbnail
                                     </div>
                                     <p className="mt-1 text-[10px] leading-relaxed text-indigo-700/80">
-                                      Generates the English title, caption, exactly five hashtags, and selects the strongest video timestamp.
+                                      Generates the English title, caption, and exactly five hashtags. It changes the thumbnail only when Ollama Best is selected; Manual Frame and Facebook Auto remain protected.
                                     </p>
                                   </div>
                                   <button
@@ -4211,7 +4337,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             {/* Slider control */}
             <div className="space-y-2">
               <div className="flex justify-between items-center text-xs font-mono text-zinc-500">
-                <span>Capture Position: {frameCaptureTime.toFixed(1)}s</span>
+                <span>Manual Position: {frameCaptureTime.toFixed(1)}s</span>
                 <span>Total Length: {frameCaptureDuration}s</span>
               </div>
               <input
@@ -4237,7 +4363,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition"
               >
                 {frameCaptureUrl
-                  ? "Capture and Store Frame"
+                  ? "Use and Store Manual Frame"
                   : "Generate Permanent Thumbnail"}
               </button>
             </div>
