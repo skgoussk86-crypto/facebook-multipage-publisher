@@ -133,14 +133,14 @@ async function runTests() {
   mockLocalStorage.clear();
   const controller2 = new UploadQueueController();
   const validFile = new FakeFile('valid.mp4', 10 * 1024 * 1024, 'video/mp4', 1000);
-  const invalidTypeFile = new FakeFile('invalid.png', 10 * 1024 * 1024, 'image/png', 2000);
+  const invalidTypeFile = new FakeFile('invalid.avi', 10 * 1024 * 1024, 'video/x-msvideo', 2000);
   const tooLargeFile = new FakeFile('large.mp4', 600 * 1024 * 1024, 'video/mp4', 3000);
 
   controller2.addFiles([validFile as unknown as File, invalidTypeFile as unknown as File, tooLargeFile as unknown as File]);
   const items = controller2.getItems();
   
   const validItem = items.find((i) => i.filename === 'valid.mp4');
-  const invalidTypeItem = items.find((i) => i.filename === 'invalid.png');
+  const invalidTypeItem = items.find((i) => i.filename === 'invalid.avi');
   const tooLargeItem = items.find((i) => i.filename === 'large.mp4');
 
   if (!validItem || validItem.status === 'FAILED') {

@@ -1,4 +1,4 @@
-import { BrowserUploaderStatus, BrowserUploadState, VideoMetadata, UploadFileLike } from './upload-types';
+import { BrowserUploaderStatus, BrowserUploadState, MediaMetadata, UploadFileLike, getUploadFileMimeType } from './upload-types';
 import {
   GoogleDriveResumableUploader,
   GoogleUploadTransport,
@@ -348,7 +348,7 @@ export class BrowserMultipartUploader {
           body: JSON.stringify({
             filename: this.file.name,
             expectedSize: this.file.size.toString(),
-            declaredMimeType: this.file.type || 'video/mp4',
+            declaredMimeType: getUploadFileMimeType(this.file),
           }),
           signal: this.activeController.signal,
         });
@@ -450,7 +450,7 @@ export class BrowserMultipartUploader {
     if (statusData.expectedSize !== this.file.size.toString()) {
       throw new Error('File size mismatch');
     }
-    const localMime = this.file.type || 'video/mp4';
+    const localMime = getUploadFileMimeType(this.file);
     if (statusData.declaredMimeType !== localMime) {
       throw new Error('MIME type mismatch');
     }
@@ -651,7 +651,7 @@ export class BrowserMultipartUploader {
           if (this.pollIntervalId) clearInterval(this.pollIntervalId);
           this.clearStorage();
 
-          const metadata: VideoMetadata = {
+          const metadata: MediaMetadata = {
             durationMs: parsed.durationMs,
             width: parsed.width,
             height: parsed.height,

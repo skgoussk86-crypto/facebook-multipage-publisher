@@ -1,8 +1,13 @@
 import { BrowserMultipartUploader } from './browser-multipart-uploader';
-import { BrowserUploaderStatus, VideoMetadata } from './upload-types';
+import { BrowserUploaderStatus, MediaMetadata } from './upload-types';
+import {
+  getSupportedMediaDescriptor,
+  inferSupportedMimeType,
+  type UploadContentType,
+} from './media-file-types';
 import { GoogleUploadTransport } from './google-drive-resumable-uploader';
 
-function createLocalVideoUrl(
+function createLocalMediaUrl(
   file: File,
 ): string | undefined {
   if (
@@ -19,7 +24,7 @@ function createLocalVideoUrl(
   }
 }
 
-function revokeLocalVideoUrl(
+function revokeLocalMediaUrl(
   url: string | undefined,
 ): void {
   if (
@@ -64,7 +69,7 @@ export interface QueueItem {
   assetId?: string;
   error?: string;
   retryAttempt?: number;
-  metadata?: VideoMetadata;
+  metadata?: MediaMetadata;
   provider?: 'R2' | 'GOOGLE_DRIVE';
   idempotencyKey: string;
   timestamp: number;
@@ -72,7 +77,7 @@ export interface QueueItem {
 
   // Job metadata fields
   pageId: string;
-  contentType: 'VIDEO' | 'REEL';
+  contentType: UploadContentType;
   englishTitle: string;
   englishCaption: string;
   hashtags: string;
@@ -81,6 +86,8 @@ export interface QueueItem {
   thumbnailMode: 'auto' | 'custom' | 'captured';
   customThumbnailUrl?: string;
   capturedThumbnailUrl?: string;
+  localMediaUrl?: string;
+  /** Legacy in-memory field kept for compatibility with existing restored cards. */
   localVideoUrl?: string;
   durationSeconds?: number;
   geminiAnalysisStatus?:
@@ -104,14 +111,14 @@ export interface QueueItem {
 }
 
 export function getFileFingerprint(file: { name: string; size: number; type: string; lastModified: number }): string {
-  return `fp-${file.name}-${file.size}-${file.type || 'video/mp4'}-${file.lastModified}`;
+  return `fp-${file.name}-${file.size}-${inferSupportedMimeType(file.name, file.type)}-${file.lastModified}`;
 }
 
 export interface UploadQueueControllerOptions {
   maxConcurrency?: number;
   storageKey?: string;
   onChange?: (items: QueueItem[]) => void;
-  onUploadValidated?: (itemId: string, assetId: string, metadata: VideoMetadata) => void;
+  onUploadValidated?: (itemId: string, assetId: string, metadata: MediaMetadata) => void;
   transport?: GoogleUploadTransport;
 }
 
@@ -121,7 +128,7 @@ export class UploadQueueController {
   private maxConcurrency = 2;
   private storageKey = 'fb_publisher_upload_queue_v3';
   private onChange?: (items: QueueItem[]) => void;
-  private onUploadValidated?: (itemId: string, assetId: string, metadata: VideoMetadata) => void;
+  private onUploadValidated?: (itemId: string, assetId: string, metadata: MediaMetadata) => void;
   private transport?: GoogleUploadTransport;
 
   constructor(options?: UploadQueueControllerOptions) {
@@ -259,7 +266,10 @@ export class UploadQueueController {
           idempotencyKey: item.idempotencyKey,
           timestamp: item.timestamp || now,
           pageId: item.pageId || '',
-          contentType: item.contentType || 'VIDEO',
+          contentType:
+            item.contentType === 'PHOTO' || item.contentType === 'REEL' || item.contentType === 'VIDEO'
+              ? item.contentType
+              : getSupportedMediaDescriptor(item.filename, item.type)?.contentType || 'VIDEO',
           englishTitle: item.englishTitle || '',
           englishCaption: item.englishCaption || '',
           hashtags: item.hashtags || '',
@@ -381,7 +391,9 @@ export class UploadQueueController {
 
     files.forEach((file) => {
       const fingerprint = getFileFingerprint(file);
-      const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+      const descriptor = getSupportedMediaDescriptor(file.name, file.type);
+      const extensionDescriptor = getSupportedMediaDescriptor(file.name);
+      const contentType: UploadContentType = descriptor?.contentType || extensionDescriptor?.contentType || 'VIDEO';
 
       // Stable client item ID based on fingerprint + index to avoid React key collision if selected again
       const id = 'queue-' + fingerprint;
@@ -407,7 +419,7 @@ export class UploadQueueController {
           idempotencyKey: `idem-${Math.random().toString(36).substring(2, 11)}`,
           timestamp: now,
           pageId: defaultPageId,
-          contentType: 'VIDEO',
+          contentType,
           englishTitle: file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' '),
           englishCaption: '',
           hashtags: '',
@@ -439,7 +451,7 @@ export class UploadQueueController {
           idempotencyKey: `idem-${Math.random().toString(36).substring(2, 11)}`,
           timestamp: now,
           pageId: defaultPageId,
-          contentType: 'VIDEO',
+          contentType,
           englishTitle: file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' '),
           englishCaption: '',
           hashtags: '',
@@ -451,10 +463,12 @@ export class UploadQueueController {
         return;
       }
 
-      // 2. File size and type validations
+      // 2. File size and media type validations
       let error: string | undefined = undefined;
-      if (ext !== '.mp4' && ext !== '.mov') {
-        error = 'Unsupported file type. Only MP4 and MOV are allowed.';
+      if (!extensionDescriptor) {
+        error = 'Unsupported file type. Use MP4, MOV, JPG, JPEG, PNG, or WebP.';
+      } else if (!descriptor) {
+        error = `File MIME type does not match the ${extensionDescriptor.extension} extension.`;
       } else if (file.size > maxFileSizeMB * 1024 * 1024) {
         error = `File exceeds maximum configured size of ${maxFileSizeMB} MB.`;
       }
@@ -474,17 +488,20 @@ export class UploadQueueController {
         timestamp: now,
         file: error ? undefined : file,
         pageId: defaultPageId,
-        contentType: 'VIDEO',
+        contentType,
         englishTitle: file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' '),
         englishCaption: '',
         hashtags: '',
         scheduledTimeKolkata: '',
         scheduledTimeUTC: '',
         thumbnailMode: 'auto',
-        localVideoUrl:
-          error ? undefined : createLocalVideoUrl(file),
+        localMediaUrl: error ? undefined : createLocalMediaUrl(file),
         geminiAnalysisStatus: 'idle',
       };
+
+      if (newItem.contentType !== 'PHOTO') {
+        newItem.localVideoUrl = newItem.localMediaUrl;
+      }
 
       this.items.push(newItem);
       addedIds.push(id);
@@ -570,8 +587,10 @@ export class UploadQueueController {
     if (status.provider) item.provider = status.provider;
     if (status.metadata) {
       item.metadata = status.metadata;
-      if (status.metadata.durationMs) {
+      if (typeof status.metadata.durationMs === 'number' && status.metadata.durationMs > 0) {
         item.durationSeconds = Math.round(status.metadata.durationMs / 1000);
+      } else {
+        item.durationSeconds = undefined;
       }
     }
 
@@ -780,7 +799,7 @@ export class UploadQueueController {
       this.cleanupUploader(itemId);
     }
 
-    revokeLocalVideoUrl(item.localVideoUrl);
+    revokeLocalMediaUrl(item.localMediaUrl || item.localVideoUrl);
     this.items = this.items.filter((i) => i.id !== itemId);
     this.saveToStorage();
     this.notify();
@@ -791,19 +810,26 @@ export class UploadQueueController {
     const item = this.items.find((i) => i.id === itemId);
     if (!item) return { success: false, error: 'Item not found.' };
 
+    const originalMime = inferSupportedMimeType(item.filename, item.type);
+    const selectedMime = inferSupportedMimeType(file.name, file.type);
+    const descriptor = getSupportedMediaDescriptor(file.name, file.type);
     const matches =
       item.filename === file.name &&
       item.size === file.size &&
-      (item.type === file.type || (!item.type && !file.type)) &&
-      item.lastModified === file.lastModified;
+      originalMime === selectedMime &&
+      item.lastModified === file.lastModified &&
+      descriptor !== null;
 
     if (!matches) {
       return { success: false, error: 'RECOVERY_FILE_MISMATCH' };
     }
 
-    revokeLocalVideoUrl(item.localVideoUrl);
+    revokeLocalMediaUrl(item.localMediaUrl || item.localVideoUrl);
     item.file = file;
-    item.localVideoUrl = createLocalVideoUrl(file);
+    item.type = file.type;
+    item.contentType = descriptor!.contentType;
+    item.localMediaUrl = createLocalMediaUrl(file);
+    item.localVideoUrl = item.contentType === 'PHOTO' ? undefined : item.localMediaUrl;
     item.status = 'PAUSED';
     item.error = undefined;
     this.saveToStorage();
@@ -824,7 +850,7 @@ export class UploadQueueController {
   public clearAll() {
     this.items.forEach((item) => {
       this.cleanupUploader(item.id);
-      revokeLocalVideoUrl(item.localVideoUrl);
+      revokeLocalMediaUrl(item.localMediaUrl || item.localVideoUrl);
     });
     this.items = [];
     this.saveToStorage();
@@ -854,18 +880,20 @@ export class UploadQueueController {
           item.status = 'VALIDATED';
           item.progressPercent = 100;
           item.uploadedBytes = item.size;
-          if (serverData.durationMs) {
+          item.metadata = {
+            durationMs: serverData.durationMs,
+            width: serverData.width,
+            height: serverData.height,
+            frameRate: serverData.frameRate,
+            videoCodec: serverData.videoCodec,
+            audioCodec: serverData.audioCodec,
+            containerFormat: serverData.containerFormat,
+            detectedMimeType: serverData.detectedMimeType,
+          };
+          if (typeof serverData.durationMs === 'number' && serverData.durationMs > 0) {
             item.durationSeconds = Math.round(serverData.durationMs / 1000);
-            item.metadata = {
-              durationMs: serverData.durationMs,
-              width: serverData.width,
-              height: serverData.height,
-              frameRate: serverData.frameRate,
-              videoCodec: serverData.videoCodec,
-              audioCodec: serverData.audioCodec,
-              containerFormat: serverData.containerFormat,
-              detectedMimeType: serverData.detectedMimeType,
-            };
+          } else {
+            item.durationSeconds = undefined;
           }
           this.saveToStorage();
           this.notify();

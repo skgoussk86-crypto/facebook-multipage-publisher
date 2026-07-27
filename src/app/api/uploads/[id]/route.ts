@@ -25,9 +25,16 @@ interface SerializedAsset {
 function getNormalizedFailureMessage(failureCode: string | null): string | null {
   if (!failureCode) return null;
   const messages: Record<string, string> = {
-    'INVALID_MEDIA_FORMAT': 'The uploaded file is not a supported video format.',
-    'PROBING_FAILED': 'Failed to read media metadata. Please ensure it is a valid video file.',
+    'INVALID_MEDIA_FORMAT': 'The uploaded file is not a supported media format.',
+    'PROBING_FAILED': 'Failed to read media metadata. Please ensure it is a valid supported file.',
     'SIZE_MISMATCH': 'Uploaded size does not match the expected file size.',
+    'UNSUPPORTED_MEDIA_TYPE': 'Only MP4, MOV, JPEG, PNG, and WebP uploads are supported.',
+    'UNSUPPORTED_IMAGE_FORMAT': 'The image signature is not JPEG, PNG, or WebP.',
+    'INVALID_IMAGE_STRUCTURE': 'The uploaded image structure is invalid or incomplete.',
+    'MIME_MISMATCH': 'The detected media type does not match the selected file extension.',
+    'INVALID_DIMENSIONS': 'The uploaded media has invalid dimensions.',
+    'IMAGE_DIMENSIONS_EXCEEDED': 'The uploaded image dimensions exceed the supported safety limit.',
+    'IMAGE_PIXEL_LIMIT_EXCEEDED': 'The uploaded image contains too many pixels.',
     'ABORTED_BY_USER': 'Upload was cancelled.',
     'TIMEOUT': 'Upload session timed out.',
   };

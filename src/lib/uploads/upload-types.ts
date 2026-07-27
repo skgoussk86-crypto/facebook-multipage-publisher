@@ -1,3 +1,5 @@
+import { inferSupportedMimeType } from './media-file-types';
+
 export type BrowserUploadState =
   | 'idle'
   | 'selected'
@@ -12,16 +14,19 @@ export type BrowserUploadState =
   | 'aborting'
   | 'aborted';
 
-export interface VideoMetadata {
-  durationMs?: number;
-  width?: number;
-  height?: number;
-  frameRate?: number;
-  videoCodec?: string;
-  audioCodec?: string;
-  containerFormat?: string;
-  detectedMimeType?: string;
+export interface MediaMetadata {
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
+  frameRate?: number | null;
+  videoCodec?: string | null;
+  audioCodec?: string | null;
+  containerFormat?: string | null;
+  detectedMimeType?: string | null;
 }
+
+// Backward-compatible name used by the existing video tests and call sites.
+export type VideoMetadata = MediaMetadata;
 
 export interface BrowserUploaderStatus {
   state: BrowserUploadState;
@@ -31,7 +36,7 @@ export interface BrowserUploaderStatus {
   assetId?: string;
   error?: string;
   retryAttempt?: number;
-  metadata?: VideoMetadata;
+  metadata?: MediaMetadata;
   provider?: 'R2' | 'GOOGLE_DRIVE';
 }
 
@@ -41,4 +46,8 @@ export interface UploadFileLike {
   readonly type: string;
   readonly lastModified: number;
   slice(start?: number, end?: number, contentType?: string): Blob;
+}
+
+export function getUploadFileMimeType(file: Pick<UploadFileLike, 'name' | 'type'>): string {
+  return inferSupportedMimeType(file.name, file.type);
 }

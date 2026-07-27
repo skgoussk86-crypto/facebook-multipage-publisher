@@ -7,6 +7,8 @@ import { prisma } from '../prisma-client';
 import { getStorageConfig } from './index';
 import { MediaProbe, MediaMetadata, MediaValidationError } from './media-probe';
 import { FfprobeMediaProbe } from './ffprobe-media-probe';
+import { ImageMetadataProbe } from './image-metadata-probe';
+import { getMediaKindFromMimeType } from '../uploads/media-file-types';
 import { prepareValidationSource } from './validation-source-resolver';
 import { NotFoundError, InvalidStateTransitionError } from './upload-session-encryption';
 
@@ -214,10 +216,39 @@ export class VideoValidationService {
         return await this.transitionToFailure(claim, 'SIZE_MISMATCH', `Downloaded content size (${downloadedBytes} bytes) does not match the expected size (${targetSize} bytes).`);
       }
 
-      // 4. Run probe
-      const metadata = await this.activeProbe.probe(tempFilePath);
+      // 4. Select the validator from the declared media type.
+      const declaredKind = getMediaKindFromMimeType(asset.declaredMimeType);
+      if (!declaredKind) {
+        return await this.transitionToFailure(
+          claim,
+          'UNSUPPORTED_MEDIA_TYPE',
+          'Only MP4, MOV, JPEG, PNG, and WebP uploads are supported.',
+        );
+      }
 
-      // 5. Evaluate validation rules
+      const metadata = declaredKind === 'image'
+        ? await ImageMetadataProbe.probe(tempFilePath)
+        : await this.activeProbe.probe(tempFilePath);
+
+      if (
+        metadata.detectedMimeType &&
+        metadata.detectedMimeType.toLowerCase() !== asset.declaredMimeType.toLowerCase()
+      ) {
+        return await this.transitionToFailure(
+          claim,
+          'MIME_MISMATCH',
+          'Detected media type does not match the declared file type.',
+        );
+      }
+
+      // 5. Evaluate media-specific validation rules.
+      if (declaredKind === 'image') {
+        if (metadata.width <= 0 || metadata.height <= 0) {
+          return await this.transitionToFailure(claim, 'INVALID_DIMENSIONS', 'Image width and height must be positive.');
+        }
+        return await this.transitionToSuccess(claim, metadata);
+      }
+
       const formats = metadata.containerFormat.toLowerCase().split(',');
       const isMp4OrMov = formats.some(f => {
         const trimmed = f.trim();
@@ -228,7 +259,7 @@ export class VideoValidationService {
         return await this.transitionToFailure(claim, 'INVALID_CONTAINER', 'Container format must be MP4 or MOV.');
       }
 
-      const videoCodecLower = metadata.videoCodec.toLowerCase();
+      const videoCodecLower = metadata.videoCodec?.toLowerCase() || '';
       if (!videoCodecLower.includes('h264') && !videoCodecLower.includes('h.264') && !videoCodecLower.includes('avc')) {
         return await this.transitionToFailure(claim, 'INVALID_VIDEO_CODEC', 'Video codec must be H.264.');
       }
@@ -240,7 +271,7 @@ export class VideoValidationService {
         }
       }
 
-      if (metadata.durationMs <= 0) {
+      if (metadata.durationMs === null || metadata.durationMs <= 0) {
         return await this.transitionToFailure(claim, 'INVALID_DURATION', 'Video duration must be greater than zero.');
       }
 
@@ -252,7 +283,7 @@ export class VideoValidationService {
         return await this.transitionToFailure(claim, 'INVALID_DIMENSIONS', 'Width and height must be positive.');
       }
 
-      if (metadata.frameRate <= 0) {
+      if (metadata.frameRate === null || metadata.frameRate <= 0) {
         return await this.transitionToFailure(claim, 'INVALID_FRAMERATE', 'Frame rate must be positive.');
       }
 
@@ -442,7 +473,7 @@ export class VideoValidationService {
       await tx.auditLog.create({
         data: {
           action: 'UPLOAD_VALIDATION_SUCCESS',
-          details: `Successfully validated asset ${claim.assetId}. Format: ${meta.containerFormat}, Video: ${meta.videoCodec}, Audio: ${meta.audioCodec || 'none'}, Duration: ${meta.durationMs}ms, Size: ${meta.width}x${meta.height}.`,
+          details: `Successfully validated asset ${claim.assetId}. Format: ${meta.containerFormat}, Media codec: ${meta.videoCodec || 'not applicable'}, Audio: ${meta.audioCodec || 'none'}, Duration: ${meta.durationMs ?? 'not applicable'}ms, Size: ${meta.width}x${meta.height}.`,
           userId: claim.userId
         }
       });

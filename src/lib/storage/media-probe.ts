@@ -1,11 +1,11 @@
 export interface MediaMetadata {
   containerFormat: string;
-  durationMs: number;
-  videoCodec: string;
+  durationMs: number | null;
+  videoCodec: string | null;
   audioCodec: string | null;
   width: number;
   height: number;
-  frameRate: number;
+  frameRate: number | null;
   detectedMimeType: string | null;
 }
 

@@ -16,6 +16,7 @@ export * from './finalization-claim-service';
 export * from './upload-finalization-service';
 export * from './media-probe';
 export * from './ffprobe-media-probe';
+export * from './image-metadata-probe';
 export * from './video-validation-service';
 
 

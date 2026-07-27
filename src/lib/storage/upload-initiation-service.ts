@@ -12,6 +12,7 @@ import {
 import {
   UploadSessionService,
 } from './upload-session-service';
+import { getSupportedMediaDescriptor } from '../uploads/media-file-types';
 
 export const PART_SIZE_BYTES = 10 * 1024 * 1024; // Fixed 10 MiB part size
 export const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024; // Max 500 MiB size
@@ -55,19 +56,10 @@ export class UploadInitiationService {
     }
 
     const mime = data.declaredMimeType.trim().toLowerCase();
-    if (mime !== 'video/mp4' && mime !== 'video/quicktime') {
-      throw new Error('UNSUPPORTED_MEDIA_TYPE');
-    }
-
-    const ext = data.originalName.slice(data.originalName.lastIndexOf('.')).toLowerCase();
-    if (ext === '.mp4' && mime !== 'video/mp4') {
-      throw new Error('MIME_MISMATCH');
-    }
-    if (ext === '.mov' && mime !== 'video/quicktime') {
-      throw new Error('MIME_MISMATCH');
-    }
-    if (ext !== '.mp4' && ext !== '.mov') {
-      throw new Error('UNSUPPORTED_MEDIA_TYPE');
+    const mediaDescriptor = getSupportedMediaDescriptor(data.originalName, mime);
+    if (!mediaDescriptor) {
+      const byExtension = getSupportedMediaDescriptor(data.originalName);
+      throw new Error(byExtension ? 'MIME_MISMATCH' : 'UNSUPPORTED_MEDIA_TYPE');
     }
 
     const totalParts = Math.ceil(Number(data.expectedSize) / PART_SIZE_BYTES);

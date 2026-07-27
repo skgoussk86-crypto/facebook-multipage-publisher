@@ -1,4 +1,4 @@
-import { BrowserUploaderStatus, BrowserUploadState, VideoMetadata, UploadFileLike } from './upload-types';
+import { BrowserUploaderStatus, BrowserUploadState, MediaMetadata, UploadFileLike, getUploadFileMimeType } from './upload-types';
 
 export interface GoogleUploadTransportRequest {
   method: 'PUT' | 'POST';
@@ -265,7 +265,7 @@ export function matchRecoveryRecord(
         const matches =
           record.filename === file.name &&
           record.totalBytes === file.size.toString() &&
-          record.mimeType === (file.type || 'video/mp4') &&
+          record.mimeType === (getUploadFileMimeType(file)) &&
           record.lastModified === file.lastModified;
 
         if (matches) {
@@ -293,7 +293,7 @@ export function matchRecoveryRecord(
       const matches =
         record.filename === file.name &&
         record.totalBytes === file.size.toString() &&
-        record.mimeType === (file.type || 'video/mp4') &&
+        record.mimeType === (getUploadFileMimeType(file)) &&
         record.lastModified === file.lastModified;
 
       if (matches) {
@@ -344,7 +344,7 @@ export function parseGoogleInitiationResponse(
   if (typeof filename !== 'string' || filename !== file.name) {
     throw new Error('GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE');
   }
-  const expectedMime = file.type || 'video/mp4';
+  const expectedMime = getUploadFileMimeType(file);
   if (typeof mimeType !== 'string' || mimeType !== expectedMime) {
     throw new Error('GOOGLE_DRIVE_INVALID_PROVIDER_RESPONSE');
   }
@@ -485,7 +485,7 @@ export class GoogleDriveResumableUploader {
   private state: BrowserUploadState = 'idle';
   private uploadedBytes = 0;
   private unchangedOffsetCount = 0;
-  private metadata?: VideoMetadata;
+  private metadata?: MediaMetadata;
 
   private activeController: AbortController | null = null;
   private activeTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -566,7 +566,7 @@ export class GoogleDriveResumableUploader {
             assetId: this.assetId,
             sessionUri: this.sessionUri,
             filename: this.file.name,
-            mimeType: this.file.type || 'video/mp4',
+            mimeType: getUploadFileMimeType(this.file),
             totalBytes: this.file.size.toString(),
             lastModified: this.file.lastModified,
           };
@@ -577,7 +577,7 @@ export class GoogleDriveResumableUploader {
             provider: 'GOOGLE_DRIVE',
             assetId: this.assetId,
             filename: this.file.name,
-            mimeType: this.file.type || 'video/mp4',
+            mimeType: getUploadFileMimeType(this.file),
             totalBytes: this.file.size.toString(),
             lastModified: this.file.lastModified,
           };
@@ -603,7 +603,7 @@ export class GoogleDriveResumableUploader {
               await this.triggerValidateAndPoll();
               return;
             } else if (parsedStatus.status === 'VALIDATED') {
-              const metadata: VideoMetadata = {
+              const metadata: MediaMetadata = {
                 durationMs: parsedStatus.durationMs,
                 width: parsedStatus.width,
                 height: parsedStatus.height,
@@ -821,7 +821,7 @@ export class GoogleDriveResumableUploader {
         }
 
         if (parsed.status === 'VALIDATED') {
-          const metadata: VideoMetadata = {
+          const metadata: MediaMetadata = {
             durationMs: parsed.durationMs,
             width: parsed.width,
             height: parsed.height,
@@ -1144,7 +1144,7 @@ export class GoogleDriveResumableUploader {
       method: 'PUT',
       url: this.sessionUri || `/api/uploads/${this.assetId}/chunk`,
       headers: {
-        'Content-Type': this.file.type || 'video/mp4',
+        'Content-Type': getUploadFileMimeType(this.file),
         'Content-Length': length.toString(),
         'Content-Range': `bytes ${start}-${end - 1}/${this.file.size}`,
       },
@@ -1296,7 +1296,7 @@ export class GoogleDriveResumableUploader {
         const parsed = parseValidationStatus(data);
         if (parsed.status === 'VALIDATED') {
           this.clearStorage();
-          const metadata: VideoMetadata = {
+          const metadata: MediaMetadata = {
             durationMs: parsed.durationMs,
             width: parsed.width,
             height: parsed.height,
@@ -1408,7 +1408,7 @@ export class GoogleDriveResumableUploader {
           if (this.pollIntervalId) clearInterval(this.pollIntervalId);
           this.clearStorage();
 
-          const metadata: VideoMetadata = {
+          const metadata: MediaMetadata = {
             durationMs: parsed.durationMs,
             width: parsed.width,
             height: parsed.height,

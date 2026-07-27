@@ -9,6 +9,7 @@ import { initiateGoogleDriveResumableUpload, GoogleDriveResumableUploadInput, Go
 import { encryptUploadSecret, decryptUploadSecret, IdempotencyConflictError, ExpiredSessionError } from "../storage/upload-session-encryption";
 import { UploadSessionService } from "../storage/upload-session-service";
 import { isValidFilename, sanitizeFilename, MAX_FILE_SIZE_BYTES } from "../storage/upload-initiation-service";
+import { getSupportedMediaDescriptor } from "../uploads/media-file-types";
 
 export interface DbClient {
   readonly user: {
@@ -100,19 +101,10 @@ export class GoogleDriveUploadInitiationService {
     }
 
     const mime = data.declaredMimeType.trim().toLowerCase();
-    if (mime !== "video/mp4" && mime !== "video/quicktime") {
-      throw new Error("UNSUPPORTED_MEDIA_TYPE");
-    }
-
-    const ext = data.originalName.slice(data.originalName.lastIndexOf(".")).toLowerCase();
-    if (ext === ".mp4" && mime !== "video/mp4") {
-      throw new Error("MIME_MISMATCH");
-    }
-    if (ext === ".mov" && mime !== "video/quicktime") {
-      throw new Error("MIME_MISMATCH");
-    }
-    if (ext !== ".mp4" && ext !== ".mov") {
-      throw new Error("UNSUPPORTED_MEDIA_TYPE");
+    const mediaDescriptor = getSupportedMediaDescriptor(data.originalName, mime);
+    if (!mediaDescriptor) {
+      const byExtension = getSupportedMediaDescriptor(data.originalName);
+      throw new Error(byExtension ? "MIME_MISMATCH" : "UNSUPPORTED_MEDIA_TYPE");
     }
 
     const requestFingerprint = UploadSessionService.generateRequestFingerprint(

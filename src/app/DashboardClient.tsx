@@ -4,6 +4,12 @@ import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import VideoUploader from "../components/uploads/video-uploader";
 import { UploadQueueController, QueueItem } from "../lib/uploads/upload-queue-controller";
+import {
+  SUPPORTED_IMAGE_ACCEPT,
+  SUPPORTED_VIDEO_ACCEPT,
+  getSupportedMediaDescriptor,
+  type UploadContentType,
+} from "../lib/uploads/media-file-types";
 import { normalizeDashboardJobs } from "../lib/validation";
 import {
   buildGeminiAnalysisUrl,
@@ -73,7 +79,7 @@ interface VideoJob {
   uploadProgress: number; // 0 to 100
   pageId: string;
   pageName?: string;
-  contentType: "VIDEO" | "REEL";
+  contentType: UploadContentType;
   englishTitle: string;
   englishCaption: string;
   hashtags: string;
@@ -86,7 +92,8 @@ interface VideoJob {
   thumbnailMode: "auto" | "custom" | "captured";
   customThumbnailUrl?: string; // local url of uploaded thumbnail
   capturedThumbnailUrl?: string; // local data url of captured frame
-  localVideoUrl?: string; // local object URL of the video
+  localMediaUrl?: string; // local object URL of the selected video or image
+  localVideoUrl?: string; // legacy local object URL retained for restored video cards
   gcsVideoUri?: string; // persistent simulated GCS URI
   attempts?: PublishAttempt[];
   providerReference?: string;
@@ -378,7 +385,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               fileName: item.filename,
               fileSize: sizeMB,
               fileSizeBytes: item.size,
-              durationSeconds: item.durationSeconds || existing?.durationSeconds,
+              durationSeconds: item.durationSeconds ?? existing?.durationSeconds,
               uploadProgress: item.progressPercent,
               pageId: item.pageId || existing?.pageId || (pagesRef.current.find((p) => p.id === item.pageId)?.id || pagesRef.current[0]?.id || ""),
               contentType: item.contentType || existing?.contentType || "VIDEO",
@@ -392,7 +399,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               thumbnailMode: item.thumbnailMode || existing?.thumbnailMode || "auto",
               customThumbnailUrl: item.customThumbnailUrl || existing?.customThumbnailUrl,
               capturedThumbnailUrl: item.capturedThumbnailUrl || existing?.capturedThumbnailUrl,
-              localVideoUrl: item.localVideoUrl || existing?.localVideoUrl,
+              localMediaUrl: item.localMediaUrl || item.localVideoUrl || existing?.localMediaUrl || existing?.localVideoUrl,
+              localVideoUrl: item.localVideoUrl || (item.contentType !== "PHOTO" ? item.localMediaUrl : undefined) || existing?.localVideoUrl,
               assetId: item.assetId,
               uploadValidated: item.status === 'VALIDATED',
               geminiAnalysisStatus:
@@ -425,7 +433,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         });
       },
       onUploadValidated: (itemId, assetId, metadata) => {
-        const durationSeconds = Math.round((metadata.durationMs || 0) / 1000);
+        const durationSeconds =
+          typeof metadata.durationMs === "number" && metadata.durationMs > 0
+            ? Math.round(metadata.durationMs / 1000)
+            : undefined;
         setTempJobsQueue((prev) =>
           prev.map((j) =>
             j.id === itemId
@@ -469,7 +480,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         thumbnailMode: item.thumbnailMode,
         customThumbnailUrl: item.customThumbnailUrl,
         capturedThumbnailUrl: item.capturedThumbnailUrl,
-        localVideoUrl: item.localVideoUrl,
+        localMediaUrl: item.localMediaUrl || item.localVideoUrl,
+        localVideoUrl: item.localVideoUrl || (item.contentType !== "PHOTO" ? item.localMediaUrl : undefined),
         assetId: item.assetId,
         uploadValidated: item.status === 'VALIDATED',
         geminiAnalysisStatus:
@@ -597,9 +609,13 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     }
 
     // File type limits
-    const ext = job.fileName.substring(job.fileName.lastIndexOf(".")).toLowerCase();
-    if (ext !== ".mp4" && ext !== ".mov") {
-      errors.push("Unsupported file type. Only MP4 and MOV are allowed.");
+    const mediaDescriptor = getSupportedMediaDescriptor(job.fileName);
+    if (!mediaDescriptor) {
+      errors.push("Unsupported file type. Use MP4, MOV, JPG, JPEG, PNG, or WebP.");
+    } else if (job.contentType === "PHOTO" && mediaDescriptor.kind !== "image") {
+      errors.push("Facebook Photo requires a JPG, JPEG, PNG, or WebP image.");
+    } else if (job.contentType !== "PHOTO" && mediaDescriptor.kind !== "video") {
+      errors.push("Facebook Video or Reel requires an MP4 or MOV video.");
     }
 
     // File size limits
@@ -627,16 +643,16 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
     // Persistent GCS/R2 validation
     if (!job.uploadValidated || !job.assetId) {
-      errors.push("Video must be successfully uploaded and validated.");
+      errors.push("Media must be successfully uploaded and validated.");
     }
 
-    if (job.thumbnailMode === "custom") {
+    if (job.contentType !== "PHOTO" && job.thumbnailMode === "custom") {
       errors.push(
         "Custom image thumbnails are not yet available for permanent scheduling. Use Facebook Auto or Capture Frame.",
       );
     }
 
-    if (job.thumbnailMode === "captured") {
+    if (job.contentType !== "PHOTO" && job.thumbnailMode === "captured") {
       if (job.thumbnailGenerationStatus === "generating") {
         errors.push("Wait for permanent thumbnail generation to finish.");
       } else if (!job.thumbnailAssetId) {
@@ -1491,11 +1507,20 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   };
 
   const handleApplyContentTypeToAll = () => {
-    setTempJobsQueue((prev) => prev.map((j) => ({ ...j, contentType: bulkContentType })));
+    setTempJobsQueue((prev) =>
+      prev.map((job) =>
+        job.contentType === "PHOTO"
+          ? job
+          : { ...job, contentType: bulkContentType },
+      ),
+    );
     tempJobsQueue.forEach((job) => {
-      queueControllerRef.current?.updateJobFields(job.id, { contentType: bulkContentType });
+      if (job.contentType !== "PHOTO") {
+        queueControllerRef.current?.updateJobFields(job.id, { contentType: bulkContentType });
+      }
     });
-    addSecurityLog("INFO", `Bulk assigned content type ${bulkContentType} to all ${tempJobsQueue.length} draft items.`);
+    const videoCount = tempJobsQueue.filter((job) => job.contentType !== "PHOTO").length;
+    addSecurityLog("INFO", `Bulk assigned content type ${bulkContentType} to ${videoCount} video draft items. Photo items remained Facebook Photos.`);
   };
 
   // ==========================================
@@ -2444,7 +2469,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
               }`}
             >
-              Bulk Video Publisher {tempJobsQueue.length > 0 && `(${tempJobsQueue.length})`}
+              Bulk Media Publisher {tempJobsQueue.length > 0 && `(${tempJobsQueue.length})`}
             </button>
             <button
               onClick={() => setActiveTab("pages")}
@@ -2656,7 +2681,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                     {jobs.length === 0 ? (
                       <div className="text-center py-12 text-zinc-500 border border-dashed border-zinc-200 rounded-lg">
-                        No videos loaded. Open the &quot;Bulk Video Publisher&quot; to schedule files.
+                        No media loaded. Open the &quot;Bulk Media Publisher&quot; to schedule files.
                       </div>
                     ) : (
                       <div>
@@ -2913,9 +2938,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   {/* File Upload Dropzone (Local Drag & Drop / File Picker) */}
                   <div className="lg:col-span-2 bg-white border border-zinc-200 rounded-xl p-6 flex flex-col justify-between">
                     <div>
-                      <h3 className="text-base font-bold text-zinc-900 mb-2">Bulk Video Upload Workspace (Local Direct-to-App)</h3>
+                      <h3 className="text-base font-bold text-zinc-900 mb-2">Bulk Media Upload Workspace (Local Direct-to-App)</h3>
                       <p className="text-xs text-zinc-500 mb-5 leading-relaxed">
-                        Select multiple **MP4** or **MOV** files from your machine. Max configured file size limits are verified on selection.
+                        Select multiple MP4/MOV videos or JPG/JPEG/PNG/WebP images. The selected Facebook Page is assigned to every new file.
                       </p>
 
                       <div className="mb-5 rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
@@ -2960,25 +2985,50 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             : "border-amber-300 bg-amber-50 cursor-not-allowed"
                         }`}
                       >
-                        <input
-                          type="file"
-                          multiple
-                          accept="video/mp4,video/quicktime"
-                          onChange={triggerPickerChange}
-                          disabled={!bulkPageId || !pages.some((page) => page.id === bulkPageId)}
-                          className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed w-full h-full"
-                        />
                         <svg className="h-10 w-10 text-zinc-400 group-hover:text-zinc-500 mx-auto mb-3 transition" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                         </svg>
                         <span className="block text-sm text-zinc-750 font-semibold mb-1 group-hover:text-zinc-900 transition">
                           {bulkPageId && pages.some((page) => page.id === bulkPageId)
-                            ? "Drag & Drop MP4/MOV Videos or Click to Browse"
+                            ? "Drag & Drop Videos or Images Here"
                             : "Select a Facebook Page Above to Enable Uploads"}
                         </span>
                         <span className="block text-xs text-zinc-500 font-mono">
-                          Local upload engine validation. Limits applied dynamically.
+                          MP4/MOV videos and JPG/JPEG/PNG/WebP images are detected automatically.
                         </span>
+
+                        <div className="mt-5 flex flex-col sm:flex-row items-center justify-center gap-3">
+                          <label className={`min-w-40 rounded-lg px-5 py-2.5 text-xs font-bold transition ${
+                            bulkPageId && pages.some((page) => page.id === bulkPageId)
+                              ? "cursor-pointer bg-indigo-600 text-white hover:bg-indigo-500"
+                              : "cursor-not-allowed bg-zinc-200 text-zinc-500"
+                          }`}>
+                            Upload Videos
+                            <input
+                              type="file"
+                              multiple
+                              accept={SUPPORTED_VIDEO_ACCEPT}
+                              onChange={triggerPickerChange}
+                              disabled={!bulkPageId || !pages.some((page) => page.id === bulkPageId)}
+                              className="hidden"
+                            />
+                          </label>
+                          <label className={`min-w-40 rounded-lg px-5 py-2.5 text-xs font-bold transition ${
+                            bulkPageId && pages.some((page) => page.id === bulkPageId)
+                              ? "cursor-pointer bg-emerald-600 text-white hover:bg-emerald-500"
+                              : "cursor-not-allowed bg-zinc-200 text-zinc-500"
+                          }`}>
+                            Upload Images
+                            <input
+                              type="file"
+                              multiple
+                              accept={SUPPORTED_IMAGE_ACCEPT}
+                              onChange={triggerPickerChange}
+                              disabled={!bulkPageId || !pages.some((page) => page.id === bulkPageId)}
+                              className="hidden"
+                            />
+                          </label>
+                        </div>
                       </div>
 
                       {fileUploadError && (
@@ -3049,7 +3099,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                     <div>
                       <h3 className="text-base font-bold text-zinc-900 mb-2">CSV Metadata Importer</h3>
                       <p className="text-xs text-zinc-500 mb-4 leading-relaxed">
-                        Import a CSV metadata table matching video targets by filename. Shows row-level errors for broken formatting or invalid references.
+                        Import a CSV metadata table matching media targets by filename. Shows row-level errors for broken formatting or invalid references.
                       </p>
 
                       <div className="flex flex-col gap-3">
@@ -3079,7 +3129,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         {csvSuccessCount > 0 && (
                           <div className="text-emerald-600 font-medium mb-1 flex items-center gap-1.5">
                             <span className="h-1.5 w-1.5 rounded-full bg-emerald-600"></span>
-                            Successfully matched & updated {csvSuccessCount} videos.
+                            Successfully matched & updated {csvSuccessCount} media items.
                           </div>
                         )}
                         {csvErrors.map((err, idx) => (
@@ -3419,7 +3469,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             onClick={() => handleDeleteDraft(job.id)}
                             className="absolute top-4 right-4 text-xs text-rose-500 hover:underline transition"
                           >
-                            Remove Video
+                            Remove Media
                           </button>
 
                           {/* Validation Badges */}
@@ -3451,6 +3501,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                       uploadedBytes={qItem ? qItem.uploadedBytes : 0}
                                       error={qItem?.error}
                                       metadata={qItem?.metadata}
+                                      contentType={job.contentType}
                                       onStart={() => {
                                         if (qItem) {
                                           queueControllerRef.current?.processQueue();
@@ -3466,25 +3517,39 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                       onRemove={() => handleDeleteDraft(job.id)}
                                     />
 
-                                    {/* Native video preview */}
-                                    {job.localVideoUrl ? (
+                                    {/* Native media preview */}
+                                    {job.localMediaUrl || job.localVideoUrl ? (
                                       <div className="aspect-video bg-black rounded-lg overflow-hidden border border-zinc-200 relative flex items-center justify-center mt-2">
-                                        <video
-                                          src={job.localVideoUrl}
-                                          className="h-full w-full object-contain"
-                                          controls
-                                        />
+                                        {job.contentType === "PHOTO" ? (
+                                          <>
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                            <img
+                                              src={job.localMediaUrl || job.localVideoUrl}
+                                              alt={`Preview of ${job.fileName}`}
+                                              className="h-full w-full object-contain"
+                                            />
+                                          </>
+                                        ) : (
+                                          <video
+                                            src={job.localMediaUrl || job.localVideoUrl}
+                                            className="h-full w-full object-contain"
+                                            controls
+                                          />
+                                        )}
                                       </div>
                                     ) : (
                                       <div className="aspect-video bg-zinc-100 rounded-lg flex items-center justify-center border border-zinc-200 text-zinc-500 text-xs mt-2">
-                                        Video Preview Unavailable
+                                        {job.contentType === "PHOTO" ? "Image Preview Unavailable" : "Video Preview Unavailable"}
                                       </div>
                                     )}
 
                                     <div className="text-xs space-y-1.5 text-zinc-500 font-mono">
                                       <div className="truncate max-w-[280px]">Original Name: <span className="text-zinc-800">{job.fileName}</span></div>
                                       <div>Size: <span className="text-zinc-800">{job.fileSize}</span></div>
-                                      <div>Duration: <span className="text-zinc-800">{job.durationSeconds ? `${job.durationSeconds}s` : "Scanning..."}</span></div>
+                                      {job.contentType !== "PHOTO" && (
+                                        <div>Duration: <span className="text-zinc-800">{job.durationSeconds ? `${job.durationSeconds}s` : "Scanning..."}</span></div>
+                                      )}
+                                      <div>Media Type: <span className="text-indigo-600 font-semibold">{job.contentType === "PHOTO" ? "Image" : "Video"}</span></div>
                                       <div>Language: <span className="text-indigo-600 font-semibold">English (Fixed)</span></div>
                                     </div>
                                   </>
@@ -3492,7 +3557,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                               })()}
 
                               {/* Thumbnail Settings */}
-                              <div className="border-t border-zinc-200 pt-3.5 space-y-2 text-xs">
+                              {job.contentType !== "PHOTO" && (
+                                <div className="border-t border-zinc-200 pt-3.5 space-y-2 text-xs">
                                 <label className="block font-mono text-zinc-500 uppercase tracking-wider text-[10px]">Assign Thumbnail</label>
 
                                 <div className="flex gap-2">
@@ -3639,7 +3705,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                         )}
                                     </div>
                                   )}
-                              </div>
+                                </div>
+                              )}
                             </div>
 
                             {/* Editable Fields Column */}
@@ -3788,14 +3855,20 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                                 {/* Content type selector */}
                                 <div>
                                   <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-1">Content Type</label>
-                                  <select
-                                    value={job.contentType}
-                                    onChange={(e) => handleUpdateTempJobField(job.id, "contentType", e.target.value as "VIDEO" | "REEL")}
-                                    className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition"
-                                  >
-                                    <option value="VIDEO">Facebook Video</option>
-                                    <option value="REEL">Facebook Reel</option>
-                                  </select>
+                                  {job.contentType === "PHOTO" ? (
+                                    <div className="w-full rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
+                                      Facebook Photo
+                                    </div>
+                                  ) : (
+                                    <select
+                                      value={job.contentType}
+                                      onChange={(e) => handleUpdateTempJobField(job.id, "contentType", e.target.value as "VIDEO" | "REEL")}
+                                      className="w-full bg-white border border-zinc-200 rounded-lg py-2 px-3 text-sm text-zinc-900 focus:outline-none focus:border-indigo-600 transition"
+                                    >
+                                      <option value="VIDEO">Facebook Video</option>
+                                      <option value="REEL">Facebook Reel</option>
+                                    </select>
+                                  )}
                                 </div>
                               </div>
 

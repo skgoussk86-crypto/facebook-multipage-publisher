@@ -1,6 +1,7 @@
 import React from 'react';
 import { QueueItemState } from '../../lib/uploads/upload-queue-controller';
-import { VideoMetadata } from '../../lib/uploads/upload-types';
+import { MediaMetadata } from '../../lib/uploads/upload-types';
+import { SUPPORTED_IMAGE_ACCEPT, SUPPORTED_VIDEO_ACCEPT, type UploadContentType } from '../../lib/uploads/media-file-types';
 
 interface VideoUploaderProps {
   itemId: string;
@@ -10,7 +11,8 @@ interface VideoUploaderProps {
   progressPercent: number;
   uploadedBytes: number;
   error?: string;
-  metadata?: VideoMetadata;
+  metadata?: MediaMetadata;
+  contentType: UploadContentType;
 
   onStart: () => void;
   onPause: () => void;
@@ -29,6 +31,7 @@ export default function VideoUploader({
   uploadedBytes,
   error,
   metadata,
+  contentType,
   onStart,
   onPause,
   onResume,
@@ -37,6 +40,7 @@ export default function VideoUploader({
   onReselectFile,
   onRemove,
 }: VideoUploaderProps) {
+  const isPhoto = contentType === 'PHOTO';
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -81,18 +85,20 @@ export default function VideoUploader({
           <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-xs text-emerald-800 space-y-2 w-full shadow-sm">
             <div className="font-bold flex items-center gap-1.5 mb-1">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-600"></span>
-              ✓ Video Verified & Validated
+              ✓ {isPhoto ? 'Image' : 'Video'} Verified & Validated
             </div>
             {metadata && (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2 font-mono text-[10.5px] text-zinc-600 border-t border-emerald-100 pt-2 break-words">
-                <div><span className="font-semibold text-zinc-500">Duration:</span> <span className="text-emerald-900 font-bold">{Math.round((metadata.durationMs || 0) / 1000)}s</span></div>
-                <div><span className="font-semibold text-zinc-500">Format:</span> <span className="text-emerald-900 font-bold">{metadata.containerFormat}</span></div>
-                <div><span className="font-semibold text-zinc-500">Video Codec:</span> <span className="text-emerald-900 font-bold">{metadata.videoCodec}</span></div>
-                {metadata.audioCodec && <div><span className="font-semibold text-zinc-500">Audio Codec:</span> <span className="text-emerald-900 font-bold">{metadata.audioCodec}</span></div>}
+                {!isPhoto && typeof metadata.durationMs === 'number' && (
+                  <div><span className="font-semibold text-zinc-500">Duration:</span> <span className="text-emerald-900 font-bold">{Math.round(metadata.durationMs / 1000)}s</span></div>
+                )}
+                <div><span className="font-semibold text-zinc-500">Format:</span> <span className="text-emerald-900 font-bold">{metadata.containerFormat || 'Detected media'}</span></div>
+                {!isPhoto && metadata.videoCodec && <div><span className="font-semibold text-zinc-500">Video Codec:</span> <span className="text-emerald-900 font-bold">{metadata.videoCodec}</span></div>}
+                {!isPhoto && metadata.audioCodec && <div><span className="font-semibold text-zinc-500">Audio Codec:</span> <span className="text-emerald-900 font-bold">{metadata.audioCodec}</span></div>}
                 {metadata.width && metadata.height && (
                   <div><span className="font-semibold text-zinc-500">Resolution:</span> <span className="text-emerald-900 font-bold">{metadata.width}×{metadata.height}</span></div>
                 )}
-                {metadata.frameRate && <div><span className="font-semibold text-zinc-500">Frame Rate:</span> <span className="text-emerald-900 font-bold">{metadata.frameRate} fps</span></div>}
+                {!isPhoto && metadata.frameRate && <div><span className="font-semibold text-zinc-500">Frame Rate:</span> <span className="text-emerald-900 font-bold">{metadata.frameRate} fps</span></div>}
               </div>
             )}
           </div>
@@ -115,7 +121,7 @@ export default function VideoUploader({
                 Reselect file to resume
                 <input
                   type="file"
-                  accept=".mp4,.mov"
+                  accept={isPhoto ? SUPPORTED_IMAGE_ACCEPT : SUPPORTED_VIDEO_ACCEPT}
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
