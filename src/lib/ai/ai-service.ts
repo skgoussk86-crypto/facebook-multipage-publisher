@@ -18,7 +18,7 @@ export class Semaphore {
     onAbort?: () => void;
   }> = [];
 
-  constructor(maxPermits = 5) {
+  constructor(maxPermits = 2) {
     this.maxPermits = maxPermits;
   }
 
@@ -103,7 +103,7 @@ const semaphoreSymbol = Symbol.for("fb-publisher-ai-semaphore");
 const globalObject = globalThis as unknown as Record<symbol, unknown>;
 
 if (globalObject[semaphoreSymbol] === undefined) {
-  globalObject[semaphoreSymbol] = new Semaphore(5);
+  globalObject[semaphoreSymbol] = new Semaphore(2);
 }
 
 export const aiSemaphore = globalObject[semaphoreSymbol] as Semaphore;
