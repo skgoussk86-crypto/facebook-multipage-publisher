@@ -97,7 +97,7 @@ export async function handleAnalyzeBatchStreamRequest(
     );
   }
 
-  let parsedConcurrency = typeof concurrency === "number" ? concurrency : 3;
+  let parsedConcurrency = typeof concurrency === "number" ? concurrency : 5;
   parsedConcurrency = Math.max(1, Math.min(5, Math.floor(parsedConcurrency)));
 
   const { prisma } = await import("@/lib/prisma-client");

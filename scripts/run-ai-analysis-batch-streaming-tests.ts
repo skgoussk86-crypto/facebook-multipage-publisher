@@ -243,14 +243,14 @@ async function runTests() {
       console.log("✓ Test 8: Heartbeats emitted while workers are active.");
     }
 
-    // Test 9: At most three analyses active simultaneously with default configuration.
+    // Test 9: At most five analyses active simultaneously with default configuration.
     {
       const activeIds: string[] = [];
       let maxActive = 0;
       const resolvers: any[] = [];
       const req = new NextRequest("http://localhost/api/uploads/analyze-batch-stream", {
         method: "POST",
-        body: JSON.stringify({ assetIds: ["a1", "a2", "a3", "a4", "a5"], concurrency: 3 }),
+        body: JSON.stringify({ assetIds: ["a1", "a2", "a3", "a4", "a5", "a6"] }),
       });
       const res = await handleAnalyzeBatchStreamRequest(req, {
         verifySession: mockUserSession,
@@ -268,11 +268,11 @@ async function runTests() {
       for (let i = 0; i < 10; i++) {
         const { value } = await reader.read();
         allText += decoder.decode(value);
-        if (resolvers.length >= 3) break;
+        if (resolvers.length >= 5) break;
         await new Promise((r) => setTimeout(r, 10));
       }
-      assert.strictEqual(resolvers.length, 3);
-      assert.strictEqual(maxActive, 3);
+      assert.strictEqual(resolvers.length, 5);
+      assert.strictEqual(maxActive, 5);
 
       // Complete one, another should start
       const first = resolvers.shift();
@@ -283,17 +283,17 @@ async function runTests() {
       for (let i = 0; i < 10; i++) {
         const { value } = await reader.read();
         allText += decoder.decode(value);
-        if (resolvers.length >= 3) break;
+        if (resolvers.length >= 5) break;
         await new Promise((r) => setTimeout(r, 10));
       }
-      assert.strictEqual(resolvers.length, 3); // 2 remaining + 1 new started
+      assert.strictEqual(resolvers.length, 5); // 4 remaining + 1 new started
 
       // Clean up remaining
       for (const r of resolvers) {
         r.resolve({ title: "T", caption: "C", hashtags: [], thumbnailTimestampSeconds: 1 });
       }
       reader.releaseLock();
-      console.log("✓ Test 9: At most three analyses active simultaneously with default configuration.");
+      console.log("✓ Test 9: At most five analyses active simultaneously with default configuration.");
     }
 
     // Test 10: At most five active when concurrency 5 is requested.

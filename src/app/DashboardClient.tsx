@@ -1212,7 +1212,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
         body: JSON.stringify({
           assetIds: eligibleJobs.map((j) => j.assetId),
           regenerateCompleted: regenerate,
-          concurrency: 3,
+          concurrency: 5,
         }),
         signal: controller.signal,
       });
