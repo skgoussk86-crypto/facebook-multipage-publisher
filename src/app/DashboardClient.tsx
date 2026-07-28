@@ -38,6 +38,13 @@ import {
   type BulkMetadataPreview,
   type BulkMetadataRow,
 } from "../lib/metadata/bulk-metadata-assignment";
+import {
+  buildRandomSchedulePreview,
+  buildRandomScheduleQueueSignature,
+  getCurrentKolkataDateString,
+  type RandomSchedulePreview,
+  type RandomTimeWindow,
+} from "../lib/scheduling/random-time-windows";
 
 // Types
 interface FacebookPage {
@@ -150,6 +157,12 @@ interface BulkMetadataUndoEntry {
   jobId: string;
   englishTitle: string;
   englishCaption: string;
+}
+
+interface RandomScheduleUndoEntry {
+  jobId: string;
+  scheduledTimeKolkata: string;
+  scheduledTimeUTC: string;
 }
 
 // Initial Mock Data
@@ -546,12 +559,28 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   const [bulkContentType, setBulkContentType] = useState<"VIDEO" | "REEL">("VIDEO");
 
   // Scheduling inputs
-  const [schedulingMode, setSchedulingMode] = useState<"individual" | "interval" | "slots">("individual");
+  const [schedulingMode, setSchedulingMode] = useState<"individual" | "interval" | "slots" | "random_windows">("individual");
   const [intervalStartKolkata, setIntervalStartKolkata] = useState("2026-07-13T09:00");
   const [intervalHours, setIntervalHours] = useState(2);
   const [dailySlotsStartDate, setDailySlotsStartDate] = useState("2026-07-13");
   const [dailyTimeSlots, setDailyTimeSlots] = useState<string[]>(["09:00", "15:00", "21:00"]);
   const [newSlotInput, setNewSlotInput] = useState("");
+  const [randomWindowsStartDate, setRandomWindowsStartDate] = useState(
+    () => getCurrentKolkataDateString(),
+  );
+  const [randomTimeWindows, setRandomTimeWindows] = useState<RandomTimeWindow[]>([
+    { id: "random-window-1", startTime: "04:00", endTime: "04:15" },
+    { id: "random-window-2", startTime: "07:00", endTime: "07:15" },
+  ]);
+  const [newRandomWindowStart, setNewRandomWindowStart] = useState("10:00");
+  const [newRandomWindowEnd, setNewRandomWindowEnd] = useState("10:15");
+  const [randomPostsPerWindow, setRandomPostsPerWindow] = useState(1);
+  const [randomMinimumGapMinutes, setRandomMinimumGapMinutes] = useState(5);
+  const [randomOverwriteExisting, setRandomOverwriteExisting] = useState(false);
+  const [randomSchedulePreview, setRandomSchedulePreview] = useState<RandomSchedulePreview | null>(null);
+  const [randomScheduleErrors, setRandomScheduleErrors] = useState<string[]>([]);
+  const [randomScheduleUndo, setRandomScheduleUndo] = useState<RandomScheduleUndoEntry[] | null>(null);
+  const [randomScheduleLastResult, setRandomScheduleLastResult] = useState<string | null>(null);
 
   // CSV Import/Validation States
   const [csvErrors, setCsvErrors] = useState<string[]>([]);
@@ -788,6 +817,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       fields.scheduledTimeUTC = convertKolkataToUTC(
         value as string,
       );
+      setRandomSchedulePreview(null);
+      setRandomScheduleErrors([]);
+      setRandomScheduleLastResult(null);
     }
 
     updateTempJobFields(jobId, fields);
@@ -2121,6 +2153,211 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       });
       addSecurityLog("INFO", `Scheduled ${tempJobsQueue.length} videos using reusable daily slots starting ${dailySlotsStartDate}.`);
     }
+  };
+
+  const invalidateRandomSchedulePreview = () => {
+    setRandomSchedulePreview(null);
+    setRandomScheduleErrors([]);
+    setRandomScheduleLastResult(null);
+  };
+
+  const handleAddRandomTimeWindow = () => {
+    const timePattern = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+    if (
+      !timePattern.test(newRandomWindowStart) ||
+      !timePattern.test(newRandomWindowEnd)
+    ) {
+      setRandomScheduleErrors([
+        "Random windows must use 24-hour HH:MM times.",
+      ]);
+      return;
+    }
+
+    setRandomTimeWindows((previous) => [
+      ...previous,
+      {
+        id: `random-window-${Date.now()}-${previous.length + 1}`,
+        startTime: newRandomWindowStart,
+        endTime: newRandomWindowEnd,
+      },
+    ]);
+    invalidateRandomSchedulePreview();
+  };
+
+  const handleRemoveRandomTimeWindow = (windowId: string) => {
+    setRandomTimeWindows((previous) =>
+      previous.filter((window) => window.id !== windowId),
+    );
+    invalidateRandomSchedulePreview();
+  };
+
+  const handleGenerateRandomSchedulePreview = () => {
+    const preview = buildRandomSchedulePreview({
+      jobs: tempJobsQueue,
+      startDate: randomWindowsStartDate,
+      windows: randomTimeWindows,
+      postsPerWindow: randomPostsPerWindow,
+      minimumGapMinutes: randomMinimumGapMinutes,
+      overwriteExisting: randomOverwriteExisting,
+    });
+
+    setRandomSchedulePreview(preview);
+    setRandomScheduleErrors(preview.errors);
+
+    if (preview.errors.length > 0) {
+      setRandomScheduleLastResult(null);
+      return;
+    }
+
+    setRandomScheduleLastResult(
+      `Prepared ${preview.items.length} exact publishing times across ${preview.daysUsed} day${preview.daysUsed === 1 ? "" : "s"}. The preview will not change unless you regenerate it.`,
+    );
+  };
+
+  const handleApplyRandomSchedulePreview = () => {
+    if (
+      !randomSchedulePreview ||
+      randomSchedulePreview.errors.length > 0 ||
+      randomSchedulePreview.items.length === 0
+    ) {
+      setRandomScheduleErrors([
+        "Generate a valid random-time preview before applying it.",
+      ]);
+      return;
+    }
+
+    const currentSignature =
+      buildRandomScheduleQueueSignature(tempJobsQueue);
+
+    if (
+      currentSignature !==
+      randomSchedulePreview.sourceSignature
+    ) {
+      setRandomScheduleErrors([
+        "The upload cards or their times changed after this preview was generated. Generate a fresh preview before applying it.",
+      ]);
+      setRandomSchedulePreview(null);
+      return;
+    }
+
+    const previewByJobId = new Map(
+      randomSchedulePreview.items.map((item) => [
+        item.jobId,
+        item,
+      ]),
+    );
+    const undoEntries: RandomScheduleUndoEntry[] = [];
+
+    tempJobsQueue.forEach((job) => {
+      if (!previewByJobId.has(job.id)) return;
+
+      undoEntries.push({
+        jobId: job.id,
+        scheduledTimeKolkata:
+          job.scheduledTimeKolkata,
+        scheduledTimeUTC:
+          job.scheduledTimeUTC,
+      });
+    });
+
+    const updates = randomSchedulePreview.items.map(
+      (item) => ({
+        itemId: item.jobId,
+        fields: {
+          scheduledTimeKolkata:
+            item.scheduledTimeKolkata,
+          scheduledTimeUTC:
+            item.scheduledTimeUTC,
+        },
+      }),
+    );
+
+    setTempJobsQueue((previous) =>
+      previous.map((job) => {
+        const previewItem =
+          previewByJobId.get(job.id);
+
+        return previewItem
+          ? {
+              ...job,
+              scheduledTimeKolkata:
+                previewItem.scheduledTimeKolkata,
+              scheduledTimeUTC:
+                previewItem.scheduledTimeUTC,
+            }
+          : job;
+      }),
+    );
+
+    queueControllerRef.current?.updateManyJobFields(
+      updates,
+    );
+
+    setRandomScheduleUndo(undoEntries);
+    setRandomScheduleLastResult(
+      `Applied ${updates.length} random-window publishing times and saved them to queue recovery.`,
+    );
+    setRandomSchedulePreview(null);
+    setRandomScheduleErrors([]);
+
+    addSecurityLog(
+      "INFO",
+      `Assigned ${updates.length} upload cards to randomized publishing windows starting ${randomWindowsStartDate}.`,
+    );
+  };
+
+  const handleUndoRandomSchedule = () => {
+    if (!randomScheduleUndo || randomScheduleUndo.length === 0) {
+      return;
+    }
+
+    const undoByJobId = new Map(
+      randomScheduleUndo.map((entry) => [
+        entry.jobId,
+        entry,
+      ]),
+    );
+
+    setTempJobsQueue((previous) =>
+      previous.map((job) => {
+        const entry = undoByJobId.get(job.id);
+
+        return entry
+          ? {
+              ...job,
+              scheduledTimeKolkata:
+                entry.scheduledTimeKolkata,
+              scheduledTimeUTC:
+                entry.scheduledTimeUTC,
+            }
+          : job;
+      }),
+    );
+
+    queueControllerRef.current?.updateManyJobFields(
+      randomScheduleUndo.map((entry) => ({
+        itemId: entry.jobId,
+        fields: {
+          scheduledTimeKolkata:
+            entry.scheduledTimeKolkata,
+          scheduledTimeUTC:
+            entry.scheduledTimeUTC,
+        },
+      })),
+    );
+
+    setRandomScheduleLastResult(
+      `Restored publishing times on ${randomScheduleUndo.length} upload cards.`,
+    );
+    setRandomScheduleUndo(null);
+    setRandomSchedulePreview(null);
+    setRandomScheduleErrors([]);
+
+    addSecurityLog(
+      "INFO",
+      `Undid the most recent random-window schedule assignment for ${randomScheduleUndo.length} draft items.`,
+    );
   };
 
   // ==========================================
@@ -4109,6 +4346,14 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         >
                           Daily Time Slots
                         </button>
+                        <button
+                          onClick={() => setSchedulingMode("random_windows")}
+                          className={`px-3 py-1 rounded-full font-semibold transition ${
+                            schedulingMode === "random_windows" ? "bg-indigo-50 text-indigo-700" : "text-zinc-500 hover:text-zinc-900"
+                          }`}
+                        >
+                          Random Time Windows
+                        </button>
                       </div>
                     </div>
 
@@ -4212,6 +4457,195 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             <span className="text-xs text-zinc-600 italic">No daily time slots configured yet.</span>
                           )}
                         </div>
+                      </div>
+                    )}
+
+                    {schedulingMode === "random_windows" && (
+                      <div className="space-y-5">
+                        <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-xs text-indigo-800">
+                          Generate each publishing time once inside the selected windows, review the exact result, then apply it. Applied times are saved with the upload cards and remain unchanged after refresh or worker restart.
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                          <div>
+                            <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-2">Start Date (Kolkata)</label>
+                            <input
+                              type="date"
+                              value={randomWindowsStartDate}
+                              onChange={(event) => {
+                                setRandomWindowsStartDate(event.target.value);
+                                invalidateRandomSchedulePreview();
+                              }}
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-2.5 px-3.5 text-xs text-zinc-900 focus:outline-none focus:border-indigo-600"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-2">Videos per Window</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={20}
+                              value={randomPostsPerWindow}
+                              onChange={(event) => {
+                                setRandomPostsPerWindow(Number(event.target.value));
+                                invalidateRandomSchedulePreview();
+                              }}
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-2.5 px-3.5 text-xs text-zinc-900 focus:outline-none focus:border-indigo-600"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-2">Minimum Gap (Minutes)</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={720}
+                              value={randomMinimumGapMinutes}
+                              onChange={(event) => {
+                                setRandomMinimumGapMinutes(Number(event.target.value));
+                                invalidateRandomSchedulePreview();
+                              }}
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-2.5 px-3.5 text-xs text-zinc-900 focus:outline-none focus:border-indigo-600"
+                            />
+                          </div>
+                          <label className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-xs text-zinc-700">
+                            <input
+                              type="checkbox"
+                              checked={randomOverwriteExisting}
+                              onChange={(event) => {
+                                setRandomOverwriteExisting(event.target.checked);
+                                invalidateRandomSchedulePreview();
+                              }}
+                            />
+                            Overwrite existing card times
+                          </label>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+                          <div>
+                            <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-2">New Window Start</label>
+                            <input
+                              type="time"
+                              value={newRandomWindowStart}
+                              onChange={(event) => setNewRandomWindowStart(event.target.value)}
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-2.5 px-3.5 text-xs text-zinc-900"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-mono text-zinc-500 uppercase mb-2">New Window End</label>
+                            <input
+                              type="time"
+                              value={newRandomWindowEnd}
+                              onChange={(event) => setNewRandomWindowEnd(event.target.value)}
+                              className="w-full bg-white border border-zinc-200 rounded-lg py-2.5 px-3.5 text-xs text-zinc-900"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleAddRandomTimeWindow}
+                            className="rounded-lg border border-zinc-200 bg-zinc-100 px-4 py-2.5 text-xs font-bold text-zinc-700 hover:bg-zinc-200"
+                          >
+                            Add Window
+                          </button>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          {randomTimeWindows.map((window, index) => (
+                            <span
+                              key={window.id}
+                              className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 font-mono text-xs font-bold text-indigo-800"
+                            >
+                              Window {index + 1}: {window.startTime}–{window.endTime}
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveRandomTimeWindow(window.id)}
+                                className="text-indigo-500 hover:text-rose-600"
+                                aria-label={`Remove window ${index + 1}`}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                          {randomTimeWindows.length === 0 && (
+                            <span className="text-xs italic text-rose-600">Add at least one time window.</span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap gap-3">
+                          <button
+                            type="button"
+                            onClick={handleGenerateRandomSchedulePreview}
+                            className="rounded-lg bg-zinc-800 px-4 py-2.5 text-xs font-bold text-white hover:bg-zinc-700"
+                          >
+                            {randomSchedulePreview ? "Regenerate Exact Preview" : "Generate Exact Preview"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleApplyRandomSchedulePreview}
+                            disabled={!randomSchedulePreview || randomSchedulePreview.errors.length > 0 || randomSchedulePreview.items.length === 0}
+                            className="rounded-lg bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-300 disabled:text-zinc-500"
+                          >
+                            Apply Preview to Cards
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleUndoRandomSchedule}
+                            disabled={!randomScheduleUndo || randomScheduleUndo.length === 0}
+                            className="rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-xs font-bold text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:text-zinc-300"
+                          >
+                            Undo Last Assignment
+                          </button>
+                        </div>
+
+                        {randomScheduleErrors.length > 0 && (
+                          <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
+                            {randomScheduleErrors.map((error) => (
+                              <div key={error}>• {error}</div>
+                            ))}
+                          </div>
+                        )}
+
+                        {randomScheduleLastResult && (
+                          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800">
+                            {randomScheduleLastResult}
+                          </div>
+                        )}
+
+                        {randomSchedulePreview && randomSchedulePreview.errors.length === 0 && (
+                          <div className="overflow-hidden rounded-lg border border-zinc-200">
+                            <div className="flex flex-wrap justify-between gap-2 border-b border-zinc-200 bg-zinc-50 px-4 py-3 text-xs text-zinc-700">
+                              <span>{randomSchedulePreview.items.length} cards will receive exact times.</span>
+                              <span>{randomSchedulePreview.protectedCount} existing schedules protected.</span>
+                              <span>{randomSchedulePreview.daysUsed} calendar days used.</span>
+                            </div>
+                            <div className="max-h-72 overflow-auto">
+                              <table className="w-full text-left text-xs">
+                                <thead className="sticky top-0 bg-white text-[10px] uppercase text-zinc-500">
+                                  <tr>
+                                    <th className="px-3 py-2">#</th>
+                                    <th className="px-3 py-2">File</th>
+                                    <th className="px-3 py-2">Window</th>
+                                    <th className="px-3 py-2">Exact Kolkata Time</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {randomSchedulePreview.items.slice(0, 200).map((item, index) => (
+                                    <tr key={item.jobId} className="border-t border-zinc-100">
+                                      <td className="px-3 py-2 text-zinc-500">{index + 1}</td>
+                                      <td className="max-w-[280px] truncate px-3 py-2 text-zinc-800" title={item.fileName}>{item.fileName}</td>
+                                      <td className="px-3 py-2 font-mono text-indigo-700">{item.windowLabel}</td>
+                                      <td className="px-3 py-2 font-mono text-zinc-800">{formatDateTime(item.scheduledTimeKolkata)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            {randomSchedulePreview.items.length > 200 && (
+                              <div className="border-t border-zinc-200 bg-zinc-50 px-4 py-2 text-[10px] text-zinc-500">
+                                Showing the first 200 of {randomSchedulePreview.items.length} assignments. All assignments will be applied.
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

@@ -46,7 +46,8 @@
     "test:phase7-photo-publishing": "node --conditions=react-server --import tsx scripts/run-phase7-photo-publishing-tests.ts",
     "test:phase7c-thumbnail-selection": "node --conditions=react-server --import tsx scripts/run-phase7c-thumbnail-selection-tests.ts",
     "test:phase7d-unicode-metadata": "node --conditions=react-server --import tsx scripts/run-phase7d-unicode-metadata-tests.ts",
-    "test:phase7e-bulk-metadata-assignment": "node --conditions=react-server --import tsx scripts/run-phase7e-bulk-metadata-assignment-tests.ts"
+    "test:phase7e-bulk-metadata-assignment": "node --conditions=react-server --import tsx scripts/run-phase7e-bulk-metadata-assignment-tests.ts",
+    "test:phase7f-random-time-windows": "node --conditions=react-server --import tsx scripts/run-phase7f-random-time-windows-tests.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1086.0",
