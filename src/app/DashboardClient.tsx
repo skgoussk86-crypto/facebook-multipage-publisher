@@ -30,6 +30,14 @@ import {
 import {
   shouldApplyOllamaThumbnail,
 } from "../lib/thumbnails/thumbnail-selection";
+import {
+  buildBulkMetadataPreview,
+  buildLineSeparatedMetadataRows,
+  parseBulkMetadataCsv,
+  type BulkMetadataMatchMode,
+  type BulkMetadataPreview,
+  type BulkMetadataRow,
+} from "../lib/metadata/bulk-metadata-assignment";
 
 // Types
 interface FacebookPage {
@@ -136,6 +144,12 @@ interface SecurityLog {
   level: "INFO" | "WARN" | "ERROR";
   message: string;
   jobId?: string;
+}
+
+interface BulkMetadataUndoEntry {
+  jobId: string;
+  englishTitle: string;
+  englishCaption: string;
 }
 
 // Initial Mock Data
@@ -397,8 +411,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               uploadProgress: item.progressPercent,
               pageId: item.pageId || existing?.pageId || (pagesRef.current.find((p) => p.id === item.pageId)?.id || pagesRef.current[0]?.id || ""),
               contentType: item.contentType || existing?.contentType || "VIDEO",
-              englishTitle: item.englishTitle || existing?.englishTitle || item.filename.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " "),
-              englishCaption: item.englishCaption || existing?.englishCaption || "",
+              englishTitle: item.englishTitle ?? existing?.englishTitle ?? item.filename.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " "),
+              englishCaption: item.englishCaption ?? existing?.englishCaption ?? "",
               hashtags: item.hashtags || existing?.hashtags || "",
               scheduledTimeKolkata: item.scheduledTimeKolkata || existing?.scheduledTimeKolkata || "",
               scheduledTimeUTC: item.scheduledTimeUTC || existing?.scheduledTimeUTC || "",
@@ -542,6 +556,19 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   // CSV Import/Validation States
   const [csvErrors, setCsvErrors] = useState<string[]>([]);
   const [csvSuccessCount, setCsvSuccessCount] = useState<number>(0);
+
+  // Phase 7E bulk title/caption assignment
+  const [bulkMetadataSource, setBulkMetadataSource] = useState<"paste" | "csv">("paste");
+  const [bulkTitlesText, setBulkTitlesText] = useState("");
+  const [bulkCaptionsText, setBulkCaptionsText] = useState("");
+  const [bulkMetadataCsvRows, setBulkMetadataCsvRows] = useState<BulkMetadataRow[]>([]);
+  const [bulkMetadataCsvFileName, setBulkMetadataCsvFileName] = useState("");
+  const [bulkMetadataMatchMode, setBulkMetadataMatchMode] = useState<BulkMetadataMatchMode>("upload_order");
+  const [bulkMetadataOverwriteExisting, setBulkMetadataOverwriteExisting] = useState(false);
+  const [bulkMetadataPreview, setBulkMetadataPreview] = useState<BulkMetadataPreview | null>(null);
+  const [bulkMetadataErrors, setBulkMetadataErrors] = useState<string[]>([]);
+  const [bulkMetadataUndo, setBulkMetadataUndo] = useState<BulkMetadataUndoEntry[] | null>(null);
+  const [bulkMetadataLastResult, setBulkMetadataLastResult] = useState<string | null>(null);
 
   // Confirmation Modal
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false);
@@ -1647,6 +1674,369 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     });
     const videoCount = tempJobsQueue.filter((job) => job.contentType !== "PHOTO").length;
     addSecurityLog("INFO", `Bulk assigned content type ${bulkContentType} to ${videoCount} video draft items. Photo items remained Facebook Photos.`);
+  };
+
+  const clearBulkMetadataPreview = () => {
+    setBulkMetadataPreview(null);
+    setBulkMetadataLastResult(null);
+  };
+
+  const handleBulkMetadataSourceChange = (
+    source: "paste" | "csv",
+  ) => {
+    setBulkMetadataSource(source);
+    setBulkMetadataErrors([]);
+    clearBulkMetadataPreview();
+
+    if (source === "paste") {
+      setBulkMetadataMatchMode("upload_order");
+    }
+  };
+
+  const handleBulkMetadataTextFile = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+    field: "title" | "caption",
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const text = await file.text();
+
+      if (field === "title") {
+        setBulkTitlesText(text);
+      } else {
+        setBulkCaptionsText(text);
+      }
+
+      setBulkMetadataSource("paste");
+      setBulkMetadataMatchMode("upload_order");
+      setBulkMetadataErrors([]);
+      clearBulkMetadataPreview();
+    } catch {
+      setBulkMetadataErrors([
+        `Could not read ${file.name}. Use a UTF-8 text file.`,
+      ]);
+    }
+  };
+
+  const handleBulkMetadataCsvFile = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const parsed = parseBulkMetadataCsv(
+        await file.text(),
+      );
+
+      setBulkMetadataSource("csv");
+      setBulkMetadataCsvRows(parsed.rows);
+      setBulkMetadataCsvFileName(file.name);
+      setBulkMetadataErrors(parsed.errors);
+      setBulkMetadataMatchMode(
+        parsed.hasFilenameColumn
+          ? "filename"
+          : "upload_order",
+      );
+      clearBulkMetadataPreview();
+    } catch {
+      setBulkMetadataCsvRows([]);
+      setBulkMetadataCsvFileName("");
+      setBulkMetadataErrors([
+        `Could not read ${file.name}. Use a UTF-8 CSV file.`,
+      ]);
+      clearBulkMetadataPreview();
+    }
+  };
+
+  const handleDownloadBulkMetadataCsvTemplate = () => {
+    const template = [
+      "filename,title,caption",
+      'video_001.mp4,"First title 🔥","First caption with emojis ❤️"',
+      'video_002.mp4,"दूसरा शीर्षक","Multilingual caption مرحبا"',
+    ].join("\n");
+
+    const blob = new Blob(
+      [template],
+      {
+        type: "text/csv;charset=utf-8;",
+      },
+    );
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "bulk_titles_captions_template.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const getBulkMetadataRows = (): BulkMetadataRow[] => {
+    if (bulkMetadataSource === "csv") {
+      return bulkMetadataCsvRows;
+    }
+
+    return buildLineSeparatedMetadataRows(
+      bulkTitlesText,
+      bulkCaptionsText,
+    );
+  };
+
+  const handlePreviewBulkMetadata = () => {
+    if (tempJobsQueue.length === 0) {
+      setBulkMetadataErrors([
+        "Add media files before previewing bulk metadata.",
+      ]);
+      setBulkMetadataPreview(null);
+      return;
+    }
+
+    const rows = getBulkMetadataRows();
+
+    if (rows.length === 0) {
+      setBulkMetadataErrors([
+        bulkMetadataSource === "csv"
+          ? "Upload a CSV containing at least one title or caption."
+          : "Paste titles or captions, or upload a TXT file first.",
+      ]);
+      setBulkMetadataPreview(null);
+      return;
+    }
+
+    if (
+      bulkMetadataSource === "paste" &&
+      bulkMetadataMatchMode === "filename"
+    ) {
+      setBulkMetadataErrors([
+        "Pasted and TXT lists are assigned in upload order. Use CSV for filename matching.",
+      ]);
+      setBulkMetadataPreview(null);
+      return;
+    }
+
+    const preview = buildBulkMetadataPreview(
+      tempJobsQueue.map((job) => ({
+        id: job.id,
+        fileName: job.fileName,
+        title: job.englishTitle,
+        caption: job.englishCaption,
+      })),
+      rows,
+      {
+        matchMode: bulkMetadataMatchMode,
+        overwriteExisting:
+          bulkMetadataOverwriteExisting,
+      },
+    );
+
+    setBulkMetadataPreview(preview);
+    setBulkMetadataErrors(preview.errors);
+    setBulkMetadataLastResult(null);
+  };
+
+  const handleApplyBulkMetadata = () => {
+    const preview = bulkMetadataPreview;
+
+    if (
+      !preview ||
+      preview.assignments.length === 0
+    ) {
+      setBulkMetadataErrors([
+        "Preview the assignment and confirm that at least one card will be updated.",
+      ]);
+      return;
+    }
+
+    const currentJobsById = new Map(
+      tempJobsQueue.map((job) => [
+        job.id,
+        job,
+      ]),
+    );
+
+    const undoEntries: BulkMetadataUndoEntry[] = [];
+    const updates = preview.assignments.flatMap(
+      (assignment) => {
+        const currentJob =
+          currentJobsById.get(
+            assignment.jobId,
+          );
+
+        if (!currentJob) {
+          return [];
+        }
+
+        undoEntries.push({
+          jobId: currentJob.id,
+          englishTitle:
+            currentJob.englishTitle,
+          englishCaption:
+            currentJob.englishCaption,
+        });
+
+        const fields: Partial<VideoJob> = {};
+
+        if (
+          assignment.title !==
+          undefined
+        ) {
+          fields.englishTitle =
+            assignment.title;
+        }
+
+        if (
+          assignment.caption !==
+          undefined
+        ) {
+          fields.englishCaption =
+            assignment.caption;
+        }
+
+        return [{
+          itemId: currentJob.id,
+          fields,
+        }];
+      },
+    );
+
+    if (updates.length === 0) {
+      setBulkMetadataErrors([
+        "The upload queue changed after preview. Preview again.",
+      ]);
+      setBulkMetadataPreview(null);
+      return;
+    }
+
+    const updateMap = new Map(
+      updates.map((update) => [
+        update.itemId,
+        update.fields,
+      ]),
+    );
+
+    setTempJobsQueue((previous) =>
+      previous.map((job) => {
+        const fields =
+          updateMap.get(job.id);
+
+        return fields
+          ? {
+              ...job,
+              ...fields,
+            }
+          : job;
+      }),
+    );
+
+    const persistedCount =
+      queueControllerRef.current?.updateManyJobFields(
+        updates.map((update) => ({
+          itemId: update.itemId,
+          fields:
+            update.fields as Partial<QueueItem>,
+        })),
+      ) || 0;
+
+    if (
+      persistedCount !==
+      updates.length
+    ) {
+      setBulkMetadataErrors([
+        `Updated ${updates.length} visible cards, but only ${persistedCount} queue records were persisted. Refresh the preview before scheduling.`,
+      ]);
+    } else {
+      setBulkMetadataErrors([]);
+    }
+
+    setBulkMetadataUndo(undoEntries);
+    setBulkMetadataLastResult(
+      `Assigned metadata to ${updates.length} upload cards.`,
+    );
+    setBulkMetadataPreview(null);
+
+    addSecurityLog(
+      "INFO",
+      `Bulk title/caption assignment updated ${updates.length} draft items using ${bulkMetadataMatchMode === "filename" ? "filename matching" : "upload order"}.`,
+    );
+  };
+
+  const handleUndoBulkMetadata = () => {
+    if (
+      !bulkMetadataUndo ||
+      bulkMetadataUndo.length === 0
+    ) {
+      return;
+    }
+
+    const undoMap = new Map(
+      bulkMetadataUndo.map((entry) => [
+        entry.jobId,
+        entry,
+      ]),
+    );
+
+    setTempJobsQueue((previous) =>
+      previous.map((job) => {
+        const entry =
+          undoMap.get(job.id);
+
+        return entry
+          ? {
+              ...job,
+              englishTitle:
+                entry.englishTitle,
+              englishCaption:
+                entry.englishCaption,
+            }
+          : job;
+      }),
+    );
+
+    queueControllerRef.current?.updateManyJobFields(
+      bulkMetadataUndo.map((entry) => ({
+        itemId: entry.jobId,
+        fields: {
+          englishTitle:
+            entry.englishTitle,
+          englishCaption:
+            entry.englishCaption,
+        },
+      })),
+    );
+
+    setBulkMetadataLastResult(
+      `Restored metadata on ${bulkMetadataUndo.length} upload cards.`,
+    );
+    setBulkMetadataUndo(null);
+    setBulkMetadataPreview(null);
+    setBulkMetadataErrors([]);
+
+    addSecurityLog(
+      "INFO",
+      `Undid the most recent bulk title/caption assignment for ${bulkMetadataUndo.length} draft items.`,
+    );
+  };
+
+  const handleResetBulkMetadataInputs = () => {
+    setBulkTitlesText("");
+    setBulkCaptionsText("");
+    setBulkMetadataCsvRows([]);
+    setBulkMetadataCsvFileName("");
+    setBulkMetadataErrors([]);
+    setBulkMetadataPreview(null);
+    setBulkMetadataLastResult(null);
   };
 
   // ==========================================
@@ -3284,6 +3674,310 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                     )}
                   </div>
                 </div>
+
+                {/* PHASE 7E BULK TITLES AND CAPTIONS */}
+                {tempJobsQueue.length > 0 && (
+                  <div className="bg-white border border-zinc-200 rounded-xl p-6">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <h3 className="text-base font-bold text-zinc-900">
+                          Bulk Titles & Captions
+                        </h3>
+                        <p className="mt-1 max-w-3xl text-xs leading-relaxed text-zinc-500">
+                          Assign one title and caption to each upload card in order, or match CSV rows by filename. Unicode, emojis, and multilingual text are supported.
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-[10px] font-mono font-bold uppercase tracking-wider text-indigo-800">
+                        {tempJobsQueue.length} upload cards ready
+                      </div>
+                    </div>
+
+                    <div className="mt-5 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleBulkMetadataSourceChange("paste")}
+                        className={`rounded-lg border px-3 py-2 text-xs font-bold transition ${
+                          bulkMetadataSource === "paste"
+                            ? "border-indigo-600 bg-indigo-600 text-white"
+                            : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                        }`}
+                      >
+                        Paste / TXT Lists
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleBulkMetadataSourceChange("csv")}
+                        className={`rounded-lg border px-3 py-2 text-xs font-bold transition ${
+                          bulkMetadataSource === "csv"
+                            ? "border-indigo-600 bg-indigo-600 text-white"
+                            : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                        }`}
+                      >
+                        CSV File
+                      </button>
+                    </div>
+
+                    {bulkMetadataSource === "paste" ? (
+                      <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
+                        <div>
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-600">
+                              Titles — one non-empty line per card
+                            </label>
+                            <label className="relative cursor-pointer rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[10px] font-bold text-zinc-700 hover:bg-zinc-100">
+                              Upload Titles TXT
+                              <input
+                                type="file"
+                                accept=".txt,text/plain"
+                                onChange={(event) => handleBulkMetadataTextFile(event, "title")}
+                                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                              />
+                            </label>
+                          </div>
+                          <textarea
+                            value={bulkTitlesText}
+                            onChange={(event) => {
+                              setBulkTitlesText(event.target.value);
+                              setBulkMetadataSource("paste");
+                              setBulkMetadataMatchMode("upload_order");
+                              setBulkMetadataErrors([]);
+                              clearBulkMetadataPreview();
+                            }}
+                            rows={9}
+                            className="w-full resize-y rounded-xl border border-zinc-200 bg-white px-3 py-3 text-xs leading-5 text-zinc-900 focus:border-indigo-600 focus:outline-none"
+                            placeholder={"Title for upload 1\nTitle for upload 2\nTitle for upload 3"}
+                          />
+                        </div>
+
+                        <div>
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-600">
+                              Captions — one non-empty line per card
+                            </label>
+                            <label className="relative cursor-pointer rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-[10px] font-bold text-zinc-700 hover:bg-zinc-100">
+                              Upload Captions TXT
+                              <input
+                                type="file"
+                                accept=".txt,text/plain"
+                                onChange={(event) => handleBulkMetadataTextFile(event, "caption")}
+                                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                              />
+                            </label>
+                          </div>
+                          <textarea
+                            value={bulkCaptionsText}
+                            onChange={(event) => {
+                              setBulkCaptionsText(event.target.value);
+                              setBulkMetadataSource("paste");
+                              setBulkMetadataMatchMode("upload_order");
+                              setBulkMetadataErrors([]);
+                              clearBulkMetadataPreview();
+                            }}
+                            rows={9}
+                            className="w-full resize-y rounded-xl border border-zinc-200 bg-white px-3 py-3 text-xs leading-5 text-zinc-900 focus:border-indigo-600 focus:outline-none"
+                            placeholder={"Caption for upload 1\nCaption for upload 2\nCaption for upload 3"}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 p-5">
+                        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_auto_auto] lg:items-center">
+                          <div>
+                            <div className="text-xs font-bold text-zinc-900">
+                              Upload a simple metadata CSV
+                            </div>
+                            <div className="mt-1 text-[10px] leading-4 text-zinc-500">
+                              Headers may be title,caption or filename,title,caption. Filename matching is case-insensitive.
+                            </div>
+                            {bulkMetadataCsvFileName && (
+                              <div className="mt-2 text-[10px] font-mono font-bold text-indigo-700">
+                                Loaded: {bulkMetadataCsvFileName} ({bulkMetadataCsvRows.length} rows)
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleDownloadBulkMetadataCsvTemplate}
+                            className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-100"
+                          >
+                            Download Template
+                          </button>
+                          <label className="relative cursor-pointer rounded-lg bg-indigo-600 px-4 py-2 text-center text-xs font-bold text-white hover:bg-indigo-500">
+                            Upload CSV
+                            <input
+                              type="file"
+                              accept=".csv,text/csv"
+                              onChange={handleBulkMetadataCsvFile}
+                              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-5 grid grid-cols-1 gap-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 md:grid-cols-2 lg:grid-cols-[1fr_1.3fr_auto] lg:items-end">
+                      <div>
+                        <label className="mb-2 block text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-600">
+                          Assignment Method
+                        </label>
+                        <select
+                          value={bulkMetadataMatchMode}
+                          onChange={(event) => {
+                            setBulkMetadataMatchMode(event.target.value as BulkMetadataMatchMode);
+                            setBulkMetadataErrors([]);
+                            clearBulkMetadataPreview();
+                          }}
+                          disabled={bulkMetadataSource === "paste"}
+                          className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-900 focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500"
+                        >
+                          <option value="upload_order">Assign in upload order</option>
+                          <option value="filename">Match by filename</option>
+                        </select>
+                      </div>
+
+                      <label className="flex min-h-10 cursor-pointer items-start gap-3 rounded-lg border border-zinc-200 bg-white px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={bulkMetadataOverwriteExisting}
+                          onChange={(event) => {
+                            setBulkMetadataOverwriteExisting(event.target.checked);
+                            setBulkMetadataErrors([]);
+                            clearBulkMetadataPreview();
+                          }}
+                          className="mt-0.5 h-4 w-4 rounded border-zinc-300"
+                        />
+                        <span>
+                          <span className="block text-xs font-bold text-zinc-900">
+                            Overwrite existing title and caption
+                          </span>
+                          <span className="mt-0.5 block text-[10px] leading-4 text-zinc-500">
+                            Off protects manual or AI metadata. Filename placeholder titles are still replaceable.
+                          </span>
+                        </span>
+                      </label>
+
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={handlePreviewBulkMetadata}
+                          className="rounded-lg bg-zinc-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-zinc-800"
+                        >
+                          Preview Assignment
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleApplyBulkMetadata}
+                          disabled={!bulkMetadataPreview || bulkMetadataPreview.assignments.length === 0}
+                          className="rounded-lg bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-zinc-300"
+                        >
+                          Apply to Cards
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleUndoBulkMetadata}
+                        disabled={!bulkMetadataUndo || bulkMetadataUndo.length === 0}
+                        className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:text-zinc-300"
+                      >
+                        Undo Last Assignment
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResetBulkMetadataInputs}
+                        className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 hover:bg-zinc-50"
+                      >
+                        Clear Input
+                      </button>
+                      {bulkMetadataLastResult && (
+                        <span className="text-xs font-semibold text-emerald-700">
+                          {bulkMetadataLastResult}
+                        </span>
+                      )}
+                    </div>
+
+                    {bulkMetadataErrors.length > 0 && (
+                      <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3">
+                        {bulkMetadataErrors.slice(0, 12).map((error, index) => (
+                          <div key={`${error}-${index}`} className="text-[10px] leading-5 text-rose-700">
+                            {error}
+                          </div>
+                        ))}
+                        {bulkMetadataErrors.length > 12 && (
+                          <div className="mt-1 text-[10px] font-bold text-rose-800">
+                            Plus {bulkMetadataErrors.length - 12} more errors.
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {bulkMetadataPreview && (
+                      <div className="mt-5 overflow-hidden rounded-xl border border-zinc-200">
+                        <div className="grid grid-cols-2 gap-px bg-zinc-200 sm:grid-cols-4 lg:grid-cols-8">
+                          {[
+                            ["Cards", bulkMetadataPreview.targetCount],
+                            ["Rows", bulkMetadataPreview.rowCount],
+                            ["Will Update", bulkMetadataPreview.willUpdate],
+                            ["Protected", bulkMetadataPreview.skippedExisting],
+                            ["Invalid", bulkMetadataPreview.invalidRows],
+                            ["Unmatched", bulkMetadataPreview.unmatchedRows],
+                            ["Unused", bulkMetadataPreview.unusedRows],
+                            ["No Row", bulkMetadataPreview.unassignedTargets],
+                          ].map(([label, value]) => (
+                            <div key={String(label)} className="bg-white p-3 text-center">
+                              <div className="text-[9px] font-mono font-bold uppercase tracking-wider text-zinc-500">
+                                {label}
+                              </div>
+                              <div className="mt-1 text-base font-extrabold text-zinc-900">
+                                {value}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="max-h-72 overflow-auto bg-white">
+                          <table className="w-full min-w-[760px] text-left text-[10px]">
+                            <thead className="sticky top-0 bg-zinc-50 text-zinc-500">
+                              <tr>
+                                <th className="px-3 py-2 font-mono uppercase">Row</th>
+                                <th className="px-3 py-2 font-mono uppercase">Upload Card</th>
+                                <th className="px-3 py-2 font-mono uppercase">Title</th>
+                                <th className="px-3 py-2 font-mono uppercase">Caption</th>
+                                <th className="px-3 py-2 font-mono uppercase">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {bulkMetadataPreview.previewRows.slice(0, 50).map((row, index) => (
+                                <tr key={`${row.sourceRow}-${row.jobId || index}`} className="border-t border-zinc-100 align-top">
+                                  <td className="px-3 py-2 font-mono text-zinc-500">{row.sourceRow}</td>
+                                  <td className="max-w-48 truncate px-3 py-2 font-semibold text-zinc-800">{row.fileName || "—"}</td>
+                                  <td className="max-w-64 truncate px-3 py-2 text-zinc-700">{row.title || "—"}</td>
+                                  <td className="max-w-72 truncate px-3 py-2 text-zinc-700">{row.caption || "—"}</td>
+                                  <td className={`px-3 py-2 font-semibold ${
+                                    row.status === "ready"
+                                      ? "text-emerald-700"
+                                      : row.status === "skipped"
+                                        ? "text-amber-700"
+                                        : "text-rose-700"
+                                  }`}>
+                                    {row.message}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {bulkMetadataPreview.previewRows.length > 50 && (
+                          <div className="border-t border-zinc-200 bg-zinc-50 px-3 py-2 text-[10px] font-semibold text-zinc-600">
+                            Showing the first 50 of {bulkMetadataPreview.previewRows.length} preview rows.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* BULK ACTIONS TOOLBAR */}
                 {tempJobsQueue.length > 0 && (

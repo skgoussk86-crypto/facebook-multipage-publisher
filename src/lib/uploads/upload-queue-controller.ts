@@ -847,6 +847,43 @@ export class UploadQueueController {
     this.notify();
   }
 
+  public updateManyJobFields(
+    updates: Array<{
+      itemId: string;
+      fields: Partial<QueueItem>;
+    }>,
+  ): number {
+    if (updates.length === 0) {
+      return 0;
+    }
+
+    const updatesById = new Map(
+      updates.map((update) => [
+        update.itemId,
+        update.fields,
+      ]),
+    );
+
+    let updatedCount = 0;
+
+    this.items.forEach((item) => {
+      const fields = updatesById.get(item.id);
+      if (!fields) {
+        return;
+      }
+
+      Object.assign(item, fields);
+      updatedCount++;
+    });
+
+    if (updatedCount > 0) {
+      this.saveToStorage();
+      this.notify();
+    }
+
+    return updatedCount;
+  }
+
   public clearAll() {
     this.items.forEach((item) => {
       this.cleanupUploader(item.id);
