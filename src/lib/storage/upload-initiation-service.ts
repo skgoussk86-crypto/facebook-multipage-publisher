@@ -24,7 +24,10 @@ export function isValidFilename(name: string): boolean {
   if (/[\x00-\x1F\x7F\\/\0]/.test(name)) return false;
   if (name.includes('..')) return false;
   // Allow letters, numbers, spaces, dots, dashes, underscores
-  return /^[a-zA-Z0-9_\-\. ]+$/.test(name);
+  // The storage object key is sanitized separately. Accept normal display filenames
+  // such as "ChatGPT Image Jul 30, 2026, 08_50_28 PM (1).png" after
+  // rejecting control characters, path separators, and traversal above.
+  return true;
 }
 
 export function sanitizeFilename(name: string): string {
