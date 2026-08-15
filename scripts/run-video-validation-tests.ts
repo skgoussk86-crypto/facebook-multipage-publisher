@@ -119,7 +119,9 @@ async function runTests() {
     expectedSize: number = 1024,
     status: UploadStatus = UploadStatus.VALIDATING,
     validationAttemptCount: number = 0,
-    validationMaxAttempts: number = 3
+    validationMaxAttempts: number = 3,
+    originalName: string = 'video.mp4',
+    declaredMimeType: string = 'video/mp4'
   ) {
     const assetId = randomUUID();
     const objectKey = `uploads/${userId}/video-${assetId.slice(0, 8)}.mp4`;
@@ -130,10 +132,10 @@ async function runTests() {
         provider: 'R2',
         bucket: 'mock-bucket',
         objectKey,
-        originalName: 'video.mp4',
+        originalName,
         expectedSize,
         actualSize: expectedSize,
-        declaredMimeType: 'video/mp4',
+        declaredMimeType,
         status,
         idempotencyKey: `idem-${assetId.slice(0, 8)}`,
         requestFingerprint: `fp-${assetId.slice(0, 8)}`,
@@ -222,7 +224,7 @@ async function runTests() {
     // 2. Successful MOV H.264 AAC video
     // -------------------------------------------------------------
     console.log('Test: successful MOV H.264 AAC video...');
-    await createValidationFixture();
+    await createValidationFixture(1024, UploadStatus.VALIDATING, 0, 3, 'video.mov', 'video/quicktime');
     fakeProbe.mockMetadata = {
       containerFormat: 'mov,quicktime',
       durationMs: 45000,

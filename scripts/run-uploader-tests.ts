@@ -269,7 +269,7 @@ async function runTests() {
   const validMp4 = new FakeFile('video.mp4', 100 * 1024 * 1024, 'video/mp4');
   const validMov = new FakeFile('video.mov', 100 * 1024 * 1024, 'video/quicktime');
   const invalidType = new FakeFile('image.png', 10 * 1024 * 1024, 'image/png');
-  const tooLarge = new FakeFile('big.mp4', 600 * 1024 * 1024, 'video/mp4');
+  const tooLarge = new FakeFile('big.mp4', 2 * 1024 * 1024 * 1024 + 1, 'video/mp4');
 
   if (validMp4.name.endsWith('.png') || !validMp4.name.endsWith('.mp4')) {
     throw new Error('MP4 suffix checking failed');
@@ -280,8 +280,8 @@ async function runTests() {
   if (invalidType.name.endsWith('.mp4') || invalidType.name.endsWith('.mov')) {
     throw new Error('PNG suffix should not match video extensions');
   }
-  if (tooLarge.size > 500 * 1024 * 1024) {
-    console.log('  ✓ Correctly identified file size over 500 MiB limit');
+  if (tooLarge.size > 2 * 1024 * 1024 * 1024) {
+    console.log('  ✓ Correctly identified file size over 2 GiB limit');
   }
 
   // 2. Initiation and deterministic part numbering

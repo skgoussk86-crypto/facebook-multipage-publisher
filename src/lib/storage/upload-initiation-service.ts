@@ -15,7 +15,7 @@ import {
 import { getSupportedMediaDescriptor } from '../uploads/media-file-types';
 
 export const PART_SIZE_BYTES = 10 * 1024 * 1024; // Fixed 10 MiB part size
-export const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024; // Max 500 MiB size
+export const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // Max 2 GiB size
 
 export function isValidFilename(name: string): boolean {
   if (!name || name.trim().length === 0) return false;

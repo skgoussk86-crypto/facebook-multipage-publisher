@@ -549,7 +549,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     controller.reconcileRestoredItems();
   }, []);
 
-  const [maxFileSizeMB, setMaxFileSizeMB] = useState(500);
+  const [maxFileSizeMB, setMaxFileSizeMB] = useState(2048);
   const [fileUploadError, setFileUploadError] = useState<string | null>(null);
 
   // Bulk Actions

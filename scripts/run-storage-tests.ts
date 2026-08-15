@@ -14,14 +14,14 @@ async function runTests() {
     console.log('Test 1: Configuration parsing validation...');
     process.env.STORAGE_PROVIDER = 'R2';
     process.env.R2_PRESIGNED_URL_TTL_SECONDS = '600';
-    process.env.UPLOAD_MAX_BYTES = '1000000000'; // Exceeds 500 MiB limit
+    process.env.UPLOAD_MAX_BYTES = '3000000000'; // Exceeds 2 GiB limit
     process.env.UPLOAD_PART_SIZE_BYTES = '3000000'; // Below 5 MiB limit
 
     const config = getStorageConfig();
     if (config.provider !== 'R2') throw new Error('Assertion failed: STORAGE_PROVIDER must be R2');
     if (config.r2.presignedUrlTtlSeconds !== 600) throw new Error('Assertion failed: TTL override not parsed');
-    // Enforces max limit: 500 MiB (524288000 bytes)
-    if (config.r2.uploadMaxBytes !== 524288000) throw new Error('Assertion failed: uploadMaxBytes limit was not capped');
+    // Enforces max limit: 2 GiB (2147483648 bytes)
+    if (config.r2.uploadMaxBytes !== 2147483648) throw new Error('Assertion failed: uploadMaxBytes limit was not capped');
     // Enforces min limit: 5 MiB (5242880 bytes) - since 3000000 was below limit, it keeps default 10MB
     if (config.r2.uploadPartSizeBytes !== 10485760) throw new Error('Assertion failed: uploadPartSizeBytes below 5MB was not ignored');
 

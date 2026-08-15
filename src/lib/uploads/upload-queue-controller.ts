@@ -385,7 +385,7 @@ export class UploadQueueController {
     }
   }
 
-  public addFiles(files: File[], defaultPageId = '', maxFileSizeMB = 500) {
+  public addFiles(files: File[], defaultPageId = '', maxFileSizeMB = 2048) {
     const now = Date.now();
     const addedIds: string[] = [];
 

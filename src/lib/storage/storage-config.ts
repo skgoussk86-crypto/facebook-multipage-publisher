@@ -28,12 +28,12 @@ export function getStorageConfig(): StorageConfig {
     }
   }
 
-  // Max Bytes: positive, max 500 MiB (524,288,000 bytes)
-  let uploadMaxBytes = 524288000;
+  // Max Bytes: positive, max 2 GiB (2,147,483,648 bytes)
+  let uploadMaxBytes = 2147483648;
   if (process.env.UPLOAD_MAX_BYTES) {
     const parsed = parseInt(process.env.UPLOAD_MAX_BYTES, 10);
     if (!isNaN(parsed) && parsed > 0) {
-      uploadMaxBytes = Math.min(parsed, 524288000);
+      uploadMaxBytes = Math.min(parsed, 2147483648);
     }
   }
 

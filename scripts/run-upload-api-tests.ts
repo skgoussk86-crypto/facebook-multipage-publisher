@@ -143,14 +143,14 @@ async function runTests() {
       throw new Error(`Assertion failed: Expected 413 for zero size. Got ${sizeRes1.status}`);
     }
 
-    console.log('Test: Excess file size (> 500 MiB)...');
+    console.log('Test: Excess file size (> 2 GiB)...');
     const sizeRes2 = await handleInitiateUpload(testUserId1, randomUUID(), {
       filename: 'vid.mp4',
-      expectedSize: 500 * 1024 * 1024 + 1, // 500 MiB + 1 byte
+      expectedSize: 2147483649, // 2 GiB + 1 byte (2 * 1024 * 1024 * 1024 + 1)
       declaredMimeType: 'video/mp4',
     });
     if (sizeRes2.status !== 413) {
-      throw new Error(`Assertion failed: Expected 413 for size > 500 MiB. Got ${sizeRes2.status}`);
+      throw new Error(`Assertion failed: Expected 413 for size > 2 GiB. Got ${sizeRes2.status}`);
     }
 
     console.log('Test: Unsupported mime types...');
