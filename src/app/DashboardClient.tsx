@@ -45,6 +45,11 @@ import {
   type RandomSchedulePreview,
   type RandomTimeWindow,
 } from "../lib/scheduling/random-time-windows";
+import {
+  buildMultiPageRandomizationPlan,
+  buildMultiPageRandomizationSignature,
+  type MultiPageRandomizationPlan,
+} from "../lib/scheduling/multi-page-randomization";
 
 // Types
 interface FacebookPage {
@@ -556,6 +561,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   const [bulkCaption, setBulkCaption] = useState("");
   const [bulkHashtags, setBulkHashtags] = useState("");
   const [bulkPageId, setBulkPageId] = useState(INITIAL_PAGES[0]?.id || "");
+  const [multiPagePublishingEnabled, setMultiPagePublishingEnabled] = useState(false);
+  const [bulkPageIds, setBulkPageIds] = useState<string[]>(
+    INITIAL_PAGES[0]?.id ? [INITIAL_PAGES[0].id] : [],
+  );
+  const [multiPagePlan, setMultiPagePlan] = useState<MultiPageRandomizationPlan | null>(null);
   const [bulkContentType, setBulkContentType] = useState<"VIDEO" | "REEL">("VIDEO");
 
   // Scheduling inputs
@@ -650,7 +660,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
   };
 
   // Validate single job
-  const getJobValidationErrors = (job: VideoJob, currentQueue: VideoJob[]): string[] => {
+  const getJobValidationErrors = (
+    job: VideoJob,
+    currentQueue: VideoJob[],
+    useMultiPageSelection = false,
+  ): string[] => {
     const errors: string[] = [];
 
     // Title checks
@@ -725,16 +739,63 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     }
 
     // Page selection check
-    if (!job.pageId) {
-      errors.push("Destination Facebook Page is required.");
-    } else {
-      const pageExists = pages.some((p) => p.id === job.pageId);
-      if (!pageExists) {
-        errors.push("Invalid Facebook Page selection.");
+    if (!useMultiPageSelection) {
+      if (!job.pageId) {
+        errors.push("Destination Facebook Page is required.");
+      } else {
+        const pageExists = pages.some((p) => p.id === job.pageId);
+        if (!pageExists) {
+          errors.push("Invalid Facebook Page selection.");
+        }
       }
     }
 
     return errors;
+  };
+
+  const handleDefaultPageSelection = (pageId: string) => {
+    setBulkPageId(pageId);
+    setFileUploadError(null);
+    setMultiPagePlan(null);
+
+    if (
+      pageId &&
+      multiPagePublishingEnabled &&
+      pages.some(
+        (page) => page.id === pageId && page.tokenStatus === "Valid",
+      )
+    ) {
+      setBulkPageIds((previous) =>
+        previous.includes(pageId) ? previous : [pageId, ...previous],
+      );
+    }
+  };
+
+  const handleMultiPageSelectionChange = (
+    pageId: string,
+    selected: boolean,
+  ) => {
+    setBulkPageIds((previous) => {
+      if (selected) {
+        return previous.includes(pageId) ? previous : [...previous, pageId];
+      }
+      return previous.filter((selectedPageId) => selectedPageId !== pageId);
+    });
+    setMultiPagePlan(null);
+  };
+
+  const handleSelectAllPublishingPages = () => {
+    setBulkPageIds(
+      pages
+        .filter((page) => page.tokenStatus === "Valid")
+        .map((page) => page.id),
+    );
+    setMultiPagePlan(null);
+  };
+
+  const handleClearPublishingPages = () => {
+    setBulkPageIds([]);
+    setMultiPagePlan(null);
   };
 
   // Drag and Drop/Picker File Selection handler
@@ -2488,6 +2549,23 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             }
             return prev;
           });
+          setBulkPageIds((previous) => {
+            const validSelections = previous.filter((pageId) =>
+              allPages.some(
+                (page) =>
+                  page.id === pageId && page.tokenStatus === "Valid",
+              ),
+            );
+            const firstValidPage = allPages.find(
+              (page) => page.tokenStatus === "Valid",
+            );
+            return validSelections.length > 0
+              ? validSelections
+              : firstValidPage
+                ? [firstValidPage.id]
+                : [];
+          });
+          setMultiPagePlan(null);
 
           setTempJobsQueue((prev) =>
             prev.map((job) => {
@@ -2500,6 +2578,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
               return job;
             })
           );
+        } else {
+          setBulkPageId("");
+          setBulkPageIds([]);
+          setMultiPagePlan(null);
         }
 
         // Compute overall reconnection required status from accounts list
@@ -2848,7 +2930,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     // Evaluate validations
     const allErrors: string[] = [];
     tempJobsQueue.forEach((job) => {
-      const errs = getJobValidationErrors(job, tempJobsQueue);
+      const errs = getJobValidationErrors(
+        job,
+        tempJobsQueue,
+        multiPagePublishingEnabled,
+      );
       if (errs.length > 0) {
         allErrors.push(`File "${job.fileName}": ${errs.join(" | ")}`);
       }
@@ -2859,6 +2945,44 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       return;
     }
 
+    if (multiPagePublishingEnabled) {
+      const connectedPageIds = new Set(
+        pages
+          .filter((page) => page.tokenStatus === "Valid")
+          .map((page) => page.id),
+      );
+      const invalidPageSelection = bulkPageIds.find(
+        (pageId) => !connectedPageIds.has(pageId),
+      );
+      if (invalidPageSelection) {
+        alert("Multi-page selection contains a Facebook Page that is no longer connected. Refresh the page list and select again.");
+        return;
+      }
+
+      const plan = buildMultiPageRandomizationPlan({
+        media: tempJobsQueue.map((job) => ({
+          id: job.id,
+          fileName: job.fileName,
+          scheduledTimeKolkata: job.scheduledTimeKolkata,
+          scheduledTimeUTC: job.scheduledTimeUTC,
+        })),
+        pageIds: bulkPageIds,
+      });
+
+      if (plan.errors.length > 0) {
+        alert("Multi-page randomization failed:\n\n" + plan.errors.join("\n"));
+        return;
+      }
+
+      setMultiPagePlan(plan);
+      addSecurityLog(
+        "INFO",
+        `Prepared ${plan.totalJobs} randomized jobs for ${plan.pageCount} pages from ${plan.mediaCount} uploaded media cards.`,
+      );
+    } else {
+      setMultiPagePlan(null);
+    }
+
     setIsConfirmationOpen(true);
   };
 
@@ -2866,7 +2990,39 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     if (isSavingJobs) return;
     setIsSavingJobs(true);
     try {
-      const jobsToSave = tempJobsQueue.map((job) => {
+      if (multiPagePublishingEnabled) {
+        if (!multiPagePlan) {
+          throw new Error("Generate the multi-page assignment preview again before scheduling.");
+        }
+        const currentSignature = buildMultiPageRandomizationSignature(
+          tempJobsQueue.map((job) => ({
+            id: job.id,
+            fileName: job.fileName,
+            scheduledTimeKolkata: job.scheduledTimeKolkata,
+            scheduledTimeUTC: job.scheduledTimeUTC,
+          })),
+          bulkPageIds,
+        );
+        if (currentSignature !== multiPagePlan.sourceSignature) {
+          throw new Error(
+            "The upload queue, publishing times, or selected pages changed after preview. Close this dialog and preview again.",
+          );
+        }
+      }
+
+      const schedulingAssignments = multiPagePlan
+        ? multiPagePlan.assignments
+        : tempJobsQueue.map((job, mediaIndex) => ({
+            mediaIndex,
+            pageId: job.pageId,
+            scheduledTimeUTC: job.scheduledTimeUTC,
+          }));
+
+      const jobsToSave = schedulingAssignments.map((assignment) => {
+        const job = tempJobsQueue[assignment.mediaIndex];
+        if (!job) {
+          throw new Error("The randomized media assignment references a missing upload card.");
+        }
         if (!job.assetId) {
           throw new Error(`Upload asset ID is missing for file "${job.fileName}".`);
         }
@@ -2874,7 +3030,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           throw new Error(`Upload for "${job.fileName}" has not been validated.`);
         }
         return {
-          pageId: job.pageId,
+          pageId: assignment.pageId,
           uploadAssetId: job.assetId,
           thumbnailAssetId:
             job.contentType !== "PHOTO" &&
@@ -2884,7 +3040,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
           englishTitle: job.englishTitle,
           englishCaption: job.englishCaption,
           hashtags: job.hashtags,
-          scheduledTimeUTC: job.scheduledTimeUTC,
+          scheduledTimeUTC: assignment.scheduledTimeUTC,
           mockScenario: simulationScenario,
           contentType: job.contentType
         };
@@ -2893,19 +3049,41 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
       const res = await fetch("/api/facebook/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobs: jobsToSave })
+        body: JSON.stringify({
+          jobs: jobsToSave,
+          atomic: Boolean(multiPagePlan),
+        })
       });
 
+      const responseData = await res.json();
+
       if (res.ok) {
+        const failedResults = Array.isArray(responseData.results)
+          ? responseData.results.filter(
+              (result: { status?: string }) => result?.status === "FAILED",
+            )
+          : [];
+        if (failedResults.length > 0) {
+          addSecurityLog(
+            "ERROR",
+            `${failedResults.length} of ${jobsToSave.length} page-specific jobs failed validation. The upload queue was retained for a safe retry.`,
+          );
+          alert(
+            `${failedResults.length} of ${jobsToSave.length} jobs failed to schedule. Successful jobs were preserved and the upload queue was retained. Fix the reported issue and retry; existing matching jobs will be reused safely.`,
+          );
+          await fetchJobs();
+          return;
+        }
+
         addSecurityLog("INFO", `Scheduled ${jobsToSave.length} new bulk media jobs into the database state queue.`);
         setTempJobsQueue([]);
         queueControllerRef.current?.clearAll();
+        setMultiPagePlan(null);
         setIsConfirmationOpen(false);
         await fetchJobs();
         setActiveTab("dashboard");
       } else {
-        const errData = await res.json();
-        alert("Failed to save scheduled jobs: " + (errData.error || "Unknown Error"));
+        alert("Failed to save scheduled jobs: " + (responseData.error || "Unknown Error"));
       }
     } catch (error) {
       console.error("Error saving scheduled jobs:", error);
@@ -2923,6 +3101,8 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     queueControllerRef.current?.clearAll();
     setCsvErrors([]);
     setCsvSuccessCount(0);
+    setMultiPagePlan(null);
+    setMultiPagePublishingEnabled(false);
     setSimulateTokenExpiry(false);
     setSimulationLog([]);
     setCountdownJobs({});
@@ -3725,10 +3905,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             <select
                               id="publisher-default-page"
                               value={bulkPageId || ""}
-                              onChange={(e) => {
-                                setBulkPageId(e.target.value);
-                                setFileUploadError(null);
-                              }}
+                              onChange={(e) => handleDefaultPageSelection(e.target.value)}
                               disabled={pages.length === 0}
                               className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2.5 text-xs font-semibold text-zinc-900 focus:border-indigo-600 focus:outline-none disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400"
                             >
@@ -3744,6 +3921,118 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             Every file selected next inherits this page automatically. Existing cards remain unchanged unless you use Apply Page to All.
                           </div>
                         </div>
+                      </div>
+
+                      <div className="mb-5 rounded-xl border border-purple-200 bg-purple-50/60 p-4">
+                        <label className="flex cursor-pointer items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={multiPagePublishingEnabled}
+                            onChange={(event) => {
+                              const enabled = event.target.checked;
+                              setMultiPagePublishingEnabled(enabled);
+                              setMultiPagePlan(null);
+                              if (
+                                enabled &&
+                                bulkPageId &&
+                                pages.some(
+                                  (page) =>
+                                    page.id === bulkPageId &&
+                                    page.tokenStatus === "Valid",
+                                ) &&
+                                !bulkPageIds.includes(bulkPageId)
+                              ) {
+                                setBulkPageIds((previous) => [
+                                  bulkPageId,
+                                  ...previous,
+                                ]);
+                              }
+                            }}
+                            className="mt-0.5 h-4 w-4 rounded border-purple-300 text-purple-600"
+                          />
+                          <span>
+                            <span className="block text-xs font-extrabold text-purple-950">
+                              Multi-page Randomized Publishing
+                            </span>
+                            <span className="mt-1 block text-[10px] leading-4 text-purple-800">
+                              Upload every file once, then create page-specific jobs in a randomized order. Different media on every page per publishing round.
+                            </span>
+                          </span>
+                        </label>
+
+                        {multiPagePublishingEnabled && (
+                          <div className="mt-4 border-t border-purple-200 pt-4">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                              <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-purple-900">
+                                Publishing Pages ({bulkPageIds.length} selected)
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={handleSelectAllPublishingPages}
+                                  className="rounded border border-purple-300 bg-white px-2.5 py-1 text-[10px] font-bold text-purple-800 hover:bg-purple-100"
+                                >
+                                  Select All Pages
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleClearPublishingPages}
+                                  className="rounded border border-zinc-300 bg-white px-2.5 py-1 text-[10px] font-bold text-zinc-700 hover:bg-zinc-100"
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="grid max-h-48 grid-cols-1 gap-2 overflow-y-auto rounded-lg border border-purple-200 bg-white p-3 sm:grid-cols-2">
+                              {pages.map((page) => {
+                                const isExpired = page.tokenStatus === "Expired";
+                                return (
+                                  <label
+                                    key={page.id}
+                                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${
+                                      isExpired
+                                        ? "cursor-not-allowed border-zinc-200 bg-zinc-50 text-zinc-400"
+                                        : bulkPageIds.includes(page.id)
+                                          ? "cursor-pointer border-purple-300 bg-purple-50 font-bold text-purple-950"
+                                          : "cursor-pointer border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={bulkPageIds.includes(page.id)}
+                                      onChange={(event) =>
+                                        handleMultiPageSelectionChange(
+                                          page.id,
+                                          event.target.checked,
+                                        )
+                                      }
+                                      disabled={isExpired}
+                                      className="h-4 w-4 rounded border-purple-300 text-purple-600"
+                                    />
+                                    <span className="min-w-0 truncate">
+                                      {page.name}
+                                      {isExpired ? " (Expired)" : ""}
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+
+                            <div className="mt-3 rounded-lg border border-purple-200 bg-white px-3 py-2 text-[10px] leading-4 text-purple-900">
+                              {tempJobsQueue.length > 0
+                                ? `${tempJobsQueue.length} media × ${bulkPageIds.length} pages = ${tempJobsQueue.length * bulkPageIds.length} scheduled jobs. Each page receives the complete batch once.`
+                                : "Select at least two valid pages now; the job count will appear after media is added."}
+                            </div>
+
+                            {tempJobsQueue.length > 0 &&
+                              bulkPageIds.length > tempJobsQueue.length && (
+                                <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] font-semibold leading-4 text-amber-900">
+                                  This batch has fewer media items than selected pages. Add more media or select fewer pages so each publishing round can remain collision-free.
+                                </div>
+                              )}
+                          </div>
+                        )}
                       </div>
 
                       <div
@@ -4228,7 +4517,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                         <div className="flex gap-2">
                           <select
                             value={bulkPageId || ""}
-                            onChange={(e) => setBulkPageId(e.target.value)}
+                            onChange={(e) => handleDefaultPageSelection(e.target.value)}
                             className="flex-1 bg-white border border-zinc-200 rounded-lg py-2 px-2 text-xs text-zinc-900 focus:outline-none"
                           >
                             <option value="">Select a page...</option>
@@ -4698,7 +4987,9 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                             onClick={handleSaveTrigger}
                             className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-lg transition shadow-md shadow-emerald-600/10"
                           >
-                            Confirm Scheduled Queue
+                            {multiPagePublishingEnabled
+                              ? `Review ${tempJobsQueue.length * bulkPageIds.length} Page Jobs`
+                              : "Confirm Scheduled Queue"}
                           </button>
                         </div>
                         {bulkStatus && (
@@ -4728,7 +5019,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
                   <div className="space-y-6">
                     {tempJobsQueue.map((job) => {
-                      const errors = getJobValidationErrors(job, tempJobsQueue);
+                      const errors = getJobValidationErrors(
+                        job,
+                        tempJobsQueue,
+                        multiPagePublishingEnabled,
+                      );
                       return (
                         <div
                           key={job.id}
@@ -5518,7 +5813,10 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             <div className="flex items-center justify-between border-b border-zinc-200 pb-3">
               <h4 className="font-bold text-zinc-900 text-base uppercase font-mono tracking-wide">Confirm Scheduling Batch</h4>
               <button
-                onClick={() => setIsConfirmationOpen(false)}
+                onClick={() => {
+                  setIsConfirmationOpen(false);
+                  setMultiPagePlan(null);
+                }}
                 className="text-zinc-500 hover:text-zinc-800 font-bold text-lg"
               >
                 ×
@@ -5526,14 +5824,38 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
             </div>
 
             <p className="text-xs text-zinc-500 leading-relaxed">
-              Verify the local schedule conversions below. Confirming will create the corresponding scheduled tasks.
+              {multiPagePlan
+                ? "Verify the randomized page/media assignments below. This exact preview will be submitted without reshuffling."
+                : "Verify the local schedule conversions below. Confirming will create the corresponding scheduled tasks."}
             </p>
+
+            {multiPagePlan && (
+              <div className="grid grid-cols-2 gap-3 rounded-xl border border-purple-200 bg-purple-50 p-4 text-center sm:grid-cols-4">
+                <div>
+                  <div className="text-[9px] font-mono uppercase text-purple-700">Uploaded media</div>
+                  <div className="mt-1 text-lg font-extrabold text-purple-950">{multiPagePlan.mediaCount}</div>
+                </div>
+                <div>
+                  <div className="text-[9px] font-mono uppercase text-purple-700">Selected pages</div>
+                  <div className="mt-1 text-lg font-extrabold text-purple-950">{multiPagePlan.pageCount}</div>
+                </div>
+                <div>
+                  <div className="text-[9px] font-mono uppercase text-purple-700">Total jobs</div>
+                  <div className="mt-1 text-lg font-extrabold text-purple-950">{multiPagePlan.totalJobs}</div>
+                </div>
+                <div>
+                  <div className="text-[9px] font-mono uppercase text-purple-700">Same-media collisions</div>
+                  <div className="mt-1 text-sm font-extrabold text-emerald-700">0 per round</div>
+                </div>
+              </div>
+            )}
 
             {/* Queue Summary list table */}
             <div className="border border-zinc-200 rounded-xl overflow-x-auto text-xs">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-zinc-50 border-b border-zinc-200 text-zinc-600 font-mono text-[10px] uppercase">
+                    <th className="p-3.5">Round</th>
                     <th className="p-3.5">Filename</th>
                     <th className="p-3.5">Content Type</th>
                     <th className="p-3.5">Target Page</th>
@@ -5542,23 +5864,48 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-200 bg-white font-mono">
-                  {tempJobsQueue.map((job) => {
-                    const targetPage = pages.find((p) => p.id === job.pageId);
-                    return (
-                      <tr key={job.id} className="hover:bg-zinc-50/50">
-                        <td className="p-3.5 text-zinc-900 font-sans font-medium truncate max-w-[150px]">{job.fileName}</td>
-                        <td className="p-3.5 font-bold text-indigo-600 text-[10px]">{job.contentType === "PHOTO" ? "Facebook Photo" : job.contentType === "REEL" ? "Facebook Reel" : "Facebook Video"}</td>
-                        <td className="p-3.5 text-zinc-700 font-sans font-medium">{targetPage?.name || "Unassigned"}</td>
-                        <td className="p-3.5 text-zinc-700">{formatDateTime(job.scheduledTimeKolkata)}</td>
-                        <td className="p-3.5 text-zinc-500 break-all">{formatDateTime(job.scheduledTimeUTC)}Z</td>
-                      </tr>
-                    );
-                  })}
+                  {multiPagePlan
+                    ? multiPagePlan.assignments.slice(0, 200).map((assignment) => {
+                        const job = tempJobsQueue[assignment.mediaIndex];
+                        const targetPage = pages.find((page) => page.id === assignment.pageId);
+                        if (!job) return null;
+                        return (
+                          <tr key={`${assignment.roundIndex}-${assignment.pageId}`} className="hover:bg-zinc-50/50">
+                            <td className="p-3.5 text-zinc-500">{assignment.roundIndex + 1}</td>
+                            <td className="p-3.5 text-zinc-900 font-sans font-medium truncate max-w-[150px]">{job.fileName}</td>
+                            <td className="p-3.5 font-bold text-indigo-600 text-[10px]">{job.contentType === "PHOTO" ? "Facebook Photo" : job.contentType === "REEL" ? "Facebook Reel" : "Facebook Video"}</td>
+                            <td className="p-3.5 text-zinc-700 font-sans font-medium">{targetPage?.name || "Unassigned"}</td>
+                            <td className="p-3.5 text-zinc-700">{formatDateTime(assignment.scheduledTimeKolkata)}</td>
+                            <td className="p-3.5 text-zinc-500 break-all">{formatDateTime(assignment.scheduledTimeUTC)}Z</td>
+                          </tr>
+                        );
+                      })
+                    : tempJobsQueue.map((job, index) => {
+                        const targetPage = pages.find((page) => page.id === job.pageId);
+                        return (
+                          <tr key={job.id} className="hover:bg-zinc-50/50">
+                            <td className="p-3.5 text-zinc-500">{index + 1}</td>
+                            <td className="p-3.5 text-zinc-900 font-sans font-medium truncate max-w-[150px]">{job.fileName}</td>
+                            <td className="p-3.5 font-bold text-indigo-600 text-[10px]">{job.contentType === "PHOTO" ? "Facebook Photo" : job.contentType === "REEL" ? "Facebook Reel" : "Facebook Video"}</td>
+                            <td className="p-3.5 text-zinc-700 font-sans font-medium">{targetPage?.name || "Unassigned"}</td>
+                            <td className="p-3.5 text-zinc-700">{formatDateTime(job.scheduledTimeKolkata)}</td>
+                            <td className="p-3.5 text-zinc-500 break-all">{formatDateTime(job.scheduledTimeUTC)}Z</td>
+                          </tr>
+                        );
+                      })}
                 </tbody>
               </table>
+              {multiPagePlan && multiPagePlan.assignments.length > 200 && (
+                <div className="border-t border-zinc-200 bg-zinc-50 px-4 py-2 text-[10px] font-semibold text-zinc-600">
+                  Showing the first 200 of {multiPagePlan.assignments.length} exact assignments. All assignments will be scheduled.
+                </div>
+              )}
               <div className="flex justify-end gap-3 pt-3 border-t border-zinc-200 text-xs">
                 <button
-                  onClick={() => setIsConfirmationOpen(false)}
+                  onClick={() => {
+                    setIsConfirmationOpen(false);
+                    setMultiPagePlan(null);
+                  }}
                   disabled={isSavingJobs}
                   className="px-4 py-2 border border-zinc-250 bg-white text-zinc-700 hover:bg-zinc-50 font-semibold rounded-lg transition disabled:opacity-50"
                 >
@@ -5569,7 +5916,11 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
                   disabled={isSavingJobs}
                   className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition shadow-md shadow-emerald-600/15 disabled:opacity-50"
                 >
-                  {isSavingJobs ? "Scheduling..." : "Confirm Batch Scheduling"}
+                  {isSavingJobs
+                    ? "Scheduling..."
+                    : multiPagePlan
+                      ? `Confirm ${multiPagePlan.totalJobs} Jobs`
+                      : "Confirm Batch Scheduling"}
                 </button>
               </div>
             </div>

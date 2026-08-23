@@ -183,6 +183,7 @@ export async function handleJobsPost(
 
     const body = await request.json();
     const { jobs } = body;
+    const atomic = body.atomic === true;
 
     if (!Array.isArray(jobs) || jobs.length === 0) {
       return NextResponse.json({ error: 'No media jobs provided.' }, { status: 400 });
@@ -201,6 +202,14 @@ export async function handleJobsPost(
 
     type ScheduledJobInput = Parameters<typeof bulkCreateScheduledJobs>[2][number];
     const jobsToCreate: Array<ScheduledJobInput & { originalIndex: number }> = [];
+    const uploadAssetCache = new Map<
+      string,
+      Awaited<ReturnType<JobsRouteDependencies['findUploadAsset']>>
+    >();
+    const thumbnailAssetCache = new Map<
+      string,
+      SchedulableThumbnailAsset | null
+    >();
 
     // Validate each job schema and load UploadAsset
     for (let index = 0; index < jobs.length; index++) {
@@ -240,7 +249,11 @@ export async function handleJobsPost(
       }
 
       // Fetch UploadAsset using uploadAssetId
-      const asset = await dependencies.findUploadAsset(assetId);
+      let asset = uploadAssetCache.get(assetId);
+      if (!uploadAssetCache.has(assetId)) {
+        asset = await dependencies.findUploadAsset(assetId);
+        uploadAssetCache.set(assetId, asset);
+      }
       const requestedContentType =
         typeof job.contentType === 'string'
           ? job.contentType.trim().toUpperCase()
@@ -305,7 +318,12 @@ export async function handleJobsPost(
         } else if (!asset) {
           errors.push('Thumbnail asset cannot be validated without its source upload asset.');
         } else {
-          const thumbnail = await (dependencies.findThumbnailAsset ?? defaultJobsRouteDependencies.findThumbnailAsset!)(requestedThumbnailAssetId.trim());
+          const normalizedThumbnailAssetId = requestedThumbnailAssetId.trim();
+          let thumbnail = thumbnailAssetCache.get(normalizedThumbnailAssetId);
+          if (!thumbnailAssetCache.has(normalizedThumbnailAssetId)) {
+            thumbnail = await (dependencies.findThumbnailAsset ?? defaultJobsRouteDependencies.findThumbnailAsset!)(normalizedThumbnailAssetId);
+            thumbnailAssetCache.set(normalizedThumbnailAssetId, thumbnail);
+          }
 
           if (!thumbnail) {
             errors.push('Thumbnail asset not found.');
@@ -362,6 +380,16 @@ export async function handleJobsPost(
           contentType: requestedContentType
         });
       }
+    }
+
+    if (atomic && results.some((result) => result?.status === 'FAILED')) {
+      return NextResponse.json(
+        {
+          error: 'Atomic batch validation failed. No jobs were scheduled.',
+          results,
+        },
+        { status: 400 },
+      );
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
