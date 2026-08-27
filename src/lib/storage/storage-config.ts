@@ -1,5 +1,6 @@
 export interface StorageConfig {
   provider: 'R2' | 'FAKE';
+  videoMaxDurationMinutes: number;
   r2: {
     accountId: string;
     bucketName: string;
@@ -15,9 +16,22 @@ export interface StorageConfig {
   uploadSessionEncryptionKeyVersion?: string;
 }
 
+export const DEFAULT_VIDEO_MAX_DURATION_MINUTES = 240;
+export const MAX_VIDEO_DURATION_MINUTES = 240;
+
 export function getStorageConfig(): StorageConfig {
   const providerEnv = process.env.STORAGE_PROVIDER || 'FAKE';
   const provider = (providerEnv.toUpperCase() === 'R2') ? 'R2' : 'FAKE';
+
+  // Keep long-form video validation configurable while retaining a bounded
+  // application ceiling of four hours.
+  let videoMaxDurationMinutes = DEFAULT_VIDEO_MAX_DURATION_MINUTES;
+  if (process.env.VIDEO_MAX_DURATION_MINUTES) {
+    const parsed = Number(process.env.VIDEO_MAX_DURATION_MINUTES);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      videoMaxDurationMinutes = Math.min(parsed, MAX_VIDEO_DURATION_MINUTES);
+    }
+  }
 
   // TTL: positive, default 900
   let presignedUrlTtlSeconds = 900;
@@ -48,6 +62,7 @@ export function getStorageConfig(): StorageConfig {
 
   return {
     provider,
+    videoMaxDurationMinutes,
     r2: {
       accountId: process.env.R2_ACCOUNT_ID || '',
       bucketName: process.env.R2_BUCKET_NAME || '',

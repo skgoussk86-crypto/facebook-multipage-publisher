@@ -82,7 +82,9 @@ async function runTests() {
   console.log('Starting Phase 4 Step 4A video validation tests...');
 
   // Configure storage environment
+  const originalVideoMaxDurationMinutes = process.env.VIDEO_MAX_DURATION_MINUTES;
   process.env.STORAGE_PROVIDER = 'FAKE';
+  process.env.VIDEO_MAX_DURATION_MINUTES = '240';
   resetStorageAdapterInstance();
   const adapter = getStorageAdapter() as InMemoryFakeStorageAdapter;
 
@@ -436,13 +438,13 @@ async function runTests() {
     }
 
     // -------------------------------------------------------------
-    // 11. Duration over 10 minutes
+    // 11. Long-form 30-minute video is accepted
     // -------------------------------------------------------------
-    console.log('Test: duration over 10 minutes...');
+    console.log('Test: 30-minute long-form video...');
     await createValidationFixture();
     fakeProbe.mockMetadata = {
       containerFormat: 'mp4',
-      durationMs: 600001, // 10 minutes and 1 ms
+      durationMs: 30 * 60 * 1000,
       videoCodec: 'h264',
       audioCodec: 'aac',
       width: 1920,
@@ -454,8 +456,31 @@ async function runTests() {
     const claim11 = await VideoValidationService.claimOneAsset();
     if (!claim11) throw new Error('Failed to claim asset.');
     const res11 = await VideoValidationService.validateAsset(claim11);
-    if (res11.success || res11.status !== UploadStatus.FAILED || res11.failureCode !== 'DURATION_EXCEEDED') {
-      throw new Error(`Expected DURATION_EXCEEDED failure, got status ${res11.status}, code ${res11.failureCode}`);
+    if (!res11.success || res11.status !== UploadStatus.VALIDATED) {
+      throw new Error(`Expected 30-minute video to validate, got status ${res11.status}, code ${res11.failureCode}`);
+    }
+
+    // -------------------------------------------------------------
+    // 11b. Duration over the configured four-hour limit
+    // -------------------------------------------------------------
+    console.log('Test: duration over configured long-form limit...');
+    await createValidationFixture();
+    fakeProbe.mockMetadata = {
+      containerFormat: 'mp4',
+      durationMs: 240 * 60 * 1000 + 1,
+      videoCodec: 'h264',
+      audioCodec: 'aac',
+      width: 1920,
+      height: 1080,
+      frameRate: 30.0,
+      detectedMimeType: 'video/mp4'
+    };
+
+    const claim11b = await VideoValidationService.claimOneAsset();
+    if (!claim11b) throw new Error('Failed to claim asset.');
+    const res11b = await VideoValidationService.validateAsset(claim11b);
+    if (res11b.success || res11b.status !== UploadStatus.FAILED || res11b.failureCode !== 'DURATION_EXCEEDED') {
+      throw new Error(`Expected DURATION_EXCEEDED failure, got status ${res11b.status}, code ${res11b.failureCode}`);
     }
 
     // -------------------------------------------------------------
@@ -1255,6 +1280,11 @@ async function runTests() {
 
     console.log('ALL PHASE 4 STEP 4A VIDEO VALIDATION INTEGRATION TESTS CLEAN! 🎉');
   } finally {
+    if (originalVideoMaxDurationMinutes === undefined) {
+      delete process.env.VIDEO_MAX_DURATION_MINUTES;
+    } else {
+      process.env.VIDEO_MAX_DURATION_MINUTES = originalVideoMaxDurationMinutes;
+    }
     await prisma.$disconnect();
   }
 }

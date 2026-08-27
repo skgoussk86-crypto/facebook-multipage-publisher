@@ -275,8 +275,13 @@ export class VideoValidationService {
         return await this.transitionToFailure(claim, 'INVALID_DURATION', 'Video duration must be greater than zero.');
       }
 
-      if (metadata.durationMs > 10 * 60 * 1000) {
-        return await this.transitionToFailure(claim, 'DURATION_EXCEEDED', 'Video duration must not exceed 10 minutes.');
+      const maxDurationMinutes = config.videoMaxDurationMinutes;
+      if (metadata.durationMs > maxDurationMinutes * 60 * 1000) {
+        return await this.transitionToFailure(
+          claim,
+          'DURATION_EXCEEDED',
+          `Video duration must not exceed ${maxDurationMinutes} minutes.`,
+        );
       }
 
       if (metadata.width <= 0 || metadata.height <= 0) {
