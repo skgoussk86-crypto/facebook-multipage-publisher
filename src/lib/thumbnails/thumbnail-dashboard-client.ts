@@ -17,6 +17,42 @@ export interface DashboardThumbnailGenerationResult {
   readonly reused: boolean;
 }
 
+export interface DashboardThumbnailGenerationRequestResult
+  extends DashboardThumbnailGenerationResult {
+  readonly attempts: number;
+}
+
+export interface ThumbnailGenerationRetryNotice {
+  readonly attempt: number;
+  readonly nextAttempt: number;
+  readonly maxAttempts: number;
+  readonly status?: number;
+  readonly message: string;
+}
+
+export interface ThumbnailGenerationRequestDependencies {
+  readonly fetchImplementation?: typeof fetch;
+  readonly wait?: (delayMs: number) => Promise<void>;
+  readonly onRetry?: (
+    notice: ThumbnailGenerationRetryNotice,
+  ) => void;
+}
+
+const THUMBNAIL_GENERATION_MAX_ATTEMPTS = 3;
+const THUMBNAIL_GENERATION_RETRY_DELAYS_MS = [
+  1_000,
+  2_500,
+] as const;
+const RETRYABLE_THUMBNAIL_STATUSES = new Set([
+  408,
+  425,
+  429,
+  500,
+  502,
+  503,
+  504,
+]);
+
 function isPlainRecord(
   value: unknown,
 ): value is Record<string, unknown> {
@@ -237,7 +273,162 @@ export function getThumbnailGenerationErrorMessage(
       return 'The thumbnail could not be generated or stored.';
     case 503:
       return 'Google Drive or FFmpeg is not available for thumbnail generation.';
+    case 504:
+      return 'Thumbnail generation timed out before the server responded.';
+    case 429:
+      return 'Thumbnail generation is temporarily rate-limited.';
+    case 500:
+      return 'The server temporarily could not complete thumbnail generation.';
     default:
       return 'Thumbnail generation failed unexpectedly.';
   }
+}
+
+function getRetryDelayMs(
+  response: Response | null,
+  attempt: number,
+): number {
+  const retryAfter =
+    response?.headers.get('retry-after');
+
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+
+    if (
+      Number.isFinite(seconds) &&
+      seconds >= 0
+    ) {
+      return Math.min(
+        Math.round(seconds * 1_000),
+        10_000,
+      );
+    }
+  }
+
+  return THUMBNAIL_GENERATION_RETRY_DELAYS_MS[
+    Math.min(
+      attempt - 1,
+      THUMBNAIL_GENERATION_RETRY_DELAYS_MS.length - 1,
+    )
+  ];
+}
+
+async function defaultWait(
+  delayMs: number,
+): Promise<void> {
+  await new Promise<void>((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
+}
+
+export async function requestPersistedThumbnailWithRetry(
+  input: {
+    assetId: string;
+    timestampSeconds: number;
+    source: DashboardThumbnailSource;
+  },
+  dependencies: ThumbnailGenerationRequestDependencies = {},
+): Promise<DashboardThumbnailGenerationRequestResult> {
+  const fetchImplementation =
+    dependencies.fetchImplementation ?? fetch;
+  const wait = dependencies.wait ?? defaultWait;
+  const url = buildThumbnailGenerationUrl(
+    input.assetId,
+  );
+
+  for (
+    let attempt = 1;
+    attempt <= THUMBNAIL_GENERATION_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    let response: Response;
+
+    try {
+      response = await fetchImplementation(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          timestampSeconds:
+            input.timestampSeconds,
+          source: input.source,
+        }),
+      });
+    } catch {
+      const message =
+        'The connection was interrupted while generating the thumbnail.';
+
+      if (
+        attempt >=
+        THUMBNAIL_GENERATION_MAX_ATTEMPTS
+      ) {
+        throw new Error(message);
+      }
+
+      dependencies.onRetry?.({
+        attempt,
+        nextAttempt: attempt + 1,
+        maxAttempts:
+          THUMBNAIL_GENERATION_MAX_ATTEMPTS,
+        message,
+      });
+
+      await wait(
+        getRetryDelayMs(null, attempt),
+      );
+      continue;
+    }
+
+    let payload: unknown = null;
+
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+
+    if (response.ok) {
+      return {
+        ...parseThumbnailGenerationResponse(
+          payload,
+          input.assetId,
+        ),
+        attempts: attempt,
+      };
+    }
+
+    const message =
+      getThumbnailGenerationErrorMessage(
+        response.status,
+        payload,
+      );
+    const canRetry =
+      attempt <
+        THUMBNAIL_GENERATION_MAX_ATTEMPTS &&
+      RETRYABLE_THUMBNAIL_STATUSES.has(
+        response.status,
+      );
+
+    if (!canRetry) {
+      throw new Error(message);
+    }
+
+    dependencies.onRetry?.({
+      attempt,
+      nextAttempt: attempt + 1,
+      maxAttempts:
+        THUMBNAIL_GENERATION_MAX_ATTEMPTS,
+      status: response.status,
+      message,
+    });
+
+    await wait(
+      getRetryDelayMs(response, attempt),
+    );
+  }
+
+  throw new Error(
+    'Thumbnail generation failed after automatic retries.',
+  );
 }

@@ -24,6 +24,7 @@ import {
   buildThumbnailGenerationUrl,
   getThumbnailGenerationErrorMessage,
   parseThumbnailGenerationResponse,
+  requestPersistedThumbnailWithRetry,
 } from '../src/lib/thumbnails/thumbnail-dashboard-client';
 
 const USER_ID = '11111111-1111-1111-1111-111111111111';
@@ -536,7 +537,7 @@ async function runTransactionTests(): Promise<void> {
   console.log('  ✓ transaction refuses thumbnail linkage without validation delegate');
 }
 
-function runDashboardClientTests(): void {
+async function runDashboardClientTests(): Promise<void> {
   console.log('Thumbnail dashboard client tests...');
 
   assert(
@@ -612,7 +613,89 @@ function runDashboardClientTests(): void {
     getThumbnailGenerationErrorMessage(503, null).includes('Google Drive'),
     'Safe 503 error mapping is missing.',
   );
+
+  let retryCalls = 0;
+  let waitCalls = 0;
+  const retryResult =
+    await requestPersistedThumbnailWithRetry(
+      {
+        assetId: UPLOAD_ID,
+        timestampSeconds: 2.5,
+        source: 'MANUAL_FRAME',
+      },
+      {
+        fetchImplementation:
+          (async () => {
+            retryCalls += 1;
+
+            if (retryCalls < 3) {
+              return new Response(
+                'temporary proxy error',
+                { status: 504 },
+              );
+            }
+
+            return Response.json(
+              {
+                success: true,
+                reused: true,
+                thumbnail: {
+                  id: THUMBNAIL_ID,
+                  sourceUploadAssetId:
+                    UPLOAD_ID,
+                  source: 'MANUAL_FRAME',
+                  timestampSeconds: 2.5,
+                  mimeType: 'image/jpeg',
+                  sizeBytes: 12345,
+                  createdAt:
+                    new Date().toISOString(),
+                },
+              },
+              { status: 200 },
+            );
+          }) as typeof fetch,
+        wait: async () => {
+          waitCalls += 1;
+        },
+      },
+    );
+
+  assert(retryCalls === 3, 'Retryable thumbnail failures must be retried twice.');
+  assert(waitCalls === 2, 'Automatic retries must use bounded backoff waits.');
+  assert(retryResult.attempts === 3, 'Successful retry attempt count is incorrect.');
+  assert(retryResult.reused, 'Completed thumbnail must be safely reused after retry.');
+
+  let permanentCalls = 0;
+  await assertRejects(
+    async () =>
+      await requestPersistedThumbnailWithRetry(
+        {
+          assetId: UPLOAD_ID,
+          timestampSeconds: 2.5,
+          source: 'MANUAL_FRAME',
+        },
+        {
+          fetchImplementation:
+            (async () => {
+              permanentCalls += 1;
+              return Response.json(
+                {
+                  message:
+                    'Thumbnail timestamp is invalid.',
+                },
+                { status: 400 },
+              );
+            }) as typeof fetch,
+          wait: async () => {
+            throw new Error('Permanent failures must not wait or retry.');
+          },
+        },
+      ),
+    'Thumbnail timestamp is invalid.',
+  );
+  assert(permanentCalls === 1, 'Permanent thumbnail failures must not be retried.');
   console.log('  ✓ dashboard parser accepts safe metadata and rejects storage internals');
+  console.log('  ✓ transient thumbnail failures retry automatically without retrying permanent errors');
 }
 
 function runSourceBoundaryTests(): void {
@@ -636,7 +719,7 @@ function runSourceBoundaryTests(): void {
     'utf8',
   );
 
-  assert(dashboard.includes('buildThumbnailGenerationUrl(input.assetId)'), 'Dashboard must call the secure thumbnail endpoint.');
+  assert(dashboard.includes('requestPersistedThumbnailWithRetry'), 'Dashboard must use resilient thumbnail generation requests.');
   assert(dashboard.includes('thumbnailAssetId:'), 'Dashboard scheduling payload must include thumbnailAssetId.');
   assert(dashboard.includes('Captured thumbnail must be generated and stored before scheduling.'), 'Dashboard must block unsaved captured thumbnails.');
   assert(!dashboard.includes('Local video URL not available. Frame capture is only supported for local uploaded files.'), 'Restored validated uploads must not be blocked by a missing local object URL.');
@@ -653,7 +736,7 @@ function runSourceBoundaryTests(): void {
 }
 
 async function main(): Promise<void> {
-  runDashboardClientTests();
+  await runDashboardClientTests();
   await runRouteTests();
   await runTransactionTests();
   runSourceBoundaryTests();

@@ -22,9 +22,7 @@ import {
 } from "../lib/gemini/gemini-dashboard-analysis";
 import { parseAnalysisStream, validateStreamResponseContentType } from "../lib/ai/ai-analysis-stream-client";
 import {
-  buildThumbnailGenerationUrl,
-  getThumbnailGenerationErrorMessage,
-  parseThumbnailGenerationResponse,
+  requestPersistedThumbnailWithRetry,
   type DashboardThumbnailSource,
 } from "../lib/thumbnails/thumbnail-dashboard-client";
 import {
@@ -1061,39 +1059,24 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
     });
 
     try {
-      const response = await fetch(
-        buildThumbnailGenerationUrl(input.assetId),
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            timestampSeconds: input.timestampSeconds,
+      const result =
+        await requestPersistedThumbnailWithRetry(
+          {
+            assetId: input.assetId,
+            timestampSeconds:
+              input.timestampSeconds,
             source: input.source,
-          }),
-        },
-      );
-
-      let payload: unknown = null;
-
-      try {
-        payload = await response.json();
-      } catch {
-        payload = null;
-      }
-
-      if (!response.ok) {
-        throw new Error(
-          getThumbnailGenerationErrorMessage(
-            response.status,
-            payload,
-          ),
+          },
+          {
+            onRetry: (notice) => {
+              addSecurityLog(
+                "WARN",
+                `Temporary thumbnail issue for ${input.fileName}; automatic retry ${notice.nextAttempt}/${notice.maxAttempts}.`,
+                input.jobId,
+              );
+            },
+          },
         );
-      }
-
-      const result = parseThumbnailGenerationResponse(
-        payload,
-        input.assetId,
-      );
 
       if (result.thumbnail.source !== input.source) {
         throw new Error(
@@ -1113,7 +1096,7 @@ export default function DashboardClient({ currentUser }: { currentUser: { id: st
 
       addSecurityLog(
         "INFO",
-        `${result.reused ? "Reused" : "Generated"} permanent thumbnail at ${result.thumbnail.timestampSeconds.toFixed(2)}s for ${input.fileName}.`,
+        `${result.reused ? "Reused" : "Generated"} permanent thumbnail at ${result.thumbnail.timestampSeconds.toFixed(2)}s for ${input.fileName}${result.attempts > 1 ? ` after ${result.attempts} attempts` : ""}.`,
         input.jobId,
       );
 
